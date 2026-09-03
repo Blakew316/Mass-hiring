@@ -50,6 +50,18 @@ When someone books: their pipeline status becomes **Booked**, the activity feed 
 
 > Calendly webhooks require a Calendly plan that includes the API (Standard and up).
 
+## Deploy to Netlify
+
+The repo is Netlify-ready — `netlify.toml` publishes `public/` as the site and runs the Express API as a Netlify Function, with candidates/settings/tokens stored in **Netlify Blobs** (so nothing is lost between deploys).
+
+1. Netlify → *Add new site* → *Import an existing project* → pick this GitHub repo. Build settings are read from `netlify.toml`; nothing to change.
+2. Deploy. Open your site URL — the dashboard loads, and the API works at `/api/*`.
+3. In the app's Settings, connect email + Calendly + ntfy as above. The app already knows its public URL (Netlify's `URL` env var), so:
+   - the Google OAuth redirect URI shown in Settings is `https://<your-site>.netlify.app/auth/google/callback`
+   - "Enable booking alerts" registers the Calendly webhook at `https://<your-site>.netlify.app/webhooks/calendly` — no tunnel needed.
+
+Optional: set `BASE_URL` in Netlify's environment variables if you use a custom domain and want that address used instead of the `*.netlify.app` one.
+
 ## Configuration reference
 
 Everything can be set in the Settings UI. Alternatively copy `.env.example` to `.env` for server-side defaults (`PORT`, `BASE_URL`, Google OAuth credentials, SMTP, ntfy topic). Values saved in Settings take precedence.

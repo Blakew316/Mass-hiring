@@ -280,26 +280,37 @@
     btn.textContent = 'Sending…';
     const prog = $('#sendProgress');
     prog.hidden = false;
-    prog.innerHTML = 'Sending personalized emails…';
-    try {
-      const data = await api('/api/send', { method: 'POST', body: {
-        candidateIds: composeIds,
-        template: { subject: $('#composeSubject').value, body: $('#composeBody').value },
-      }});
-      const ok = data.results.filter((r) => r.ok).length;
-      const fails = data.results.filter((r) => !r.ok);
-      prog.innerHTML = data.results.map((r) =>
-        r.ok ? `✅ ${esc(r.email)}` : `❌ ${esc(r.email || r.id)} — ${esc(r.error)}`).join('<br>');
-      toast(`Sent ${ok} of ${data.results.length} email${data.results.length === 1 ? '' : 's'}.`, fails.length > 0);
-      selected.clear();
-      await refresh();
-      if (!fails.length) setTimeout(() => { $('#composeModal').hidden = true; }, 1200);
-      else { btn.disabled = false; btn.textContent = 'Retry failed'; composeIds = fails.map((r) => r.id); }
-    } catch (err) {
-      oops(err);
-      btn.disabled = false;
-      btn.textContent = 'Send';
+    prog.innerHTML = '';
+    const template = { subject: $('#composeSubject').value, body: $('#composeBody').value };
+    const results = [];
+    // One request per recipient: live progress, and each call stays short
+    // enough for serverless hosting (Netlify) time limits.
+    for (let i = 0; i < composeIds.length; i++) {
+      const id = composeIds[i];
+      const cand = state.candidates.find((c) => c.id === id);
+      const label = cand ? cand.email : id;
+      const line = document.createElement('div');
+      line.textContent = `… ${label}`;
+      prog.appendChild(line);
+      prog.scrollTop = prog.scrollHeight;
+      try {
+        const data = await api('/api/send', { method: 'POST', body: { candidateIds: [id], template } });
+        const r = data.results[0] || { id, ok: false, error: 'No result' };
+        results.push(r);
+        line.textContent = r.ok ? `✅ ${label}` : `❌ ${label} — ${r.error}`;
+      } catch (err) {
+        results.push({ id, ok: false, error: err.message });
+        line.textContent = `❌ ${label} — ${err.message}`;
+      }
+      if (i < composeIds.length - 1) await new Promise((r) => setTimeout(r, 800));
     }
+    const ok = results.filter((r) => r.ok).length;
+    const fails = results.filter((r) => !r.ok);
+    toast(`Sent ${ok} of ${results.length} email${results.length === 1 ? '' : 's'}.`, fails.length > 0);
+    selected.clear();
+    await refresh().catch(() => {});
+    if (!fails.length) setTimeout(() => { $('#composeModal').hidden = true; }, 1200);
+    else { btn.disabled = false; btn.textContent = 'Retry failed'; composeIds = fails.map((r) => r.id); }
   });
 
   // ---------------- Import ----------------
