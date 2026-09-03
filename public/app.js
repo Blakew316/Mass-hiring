@@ -122,7 +122,7 @@
     $('#statTotal').textContent = s.total;
     $('#statEmailed').textContent = contactedCount();
     $('#statReplied').textContent = s.replied;
-    $('#statBooked').textContent = s.booked;
+    $('#statBooked').textContent = state.calendly && state.calendly.syncEnabled ? upcomingInterviews().length : s.booked;
     $('#navCount').textContent = s.total || '';
     renderEmailAllButtons();
     renderSendingCard();
@@ -179,6 +179,122 @@
   function contactedCount() {
     const s = state.stats;
     return s.emailed + s.replied + s.booked + s.declined;
+  }
+
+  function upcomingInterviews() {
+    const since = Date.now() - 3600 * 1000;
+    return (state.interviews || []).filter((i) => i.status === 'active' && new Date(i.start).getTime() >= since);
+  }
+
+  // ---------------- Stat tiles → detail views ----------------
+  const fmtWhen = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  function candRow(c, metaHtml, sideHtml = '', extraHtml = '') {
+    const name = c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email;
+    const detail = [c.role, c.company].filter(Boolean).join(' @ ');
+    return `<li class="tile-row">
+      <span class="avatar tint-blue">${esc(initials(c))}</span>
+      <div class="tile-main">
+        <div class="tile-name">${esc(name)}</div>
+        <div class="tile-email">${esc(c.email)}${detail ? ` · ${esc(detail)}` : ''}</div>
+        <div class="tile-meta">${metaHtml}</div>
+        ${extraHtml}
+      </div>
+      <div class="tile-side">${sideHtml}</div>
+    </li>`;
+  }
+  const statusSelect = (c) => `<select class="status-select ${(STATUS[c.status] || STATUS.new).cls} tile-status" data-id="${c.id}">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${v.label}</option>`).join('')}</select>`;
+  const gmailLink = (c) => c.gmailThreadId ? `<a class="tile-link" target="_blank" rel="noopener" href="https://mail.google.com/mail/u/0/#all/${encodeURIComponent(c.gmailThreadId)}">${icon('mail', 13)} Open in Gmail</a>` : '';
+
+  function openTile(kind) {
+    if (kind === 'all') {
+      filter = 'all';
+      $$('#filterChips .chip').forEach((ch) => ch.classList.toggle('active', ch.dataset.filter === 'all'));
+      renderCandidates();
+      show('candidates');
+      return;
+    }
+    const list = $('#tileList');
+    const actions = $('#tileActions');
+    actions.innerHTML = '';
+    let rows = [];
+    if (kind === 'emailed') {
+      const cs = state.candidates.filter((c) => c.status === 'emailed').sort((a, b) => String(b.lastEmailedAt || '').localeCompare(String(a.lastEmailedAt || '')));
+      $('#tileTitle').textContent = `Emailed · awaiting a reply (${cs.length})`;
+      $('#tileSub').textContent = 'Everyone who has been emailed and has not replied or booked yet.';
+      rows = cs.map((c) => candRow(c,
+        `Sent ${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : ''} · ${c.openedAt ? `${icon('eye', 12)} opened ${timeAgo(c.openedAt)}` : 'not opened yet'}`,
+        `${statusSelect(c)}${gmailLink(c)}`));
+    } else if (kind === 'replied') {
+      const cs = state.candidates.filter((c) => c.status === 'replied' || (c.replies && c.replies.length)).sort((a, b) => String(b.lastReplyAt || b.repliedAt || '').localeCompare(String(a.lastReplyAt || a.repliedAt || '')));
+      $('#tileTitle').textContent = `Replied (${cs.length})`;
+      $('#tileSub').textContent = 'Who replied and what they said. Change a status here once you have followed up.';
+      rows = cs.map((c) => {
+        const last = (c.replies || []).slice(-1)[0];
+        const text = last ? (last.text || last.snippet || '') : '';
+        const quote = text
+          ? `<blockquote class="reply-quote">${esc(text)}</blockquote>`
+          : `<blockquote class="reply-quote muted-quote">Reply text not available yet — Settings → Google → Reconnect (and tick all permissions) lets the app read replies.</blockquote>`;
+        const when = c.lastReplyAt || c.repliedAt;
+        return candRow(c, `Replied ${when ? timeAgo(when) : ''}${(c.replies || []).length > 1 ? ` · ${c.replies.length} messages` : ''}`,
+          `${statusSelect(c)}${gmailLink(c)}`, quote);
+      });
+    } else if (kind === 'booked') {
+      const sync = state.calendly || {};
+      const items = sync.syncEnabled ? upcomingInterviews() : [];
+      const bookedCands = state.candidates.filter((c) => c.status === 'booked');
+      $('#tileTitle').textContent = `Interviews booked (${sync.syncEnabled ? items.length : bookedCands.length})`;
+      $('#tileSub').textContent = sync.syncEnabled ? 'Upcoming interviews from your Calendly, matched to your candidates.' : 'Candidates marked Booked. Add your Calendly token in Settings to sync every scheduled interview here.';
+      if (sync.syncEnabled) {
+        actions.innerHTML = `<button class="btn" id="syncNowBtn">${icon('calendar', 14)} Sync now</button><span>${sync.lastSyncAt ? `Last synced ${timeAgo(sync.lastSyncAt)}` : 'Not synced yet'}${sync.error ? ` · <span style="color:var(--red)">${esc(sync.error)}</span>` : ''}</span>`;
+        rows = items.map((i) => {
+          const c = i.candidateId ? state.candidates.find((x) => x.id === i.candidateId) : null;
+          const who = c ? (c.name || c.email) : (i.inviteeName || i.inviteeEmail || 'Unknown invitee');
+          const detail = c ? [c.role, c.company].filter(Boolean).join(' @ ') : 'not in your candidate list';
+          return `<li class="tile-row">
+            <span class="avatar tint-green">${esc(initials(c || { name: who, email: i.inviteeEmail }))}</span>
+            <div class="tile-main">
+              <div class="tile-when">${esc(fmtWhen(i.start))}${i.end ? ` – ${new Date(i.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}</div>
+              <div class="tile-name">${esc(who)} <span class="muted small">· ${esc(i.name)}</span></div>
+              <div class="tile-email">${esc(i.inviteeEmail || (c && c.email) || '')}${detail ? ` · ${esc(detail)}` : ''}</div>
+            </div>
+            <div class="tile-side">
+              ${i.joinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.joinUrl)}">Join call</a>` : ''}
+              ${i.rescheduleUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.rescheduleUrl)}">Reschedule</a>` : ''}
+              ${c ? statusSelect(c) : ''}
+            </div>
+          </li>`;
+        });
+      } else {
+        rows = bookedCands.map((c) => candRow(c, `Interview ${c.bookedAt ? fmtWhen(c.bookedAt) : 'time not recorded'}${c.bookedEvent ? ` · ${esc(c.bookedEvent)}` : ''}`,
+          `${c.bookedJoinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(c.bookedJoinUrl)}">Join call</a>` : ''}${statusSelect(c)}`));
+      }
+    }
+    list.innerHTML = rows.length ? rows.join('') : '<li class="tile-empty">Nothing here yet.</li>';
+    $('#tileModal').hidden = false;
+  }
+  $$('.stat-card[data-tile]').forEach((card) => {
+    card.addEventListener('click', () => openTile(card.dataset.tile));
+    card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTile(card.dataset.tile); } });
+  });
+  $('#tileList').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('tile-status')) return;
+    api(`/api/candidates/${e.target.dataset.id}`, { method: 'PATCH', body: { status: e.target.value } }).then(refresh).catch(oops);
+  });
+  $('#tileActions').addEventListener('click', async (e) => {
+    if (!e.target.closest('#syncNowBtn')) return;
+    const b = e.target.closest('#syncNowBtn'); b.disabled = true; b.textContent = 'Syncing…';
+    try { const r = await api('/api/calendly/sync', { method: 'POST' }); if (r.error) toast(r.error, true); await refresh(); openTile('booked'); }
+    catch (err) { oops(err); b.disabled = false; }
+  });
+
+  // Pull interviews from Calendly on load and every 5 minutes while open.
+  async function syncCalendly() {
+    if (!state || !state.calendly || !state.calendly.syncEnabled || document.hidden) return;
+    try {
+      const r = await api('/api/calendly/sync', { method: 'POST' });
+      if (r.newBookings > 0) { await refresh(); toast(`${r.newBookings} new interview${r.newBookings === 1 ? '' : 's'} booked.`); }
+      else if (r.ok) refresh().catch(() => {});
+    } catch {}
   }
 
   // Everyone still at "Not contacted".
@@ -704,6 +820,7 @@
     const s = state.settings;
     const setIf = (sel, val) => { const el = $(sel); if (document.activeElement !== el) el.value = val || ''; };
     setIf('#setCalendlyUrl', s.calendlyUrl);
+    setIf('#calendlyToken', s.calendlyToken);
     setIf('#setFromName', s.fromName);
     setIf('#setDailyLimit', s.dailyLimit);
     setIf('#setPerMinute', s.perMinute);
@@ -753,6 +870,7 @@
   async function saveSettings(extra = {}) {
     const body = {
       calendlyUrl: $('#setCalendlyUrl').value,
+      calendlyToken: $('#calendlyToken').value,
       fromName: $('#setFromName').value,
       dailyLimit: $('#setDailyLimit').value,
       perMinute: $('#setPerMinute').value,
@@ -802,7 +920,6 @@
         token: $('#calendlyToken').value,
         publicUrl: state.baseUrl,
       }});
-      $('#calendlyToken').value = '';
       $('#calendlyHint').textContent = `Booking alerts enabled — Calendly now notifies this app at ${r.url}.`;
       toast('Calendly webhook registered. Bookings will update the pipeline and ping your phone.');
       await refresh();
@@ -861,6 +978,8 @@
     setInterval(() => refresh().catch(() => {}), 30000);
     checkReplies();
     setInterval(checkReplies, 60000);
+    syncCalendly();
+    setInterval(syncCalendly, 5 * 60000);
   }
 
   // Ask the server to look at a few sent threads for replies; new replies

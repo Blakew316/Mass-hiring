@@ -71,6 +71,7 @@ function maskedSettings(s) {
     smtpPass: s.smtpPass ? '••••••••' : '',
     googleClientSecret: s.googleClientSecret ? '••••••••' : '',
     calendlySigningKey: s.calendlySigningKey ? '••••••••' : '',
+    calendlyToken: s.calendlyToken ? '••••••••' : '',
   };
 }
 
@@ -108,6 +109,13 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     auth: { required: auth.required() },
     queue: queue.status(await queue.loadQ(), db.settings, sendingNow.from),
     maxImmediate: MAX_PER_REQUEST,
+    interviews: db.interviews || [],
+    calendly: {
+      syncEnabled: Boolean(db.settings.calendlyToken),
+      webhook: Boolean(db.settings.calendlySigningKey),
+      lastSyncAt: db.calendlyLastSyncAt || null,
+      error: db.calendlySyncError || '',
+    },
   });
 }));
 
@@ -115,7 +123,7 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
 app.post('/api/settings', asyncRoute(async (req, res) => {
   const db = await store.load();
   const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'ntfyTopic', 'smtpUser', 'smtpPass',
-    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'lastSheetUrl', 'timeZone'];
+    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'lastSheetUrl', 'timeZone'];
   for (const k of allowed) {
     if (!(k in req.body) || req.body[k] === '••••••••') continue;
     const v = req.body[k];
@@ -401,46 +409,52 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
   const db = await store.load();
   const g = await google.status(db.settings);
   if (!g.connected) return res.json({ ok: true, checked: 0, replies: 0, unavailable: 'Google not connected' });
-  const pool = db.candidates
-    .filter((c) => c.status === 'emailed' && c.gmailThreadId)
-    .sort((a, b) => String(a.repliesCheckedAt || '').localeCompare(String(b.repliesCheckedAt || '')))
-    .slice(0, 20);
-  const replied = [];
-  const checked = {};   // id -> { gone }
+  const byCheck = (a, b) => String(a.repliesCheckedAt || '').localeCompare(String(b.repliesCheckedAt || ''));
+  const waiting = db.candidates.filter((c) => c.status === 'emailed' && c.gmailThreadId).sort(byCheck).slice(0, 20);
+  const conversing = db.candidates.filter((c) => c.status === 'replied' && c.gmailThreadId).sort(byCheck).slice(0, 5);
+  const pool = [...waiting, ...conversing];
+  const results = {};   // id -> { gone, newReplies: [], limited }
   let scopeError = '';
+  let limitedAny = false;
   for (const c of pool) {
     try {
-      const r = await google.threadHasReply(db.settings, c.gmailThreadId, g.email);
-      checked[c.id] = { gone: false, replied: Boolean(r.replied) };
-      if (r.replied) replied.push(c);
+      const r = await google.threadReplies(db.settings, c.gmailThreadId, g.email);
+      const seen = new Set((c.replies || []).map((x) => x.id));
+      results[c.id] = { gone: false, limited: r.limited, newReplies: r.replies.filter((x) => !seen.has(x.id)) };
+      if (r.limited) limitedAny = true;
     } catch (err) {
       if (err.scope) { scopeError = 'Reconnect Google (Settings) to allow reply detection.'; break; }
-      checked[c.id] = { gone: Boolean(err.gone), replied: false };
+      results[c.id] = { gone: Boolean(err.gone), newReplies: [] };
     }
   }
-  // Apply results to a fresh copy so the queue's status updates are never
-  // overwritten by this slow check.
+  // Apply to a fresh copy so the queue's status updates are never overwritten.
   const now = new Date().toISOString();
+  const announce = [];
   await store.update((fresh) => {
-    for (const [id, r] of Object.entries(checked)) {
+    for (const [id, r] of Object.entries(results)) {
       const fc = fresh.candidates.find((x) => x.id === id);
       if (!fc) continue;
       fc.repliesCheckedAt = now;
-      if (r.gone) fc.gmailThreadId = '';
-      if (r.replied && fc.status !== 'booked') { fc.status = 'replied'; fc.repliedAt = now; }
+      if (r.gone) { fc.gmailThreadId = ''; continue; }
+      if (!r.newReplies.length) continue;
+      fc.replies = [...(fc.replies || []), ...r.newReplies].slice(-10);
+      fc.lastReplyAt = r.newReplies[r.newReplies.length - 1].date || now;
+      if (fc.status !== 'booked' && fc.status !== 'declined') { fc.status = 'replied'; fc.repliedAt = fc.repliedAt || now; }
+      announce.push({ c: fc, reply: r.newReplies[r.newReplies.length - 1] });
     }
   });
-  for (const c of replied) {
-    await store.addEvent('replied', `${c.name || c.email} replied to your email.`, c.id);
+  for (const { c, reply } of announce) {
+    const preview = (reply.text || reply.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+    await store.addEvent('replied', `${c.name || c.email} replied${preview ? `: “${preview}${preview.length === 140 ? '…' : ''}”` : '.'}`, c.id);
     try {
       await notify.pushToPhone(db.settings, {
         title: `💬 ${c.name || c.email} replied`,
-        message: `${c.role ? c.role + (c.company ? ' @ ' + c.company : '') + ' — ' : ''}check your inbox.`,
+        message: preview || 'Check your inbox.',
         tags: 'speech_balloon',
       });
     } catch {}
   }
-  res.json({ ok: true, checked: pool.length, replies: replied.length, scopeError });
+  res.json({ ok: true, checked: pool.length, replies: announce.length, scopeError: scopeError || (limitedAny ? 'Reconnect Google (Settings) to see reply text in the dashboard.' : '') });
 }));
 
 // ---------- Google OAuth ----------
@@ -488,7 +502,8 @@ app.post('/auth/google/disconnect', asyncRoute(async (_req, res) => {
 // ---------- Calendly ----------
 app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const token = String(req.body.token || '').trim();
+  const provided = String(req.body.token || '').trim();
+  const token = provided && provided !== '••••••••' ? provided : (db.settings.calendlyToken || '');
   const publicUrl = String(req.body.publicUrl || google.baseUrl()).trim();
   if (!token) throw new Error('Paste your Calendly Personal Access Token first.');
   if (!publicUrl || publicUrl.includes('localhost')) {
@@ -496,6 +511,7 @@ app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   }
   const result = await calendly.registerWebhook(token, publicUrl);
   if (result.signingKey) db.settings.calendlySigningKey = result.signingKey;
+  db.settings.calendlyToken = token;
   if (!db.settings.calendlyUrl && result.schedulingUrl) db.settings.calendlyUrl = result.schedulingUrl;
   await store.save(db);
   res.json({ ok: true, ...result, signingKey: undefined });
@@ -541,8 +557,21 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
     if (c) {
       c.status = 'booked';
       c.bookedAt = startTime || new Date().toISOString();
-      await store.save(db);
+      c.bookedEvent = eventName;
+      c.calendlyEventUri = (p.scheduled_event && p.scheduled_event.uri) || '';
+      c.bookedJoinUrl = (p.scheduled_event && p.scheduled_event.location && p.scheduled_event.location.join_url) || '';
     }
+    const ev = p.scheduled_event || {};
+    db.interviews = (db.interviews || []).filter((i) => !(i.uri === ev.uri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail));
+    if (ev.uri) {
+      db.interviews.push({
+        uri: ev.uri, name: eventName, status: 'active', start: startTime || new Date().toISOString(), end: ev.end_time || null,
+        joinUrl: (ev.location && ev.location.join_url) || null, inviteeName: p.name || '', inviteeEmail: p.email || '',
+        candidateId: c ? c.id : null, rescheduleUrl: p.reschedule_url || '', cancelUrl: p.cancel_url || '',
+      });
+      db.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
+    }
+    await store.save(db);
     await store.addEvent('booked', `${inviteeName} booked "${eventName}" — ${when}.`, c ? c.id : null);
     try {
       await notify.pushToPhone(db.settings, {
@@ -555,10 +584,14 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
     }
   } else if (event === 'invitee.canceled') {
     if (c && c.status === 'booked') {
-      c.status = 'emailed';
-      c.bookedAt = null;
-      await store.save(db);
+      c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
+      c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
     }
+    const evUri = (p.scheduled_event && p.scheduled_event.uri) || '';
+    for (const i of db.interviews || []) {
+      if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) i.status = 'canceled';
+    }
+    await store.save(db);
     await store.addEvent('canceled', `${inviteeName} canceled "${eventName}".`, c ? c.id : null);
     try {
       await notify.pushToPhone(db.settings, {
@@ -570,6 +603,71 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
     } catch {}
   }
   res.json({ ok: true });
+}));
+
+// ---------- Calendly sync: pull scheduled interviews, match to candidates ----------
+const DAY_MS = 24 * 3600 * 1000;
+app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  const token = db.settings.calendlyToken;
+  if (!token) return res.json({ ok: true, unavailable: 'Add your Calendly token in Settings to sync interviews.' });
+  let result;
+  try {
+    result = await calendly.listInterviews(token, {
+      minStart: new Date(Date.now() - 14 * DAY_MS),
+      maxStart: new Date(Date.now() + 120 * DAY_MS),
+    });
+  } catch (err) {
+    await store.update((d) => { d.calendlySyncError = err.message; d.calendlyLastSyncAt = new Date().toISOString(); });
+    return res.json({ ok: false, error: err.message });
+  }
+  const announce = [];
+  await store.update((fresh) => {
+    const byEmail = new Map(fresh.candidates.map((c) => [c.email.toLowerCase(), c]));
+    const list = [];
+    for (const ev of result.interviews) {
+      if (!ev.invitees.length) {
+        list.push({ uri: ev.uri, name: ev.name, status: ev.status, start: ev.start, end: ev.end, joinUrl: ev.joinUrl, inviteeName: '', inviteeEmail: '', candidateId: null });
+      }
+      for (const inv of ev.invitees) {
+        const c = byEmail.get(String(inv.email || '').toLowerCase()) || null;
+        const active = ev.status === 'active' && inv.status !== 'canceled';
+        list.push({
+          uri: ev.uri, name: ev.name, status: active ? 'active' : 'canceled', start: ev.start, end: ev.end,
+          joinUrl: ev.joinUrl, inviteeName: inv.name || '', inviteeEmail: inv.email || '',
+          candidateId: c ? c.id : null, rescheduleUrl: inv.rescheduleUrl || '', cancelUrl: inv.cancelUrl || '',
+        });
+        if (!c) continue;
+        if (active) {
+          const isNew = c.calendlyEventUri !== ev.uri;
+          if (isNew || c.status !== 'booked') {
+            c.status = 'booked';
+            c.bookedAt = ev.start;
+            c.bookedEvent = ev.name;
+            c.calendlyEventUri = ev.uri;
+            c.bookedJoinUrl = ev.joinUrl || '';
+            if (isNew) announce.push({ c, ev });
+          }
+        } else if (c.calendlyEventUri === ev.uri && c.status === 'booked') {
+          c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
+          c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
+          announce.push({ c, ev, canceled: true });
+        }
+      }
+    }
+    fresh.interviews = list.sort((a, b) => String(a.start).localeCompare(String(b.start)));
+    fresh.calendlyLastSyncAt = new Date().toISOString();
+    fresh.calendlySyncError = '';
+  });
+  for (const a of announce) {
+    const who = a.c.name || a.c.email;
+    await store.addEvent(
+      a.canceled ? 'canceled' : 'booked',
+      a.canceled ? `${who} canceled "${a.ev.name}".` : `${who} booked "${a.ev.name}" — ${formatWhen(a.ev.start, db.settings.timeZone)}.`,
+      a.c.id
+    );
+  }
+  res.json({ ok: true, interviews: result.interviews.length, newBookings: announce.filter((a) => !a.canceled).length });
 }));
 
 // ---------- Phone notification test ----------

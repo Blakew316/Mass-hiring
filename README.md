@@ -55,9 +55,14 @@ Emails are sent one-by-one so each candidate receives an individual, personal me
 ## Opens and replies
 
 - Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email".
-- With Google connected (and the "signature and detect replies" box ticked), the app checks the Gmail threads of sent emails every minute; a reply flips the candidate to **Replied**, appears in the feed, and pushes to your phone. If you connected Google before this feature existed, click **Reconnect** once so the extra permission is granted.
+- With Google connected (and the "signature and detect replies" box ticked), the app checks the Gmail threads of sent emails every minute; a reply flips the candidate to **Replied**, appears in the feed with a preview of what they said, and pushes to your phone. Reading replies uses Gmail's read permission (`gmail.readonly`); if you connected Google before this existed, click **Reconnect** once.
+- The four dashboard tiles are clickable: **Emailed** lists who is still waiting (and whether they opened the email), **Replied** shows each reply's text with a link to the thread in Gmail, **Interviews booked** lists upcoming interviews, and **Candidates** opens the full list.
 
 The feed shows only candidate signals (opened, replied, booked, cancelled) — no connection or import history.
+
+## Interviews synced from Calendly
+
+With a Calendly personal access token saved in Settings, the app pulls your scheduled interviews every few minutes (and on demand with **Sync now** in the Interviews booked tile), matches invitees to candidates by email, flips them to **Booked**, reverts cancellations, and lists every upcoming interview — including bookings made before the webhook existed or by people who used a different email (shown as "not in your candidate list"). The webhook still delivers instant booking alerts.
 
 ## Protecting the dashboard
 

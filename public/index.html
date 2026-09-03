@@ -67,19 +67,19 @@
       </header>
 
       <div class="stat-grid">
-        <div class="stat-card">
+        <div class="stat-card clickable" data-tile="all" role="button" tabindex="0">
           <div class="stat-label">Candidates</div>
           <div class="stat-value" id="statTotal">0</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card clickable" data-tile="emailed" role="button" tabindex="0">
           <div class="stat-label">Emailed</div>
           <div class="stat-value" id="statEmailed">0</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card clickable" data-tile="replied" role="button" tabindex="0">
           <div class="stat-label">Replied</div>
           <div class="stat-value" id="statReplied">0</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card clickable" data-tile="booked" role="button" tabindex="0">
           <div class="stat-label">Interviews booked</div>
           <div class="stat-value" id="statBooked">0</div>
         </div>
@@ -319,12 +319,12 @@
           <div class="card-head"><h2>Calendly</h2></div>
           <label class="label">Your Calendly booking link (added to every email)</label>
           <input type="text" id="setCalendlyUrl" class="input" placeholder="https://calendly.com/you/interview">
-          <label class="label">Personal Access Token <span class="muted small">(only used once, to register the booking webhook)</span></label>
+          <label class="label">Personal Access Token <span class="muted small">(kept securely — registers the booking webhook and syncs your scheduled interviews)</span></label>
           <div class="field-row">
             <input type="password" id="calendlyToken" class="input" placeholder="calendly.com → Integrations → API & webhooks">
             <button class="btn" id="registerWebhookBtn">Enable booking alerts</button>
           </div>
-          <div class="hint" id="calendlyHint">When someone books, their card flips to “Booked” and your phone gets a push. Requires this app to be reachable at a public URL.</div>
+          <div class="hint" id="calendlyHint">Bookings flip the candidate to “Booked” and push to your phone; your upcoming interviews sync into the Interviews booked tile every few minutes.</div>
         </div>
 
         <div class="card">
@@ -371,6 +371,20 @@
     <div class="modal-foot">
       <button class="btn" id="composeCancelBtn" data-close>Cancel</button>
       <button class="btn btn-primary" id="composeSendBtn">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Tile detail modal (Emailed / Replied / Booked) ===== -->
+<div class="modal-backdrop" id="tileModal" hidden>
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <div><h2 id="tileTitle"></h2><p class="muted small tile-sub" id="tileSub"></p></div>
+      <button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button>
+    </div>
+    <div class="modal-body">
+      <div class="tile-actions" id="tileActions"></div>
+      <ul class="tile-list" id="tileList"></ul>
     </div>
   </div>
 </div>
