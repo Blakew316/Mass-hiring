@@ -77,13 +77,13 @@
   function renderNotices() {
     const n = [];
     if (state.storage && !state.storage.persistent) {
-      n.push(`<div class="notice danger"><span>⚠️</span><div><strong>Your data is not being saved permanently.</strong> Netlify Blobs is unavailable${state.storage.error ? ` (${esc(state.storage.error)})` : ''}, so settings and candidates will be lost on the next deploy or restart. Check that Blobs is enabled for this site in Netlify, then redeploy.</div></div>`);
+      n.push(`<div class="notice danger"><span class="notice-ico">${icon('alert', 16)}</span><div><strong>Your data is not being saved permanently.</strong> Netlify Blobs is unavailable${state.storage.error ? ` (${esc(state.storage.error)})` : ''}, so settings and candidates will be lost on the next deploy or restart. Check that Blobs is enabled for this site in Netlify, then redeploy.</div></div>`);
     }
     if (state.storage && state.storage.deployed && state.auth && !state.auth.required) {
-      n.push(`<div class="notice warn"><span>🔒</span><div><strong>This dashboard is public.</strong> Anyone with the URL could send email from your account. Add an environment variable named <code>APP_PASSWORD</code> in Netlify (Project configuration → Environment variables), then redeploy to require a sign-in.</div></div>`);
+      n.push(`<div class="notice warn"><span class="notice-ico">${icon('lock', 16)}</span><div><strong>This dashboard is public.</strong> Anyone with the URL could send email from your account. Add an environment variable named <code>APP_PASSWORD</code> in Netlify (Project configuration → Environment variables), then redeploy to require a sign-in.</div></div>`);
     }
     if (state.lastError) {
-      n.push(`<div class="notice warn"><span>⚠️</span><div>${esc(state.lastError)}</div></div>`);
+      n.push(`<div class="notice warn"><span class="notice-ico">${icon('alert', 16)}</span><div>${esc(state.lastError)}</div></div>`);
     }
     $('#notices').innerHTML = n.join('');
     $('#signOutBtn').hidden = !(state.auth && state.auth.required);
@@ -144,14 +144,14 @@
 
     // Candidate updates only: opens, replies, bookings, cancellations.
     const icons = {
-      opened: ['👁', 'tint-blue'], replied: ['💬', 'tint-mint'],
-      booked: ['📅', 'tint-green'], canceled: ['✕', 'tint-red'],
+      opened: ['eye', 'tint-blue'], replied: ['bubble', 'tint-mint'],
+      booked: ['calendar', 'tint-green'], canceled: ['xcircle', 'tint-red'],
     };
     const list = state.events.filter((ev) => icons[ev.type]).slice(0, 15);
     $('#activityList').innerHTML = list.length
       ? list.map((ev) => {
           const [ico, cls] = icons[ev.type];
-          return `<li><span class="act-ico ${cls}">${ico}</span>
+          return `<li><span class="act-ico ${cls}">${icon(ico, 14)}</span>
             <div><div>${esc(ev.message)}</div><div class="act-time">${timeAgo(ev.ts)}</div></div></li>`;
         }).join('')
       : '<li class="empty-line">No updates yet — opens, replies, bookings and cancellations show up here.</li>';
@@ -168,9 +168,9 @@
     const allDone = items.every(([, d]) => d);
     $('#setupCard').hidden = allDone;
     $('#setupList').innerHTML = items.map(([label, done, goto]) => `
-      <li><span class="setup-check ${done ? 'done' : 'todo'}">${done ? '✓' : '○'}</span>
+      <li><span class="setup-check ${done ? 'done' : 'todo'}">${done ? icon('check', 11) : ''}</span>
         <span>${label}</span>
-        ${done ? '' : `<button class="btn link" data-goto="${goto}">Set up →</button>`}
+        ${done ? '' : `<button class="btn link" data-goto="${goto}">Set up ${icon('chevron', 13)}</button>`}
       </li>`).join('');
   }
 
@@ -238,8 +238,8 @@
         </select></td>
         <td>${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
         <td><div class="row-actions">
-          <button class="icon-btn act-email" title="Send personal email">✉</button>
-          <button class="icon-btn act-delete" title="Remove">🗑</button>
+          <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
+          <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
         </div></td>
       </tr>`;
     }).join('');
@@ -250,7 +250,7 @@
   function updateSendButton() {
     const btn = $('#sendSelectedBtn');
     btn.disabled = selected.size === 0;
-    btn.textContent = selected.size > 1 ? `✉ Email ${selected.size} selected` : '✉ Email selected';
+    $('#sendSelectedLabel').textContent = selected.size > 1 ? `Email ${selected.size} selected` : 'Email selected';
   }
 
   $('#candidateRows').addEventListener('click', (e) => {
@@ -376,8 +376,8 @@
       const done = sent + failed.length;
       $('#sendBarFill').style.width = `${Math.round((done / total) * 100)}%`;
       btn.textContent = `Sending… ${done} / ${total}`;
-      prog.innerHTML = `✅ ${sent} sent${failed.length ? ` · ❌ ${failed.length} failed` : ''}` +
-        (failed.length ? '<br>' + failed.slice(-5).map((f) => `❌ ${esc(f.email || f.id)} — ${esc(f.error)}`).join('<br>') : '');
+      prog.innerHTML = `<span class="ok-ico">${icon('checkcircle', 14)}</span> ${sent} sent${failed.length ? ` · <span class="bad-ico">${icon('xcircle', 14)}</span> ${failed.length} failed` : ''}` +
+        (failed.length ? '<br>' + failed.slice(-5).map((f) => `<span class="bad-ico">${icon('xcircle', 14)}</span> ${esc(f.email || f.id)} — ${esc(f.error)}`).join('<br>') : '');
     };
     update();
     try {

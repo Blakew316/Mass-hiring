@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hiring CRM · Wholesale Payments</title>
 <link rel="icon" type="image/png" href="/assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<script src="/icons.js"></script>
 </head>
 <body>
 <div class="shell">
@@ -18,19 +22,19 @@
     </div>
     <nav class="nav">
       <button class="nav-item active" data-view="dashboard">
-        <span class="nav-ico">◫</span> Dashboard
+        <span class="nav-ico" data-icon="grid" data-size="17"></span> Dashboard
       </button>
       <button class="nav-item" data-view="candidates">
-        <span class="nav-ico">☰</span> Candidates <span class="nav-count" id="navCount"></span>
+        <span class="nav-ico" data-icon="users" data-size="17"></span> Candidates <span class="nav-count" id="navCount"></span>
       </button>
       <button class="nav-item" data-view="import">
-        <span class="nav-ico">⇣</span> Import
+        <span class="nav-ico" data-icon="download" data-size="17"></span> Import
       </button>
       <button class="nav-item" data-view="template">
-        <span class="nav-ico">✎</span> Email Template
+        <span class="nav-ico" data-icon="doc" data-size="17"></span> Email Template
       </button>
       <button class="nav-item" data-view="settings">
-        <span class="nav-ico">⚙</span> Settings
+        <span class="nav-ico" data-icon="gear" data-size="17"></span> Settings
       </button>
     </nav>
     <div class="sidebar-foot">
@@ -41,7 +45,7 @@
           <span class="conn-email" id="connText"></span>
         </div>
       </div>
-      <button class="signout" id="signOutBtn" hidden title="Signs out on every device">Sign out</button>
+      <button class="signout" id="signOutBtn" hidden title="Signs out on every device"><span data-icon="logout" data-size="13"></span> Sign out</button>
     </div>
   </aside>
 
@@ -106,14 +110,14 @@
           <p class="page-sub">Select people and send each a personal email from your work address.</p>
         </div>
         <div class="head-actions">
-          <button class="btn" id="addCandidateBtn">+ Add manually</button>
+          <button class="btn" id="addCandidateBtn"><span data-icon="plus" data-size="15"></span> Add manually</button>
           <button class="btn email-all-btn" id="candEmailAllBtn">Email all not contacted</button>
-          <button class="btn btn-primary" id="sendSelectedBtn" disabled>✉ Email selected</button>
+          <button class="btn btn-primary" id="sendSelectedBtn" disabled><span data-icon="mail" data-size="15"></span> <span id="sendSelectedLabel">Email selected</span></button>
         </div>
       </header>
 
       <div class="toolbar">
-        <input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…">
+        <div class="search-wrap"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…"></div>
         <div class="filter-chips" id="filterChips">
           <button class="chip active" data-filter="all">All</button>
           <button class="chip" data-filter="new">Not contacted</button>
@@ -161,7 +165,7 @@
           <p class="muted">Paste the link to your sheet. First row should be headers (e.g. Name, Email, Role…). Private sheets work once Google is connected in Settings; otherwise share the sheet as “Anyone with the link”.</p>
           <div class="field-row">
             <input type="text" id="sheetUrl" class="input" placeholder="https://docs.google.com/spreadsheets/d/…">
-            <button class="btn btn-primary" id="fetchSheetBtn">Fetch</button>
+            <button class="btn btn-primary" id="fetchSheetBtn"><span data-icon="sheet" data-size="15"></span> Fetch</button>
           </div>
           <div class="hint" id="sheetHint"></div>
         </div>
@@ -171,7 +175,7 @@
           <p class="muted">Export your list as CSV and drop it here for a one-time mass upload.</p>
           <label class="dropzone" id="dropzone">
             <input type="file" id="csvFile" accept=".csv,text/csv" hidden>
-            <span class="drop-ico">⇪</span>
+            <span class="drop-ico" data-icon="upload" data-size="24"></span>
             <span><strong>Choose a CSV file</strong> or drag it here</span>
           </label>
         </div>
@@ -330,7 +334,7 @@
   <div class="modal">
     <div class="modal-head">
       <h2 id="composeTitle">Send email</h2>
-      <button class="icon-btn" data-close>✕</button>
+      <button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button>
     </div>
     <div class="modal-body">
       <div class="compose-to" id="composeTo"></div>
@@ -352,7 +356,7 @@
 <!-- ===== Add candidate modal ===== -->
 <div class="modal-backdrop" id="addModal" hidden>
   <div class="modal modal-sm">
-    <div class="modal-head"><h2>Add candidate</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="modal-head"><h2>Add candidate</h2><button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button></div>
     <div class="modal-body">
       <div class="grid-2">
         <div><label class="label">First name</label><input class="input" id="addFirst"></div>
