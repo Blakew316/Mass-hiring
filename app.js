@@ -107,7 +107,7 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
 // ---------- Settings & template ----------
 app.post('/api/settings', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const allowed = ['calendlyUrl', 'gmailSignature', 'ntfyTopic', 'smtpUser', 'smtpPass',
+  const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'ntfyTopic', 'smtpUser', 'smtpPass',
     'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'lastSheetUrl', 'timeZone'];
   for (const k of allowed) {
     if (!(k in req.body) || req.body[k] === '••••••••') continue;

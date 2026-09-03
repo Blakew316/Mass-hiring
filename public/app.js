@@ -520,7 +520,9 @@
     if ([...sel.options].some((o) => o.value === current)) sel.value = current;
     const cand = state.candidates.find((c) => c.id === sel.value) || SAMPLE;
     $('#pvSubject').textContent = fillClient($('#tplSubject').value, cand);
-    $('#pvFrom').textContent = state.sending.from || 'your work email (set up in Settings)';
+    $('#pvFrom').textContent = state.sending.from
+      ? (state.settings.fromName ? `${state.settings.fromName} <${state.sending.from}>` : state.sending.from)
+      : 'your work email (set up in Settings)';
     const bodyHtml = esc(fillClient($('#tplBody').value, cand)).split('\n').join('<br>');
     const cal = state.settings.calendlyUrl;
     $('#pvBody').innerHTML = bodyHtml + (cal
@@ -598,6 +600,7 @@
     const s = state.settings;
     const setIf = (sel, val) => { const el = $(sel); if (document.activeElement !== el) el.value = val || ''; };
     setIf('#setCalendlyUrl', s.calendlyUrl);
+    setIf('#setFromName', s.fromName);
     $('#setGmailSignature').checked = s.gmailSignature !== false;
     setIf('#setNtfyTopic', s.ntfyTopic);
     setIf('#setSmtpUser', s.smtpUser);
@@ -627,7 +630,7 @@
     const pill = $('#connPill');
     if (state.sending.ready) {
       pill.className = 'conn-pill ok';
-      $('#connLabel').textContent = 'Sending as';
+      $('#connLabel').textContent = state.settings.fromName ? `Sending as ${state.settings.fromName}` : 'Sending as';
       $('#connText').textContent = state.sending.from;
       $('#connText').title = state.sending.from;
     } else {
@@ -642,6 +645,7 @@
   async function saveSettings(extra = {}) {
     const body = {
       calendlyUrl: $('#setCalendlyUrl').value,
+      fromName: $('#setFromName').value,
       gmailSignature: $('#setGmailSignature').checked,
       ntfyTopic: $('#setNtfyTopic').value,
       smtpUser: $('#setSmtpUser').value,
