@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "build:function": "node scripts/build-function.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -16,5 +17,8 @@
     "express": "^4.19.2",
     "nodemailer": "^6.9.14",
     "serverless-http": "^3.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   }
 }

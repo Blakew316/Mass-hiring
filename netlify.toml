@@ -1,13 +1,11 @@
 [build]
-  command = "npm install"
+  # Build the single-file function (see scripts/build-function.mjs), then deploy the static UI.
+  command = "npm install && npm run build:function"
   publish = "public"
 
 [functions]
   directory = "netlify/functions"
-  node_bundler = "esbuild"
-  # Ship as a real node module rather than bundling it into the function.
-  external_node_modules = ["@netlify/blobs"]
 
 # Routing for /api/*, /auth/* and /webhooks/* is declared by the function
-# itself (see `config.path` in netlify/functions/api.mjs); everything else
-# is the static dashboard in public/.
+# itself (see `config.path` in netlify/src/api.mjs); everything else is the
+# static dashboard in public/.
