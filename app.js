@@ -5,6 +5,8 @@ const express = require('express');
 const path = require('path');
 
 const store = require('./lib/store');
+const storage = require('./lib/storage');
+const auth = require('./lib/auth');
 const csv = require('./lib/csv');
 const google = require('./lib/google');
 const mailer = require('./lib/mailer');
@@ -13,14 +15,52 @@ const calendly = require('./lib/calendly');
 const { renderEmail } = require('./lib/template');
 
 const app = express();
+// Exact-case routes only, so /API/... cannot reach a handler by a path the
+// auth guard would classify differently.
+app.set('case sensitive routing', true);
 
 // Keep the raw body around so Calendly webhook signatures can be verified.
 app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(auth.middleware);
 
 const asyncRoute = (fn) => (req, res) => fn(req, res).catch((err) => {
   res.status(400).json({ error: err.message || String(err) });
 });
+
+// ---------- Sign-in (only enforced when APP_PASSWORD is set) ----------
+app.get('/api/auth/status', asyncRoute(async (req, res) => {
+  res.json({
+    required: auth.required(),
+    setupRequired: auth.setupRequired(),
+    authed: await auth.isAuthed(req),
+  });
+}));
+
+app.post('/api/login', asyncRoute(async (req, res) => {
+  if (auth.setupRequired()) {
+    return res.status(403).json({ error: 'Set APP_PASSWORD in Netlify first.', setupRequired: true });
+  }
+  if (!auth.required()) return res.json({ ok: true });
+  const locked = auth.loginLockedFor(req);
+  if (locked) {
+    return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(locked / 60)} min.` });
+  }
+  if (!auth.checkPassword(req.body.password)) {
+    auth.recordLoginFailure(req);
+    await auth.failDelay();
+    return res.status(401).json({ error: 'Incorrect password.' });
+  }
+  auth.clearLoginFailures(req);
+  await auth.setSessionCookie(req, res);
+  res.json({ ok: true });
+}));
+
+// Signs out every device (the session salt rotates).
+app.post('/api/logout', asyncRoute(async (req, res) => {
+  await auth.revokeAllSessions(req, res);
+  res.json({ ok: true });
+}));
 
 function maskedSettings(s) {
   return {
@@ -55,16 +95,20 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     sending: await mailer.sendStatus(db.settings),
     stats: stats(db),
     baseUrl: google.baseUrl(),
+    storage: await storage.backend(),
+    auth: { required: auth.required() },
   });
 }));
 
 // ---------- Settings & template ----------
 app.post('/api/settings', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const allowed = ['senderName', 'calendlyUrl', 'ntfyTopic', 'smtpUser', 'smtpPass',
-    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'lastSheetUrl'];
+  const allowed = ['calendlyUrl', 'gmailSignature', 'ntfyTopic', 'smtpUser', 'smtpPass',
+    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'lastSheetUrl', 'timeZone'];
   for (const k of allowed) {
-    if (k in req.body && req.body[k] !== '••••••••') db.settings[k] = String(req.body[k] ?? '').trim();
+    if (!(k in req.body) || req.body[k] === '••••••••') continue;
+    const v = req.body[k];
+    db.settings[k] = typeof v === 'boolean' ? v : String(v ?? '').trim();
   }
   await store.save(db);
   res.json({ ok: true, settings: maskedSettings(db.settings) });
@@ -203,7 +247,8 @@ app.post('/api/preview', asyncRoute(async (req, res) => {
   const c = db.candidates.find((x) => x.id === req.body.candidateId);
   if (!c) throw new Error('Candidate not found.');
   const template = req.body.template || db.template;
-  res.json(renderEmail(template, c, db.settings));
+  const signature = await google.getSignature(db.settings);
+  res.json(renderEmail(template, c, db.settings, { signature }));
 }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -223,7 +268,8 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     const c = db.candidates.find((x) => x.id === id);
     if (!c) { results.push({ id, ok: false, error: 'Not found' }); continue; }
     try {
-      const msg = renderEmail(template, c, db.settings);
+      const signature = await google.getSignature(db.settings, { refresh: true });
+      const msg = renderEmail(template, c, db.settings, { signature });
       const sent = await mailer.sendEmail(db.settings, { to: c.email, ...msg });
       c.status = c.status === 'new' ? 'emailed' : c.status;
       c.lastEmailedAt = new Date().toISOString();
@@ -240,17 +286,29 @@ app.post('/api/send', asyncRoute(async (req, res) => {
 }));
 
 // ---------- Google OAuth ----------
-app.get('/auth/google', asyncRoute(async (_req, res) => {
+app.get('/auth/google', asyncRoute(async (req, res) => {
   const db = await store.load();
   const st = await google.status(db.settings);
   if (!st.configured) return res.redirect('/#settings?error=google-not-configured');
-  res.redirect(google.authUrl(db.settings));
+  const state = auth.issueOauthState(req, res);
+  res.redirect(google.authUrl(db.settings, state));
 }));
 
 app.get('/auth/google/callback', asyncRoute(async (req, res) => {
   const db = await store.load();
   if (req.query.error) return res.redirect('/#settings?error=' + encodeURIComponent(req.query.error));
-  await google.exchangeCode(req.query.code, db.settings);
+  // The state round-trip stops a forged callback from binding someone else's
+  // Google account to this dashboard.
+  if (!auth.consumeOauthState(req, res, req.query.state)) {
+    return res.redirect('/#settings?error=' + encodeURIComponent('Sign-in session expired or did not match — please click Connect Google again.'));
+  }
+  // A wrong client secret etc. must land the user back in Settings with the
+  // message, not on a bare JSON page.
+  try {
+    await google.exchangeCode(req.query.code, db.settings);
+  } catch (err) {
+    return res.redirect('/#settings?error=' + encodeURIComponent(`${err.message} — check the OAuth Client ID and Secret, save, and try again.`));
+  }
   await store.addEvent('google', 'Connected Google account.');
   res.redirect('/#settings?connected=1');
 }));
@@ -274,14 +332,34 @@ app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   if (result.signingKey) db.settings.calendlySigningKey = result.signingKey;
   if (!db.settings.calendlyUrl && result.schedulingUrl) db.settings.calendlyUrl = result.schedulingUrl;
   await store.save(db);
-  await store.addEvent('calendly', `Registered Calendly webhook at ${result.url}.`);
+  await store.addEvent('calendly', `${result.replaced ? 'Re-registered' : 'Registered'} Calendly webhook at ${result.url}.`);
   res.json({ ok: true, ...result, signingKey: undefined });
 }));
+
+// Interview times are shown in the user's own time zone (auto-saved from the
+// browser), both in the activity feed and on the phone.
+function formatWhen(iso, timeZone) {
+  if (!iso) return 'time TBD';
+  const opts = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' };
+  try { return new Date(iso).toLocaleString('en-US', { ...opts, timeZone: timeZone || 'UTC' }); }
+  catch { return new Date(iso).toLocaleString('en-US', { ...opts, timeZone: 'UTC' }); }
+}
+
+let lastSignatureWarning = 0;
 
 app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
   const db = await store.load();
   const signingKey = db.settings.calendlySigningKey || process.env.CALENDLY_SIGNING_KEY || '';
+  if (!signingKey) {
+    return res.status(401).json({ error: 'Calendly webhook is not registered (no signing key). Use "Enable booking alerts" in Settings.' });
+  }
   if (!calendly.verifySignature(signingKey, req.get('Calendly-Webhook-Signature'), req.rawBody)) {
+    // Surface a key mismatch in the activity feed (throttled so a flood of
+    // bogus calls can't spam it).
+    if (Date.now() - lastSignatureWarning > 10 * 60 * 1000) {
+      lastSignatureWarning = Date.now();
+      await store.addEvent('error', 'Rejected a Calendly webhook call with an invalid signature. If bookings stop showing up, click "Enable booking alerts" in Settings to re-register.');
+    }
     return res.status(401).json({ error: 'Invalid Calendly signature' });
   }
   const event = req.body.event;
@@ -290,9 +368,7 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
   const inviteeName = p.name || inviteeEmail || 'Someone';
   const eventName = (p.scheduled_event && p.scheduled_event.name) || 'Interview';
   const startTime = p.scheduled_event && p.scheduled_event.start_time;
-  const when = startTime
-    ? new Date(startTime).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : 'time TBD';
+  const when = formatWhen(startTime, db.settings.timeZone);
 
   const c = db.candidates.find((x) => x.email.toLowerCase() === inviteeEmail);
 
@@ -342,5 +418,12 @@ app.post('/api/test-notification', asyncRoute(async (_req, res) => {
   if (!r.sent) throw new Error(r.reason);
   res.json({ ok: true });
 }));
+
+// JSON errors everywhere (including failures inside the auth middleware), so
+// the dashboard can show the message instead of an HTML stack page.
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  res.status(err.status || 500).json({ error: err.message || 'Unexpected error' });
+});
 
 module.exports = app;

@@ -32,8 +32,58 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && data.auth) {
+      showLogin();
+      throw new Error('Please sign in.');
+    }
+    if (res.status === 403 && data.setupRequired) {
+      $('#setupScreen').hidden = false;
+      throw new Error('Set APP_PASSWORD first.');
+    }
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
+  }
+
+  // ---------------- Sign-in ----------------
+  function showLogin() {
+    $('#loginScreen').hidden = false;
+    setTimeout(() => $('#loginPassword').focus(), 50);
+  }
+
+  $('#loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#loginBtn');
+    btn.disabled = true;
+    $('#loginError').textContent = '';
+    try {
+      await api('/api/login', { method: 'POST', body: { password: $('#loginPassword').value } });
+      $('#loginPassword').value = '';
+      $('#loginScreen').hidden = true;
+      await refresh();
+      start();
+    } catch (err) {
+      $('#loginError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#signOutBtn').addEventListener('click', async () => {
+    await api('/api/logout', { method: 'POST' }).catch(() => {});
+    showLogin();
+  });
+
+  // Persistence / security warnings that must not be missable.
+  function renderNotices() {
+    const n = [];
+    if (state.storage && !state.storage.persistent) {
+      n.push(`<div class="notice danger"><span>⚠️</span><div><strong>Your data is not being saved permanently.</strong> Netlify Blobs is unavailable${state.storage.error ? ` (${esc(state.storage.error)})` : ''}, so settings and candidates will be lost on the next deploy or restart. Check that Blobs is enabled for this site in Netlify, then redeploy.</div></div>`);
+    }
+    if (state.storage && state.storage.deployed && state.auth && !state.auth.required) {
+      n.push(`<div class="notice warn"><span>🔒</span><div><strong>This dashboard is public.</strong> Anyone with the URL could send email from your account. Add an environment variable named <code>APP_PASSWORD</code> in Netlify (Project configuration → Environment variables), then redeploy to require a sign-in.</div></div>`);
+    }
+    $('#notices').innerHTML = n.join('');
+    $('#signOutBtn').hidden = !(state.auth && state.auth.required);
   }
 
   async function refresh() {
@@ -171,7 +221,9 @@
         <td>${esc(c.email)}</td>
         <td>${esc(c.role) || '<span class="muted">—</span>'}</td>
         <td>${esc(c.company) || '<span class="muted">—</span>'}</td>
-        <td><span class="status-pill ${st.cls} status-btn" title="Click to change">${st.label}</span></td>
+        <td><select class="status-select ${st.cls}" title="Change status">
+          ${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${v.label}</option>`).join('')}
+        </select></td>
         <td>${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
         <td><div class="row-actions">
           <button class="icon-btn act-email" title="Send personal email">✉</button>
@@ -208,11 +260,12 @@
       }
       return;
     }
-    if (e.target.closest('.status-btn')) {
-      const order = ['new', 'emailed', 'replied', 'booked', 'declined'];
-      const next = order[(order.indexOf(cand.status) + 1) % order.length];
-      api(`/api/candidates/${id}`, { method: 'PATCH', body: { status: next } }).then(refresh).catch(oops);
-    }
+  });
+
+  $('#candidateRows').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('status-select')) return;
+    const id = e.target.closest('tr').dataset.id;
+    api(`/api/candidates/${id}`, { method: 'PATCH', body: { status: e.target.value } }).then(refresh).catch(oops);
   });
 
   $('#checkAll').addEventListener('change', (e) => {
@@ -250,7 +303,7 @@
   // ---------------- Compose & send ----------------
   function openCompose(ids) {
     if (!state.sending.ready) {
-      toast('Set up your work email first (Settings → Google or App Password).', true);
+      toast(state.sending.reason || 'Set up your work email first (Settings → Google or App Password).', true);
       show('settings');
       return;
     }
@@ -264,9 +317,10 @@
       (cands.length > 6 ? `<span class="to-more">+${cands.length - 6} more</span>` : '');
     $('#composeSubject').value = state.template.subject;
     $('#composeBody').value = state.template.body;
+    const sigNote = state.google.signature ? ' Your Gmail signature is added at the bottom.' : '';
     $('#composeHint').textContent = cands.length === 1
-      ? `Placeholders like {{firstName}} will be filled in for ${firstNameOf(cands[0]) || 'this candidate'}. Your Calendly booking link is added at the end.`
-      : `Each candidate gets their own personal email — {{firstName}} etc. are filled per person, and your Calendly link is added at the end. Sends are spaced ~1s apart.`;
+      ? `Placeholders like {{firstName}} will be filled in for ${firstNameOf(cands[0]) || 'this candidate'}. Your Calendly booking link is added at the end.${sigNote}`
+      : `Each candidate gets their own personal email — {{firstName}} etc. are filled per person, and your Calendly link is added at the end.${sigNote} Sends are spaced ~1s apart.`;
     $('#sendProgress').hidden = true;
     $('#sendProgress').innerHTML = '';
     $('#composeSendBtn').disabled = false;
@@ -410,7 +464,6 @@
       role: cand.role || 'professional',
       company: cand.company || '',
       email: cand.email || '',
-      senderName: s.senderName || '',
       calendlyUrl: s.calendlyUrl || '',
     };
     return String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] ?? '');
@@ -435,10 +488,33 @@
     $('#calendlyHintTpl').innerHTML = cal
       ? `The “Book a time with me” button links to <strong>${esc(cal)}</strong> and is appended to every email automatically.`
       : `No Calendly link yet — add one in <a href="#" data-goto="settings">Settings</a> and a booking button is appended to every email automatically.`;
+
+    // Signature comes from the connected work Gmail account — nothing to type.
+    const sig = state.google.signature;
+    const sigEl = $('#pvSignature');
+    sigEl.hidden = !sig;
+    sigEl.innerHTML = sig || '';
+    const g = state.google;
+    $('#signatureHintTpl').innerHTML = sig
+      ? `Your Gmail signature (from ${esc(g.email || 'your connected account')}) is added at the bottom automatically.`
+      : !g.signatureEnabled
+        ? `Gmail signature is turned off in <a href="#" data-goto="settings">Settings</a>, so emails end after the booking button.`
+        : g.connected && g.signatureError
+          ? `Couldn’t read your Gmail signature (${esc(g.signatureError)}). In <a href="#" data-goto="settings">Settings</a>, click Reconnect and accept all requested permissions.`
+          : g.connected
+            ? `No signature is set on ${esc(g.email || 'the connected Gmail account')} — add one in Gmail (Settings → General → Signature), then click Reconnect in Settings.`
+            : `Your work Gmail signature is appended automatically once Google is connected in <a href="#" data-goto="settings">Settings</a>. (SMTP/App Password sends don’t carry a Gmail signature.)`;
   }
 
+  // Unsaved edits must survive the 30s refresh and page switches.
+  let templateDirty = false;
+  function setTemplateDirty(d) {
+    templateDirty = d;
+    $('#saveTemplateBtn').textContent = d ? 'Save template •' : 'Save template';
+  }
   ['#tplSubject', '#tplBody'].forEach((s) =>
-    $(s).addEventListener('input', debounce(renderTemplatePreview, 200)));
+    $(s).addEventListener('input', () => { setTemplateDirty(true); debouncedPreview(); }));
+  const debouncedPreview = debounce(renderTemplatePreview, 200);
   $('#previewCandidate').addEventListener('change', renderTemplatePreview);
 
   $$('.token').forEach((btn) => btn.addEventListener('click', () => {
@@ -448,12 +524,14 @@
     ta.value = ta.value.slice(0, start) + t + ta.value.slice(ta.selectionEnd ?? start);
     ta.focus();
     ta.selectionStart = ta.selectionEnd = start + t.length;
+    setTemplateDirty(true);
     renderTemplatePreview();
   }));
 
   $('#saveTemplateBtn').addEventListener('click', async () => {
     try {
       await api('/api/template', { method: 'POST', body: { subject: $('#tplSubject').value, body: $('#tplBody').value } });
+      setTemplateDirty(false);
       toast('Template saved — it’s now the default for all outreach.');
       await refresh();
     } catch (err) { oops(err); }
@@ -463,6 +541,7 @@
       const r = await api('/api/template/reset', { method: 'POST' });
       $('#tplSubject').value = r.template.subject;
       $('#tplBody').value = r.template.body;
+      setTemplateDirty(false);
       renderTemplatePreview();
       toast('Template reset to default.');
     } catch (err) { oops(err); }
@@ -477,8 +556,8 @@
   function renderSettings() {
     const s = state.settings;
     const setIf = (sel, val) => { const el = $(sel); if (document.activeElement !== el) el.value = val || ''; };
-    setIf('#setSenderName', s.senderName);
     setIf('#setCalendlyUrl', s.calendlyUrl);
+    $('#setGmailSignature').checked = s.gmailSignature !== false;
     setIf('#setNtfyTopic', s.ntfyTopic);
     setIf('#setSmtpUser', s.smtpUser);
     setIf('#setSmtpPass', s.smtpPass);
@@ -490,6 +569,11 @@
     if (state.google.connected) {
       badge.textContent = state.google.email ? `connected · ${state.google.email}` : 'connected';
       badge.className = 'badge tint-green';
+      $('#googleConnectBtn').textContent = 'Reconnect';
+      $('#googleDisconnectBtn').hidden = false;
+    } else if (state.google.expired) {
+      badge.textContent = 'connection expired — click Reconnect';
+      badge.className = 'badge tint-amber';
       $('#googleConnectBtn').textContent = 'Reconnect';
       $('#googleDisconnectBtn').hidden = false;
     } else {
@@ -505,7 +589,7 @@
       $('#connText').textContent = `Sending as ${state.sending.from}`;
     } else {
       pill.className = 'conn-pill warn';
-      $('#connText').textContent = 'Email not set up';
+      $('#connText').textContent = state.google.expired ? 'Google connection expired — reconnect' : 'Email not set up';
     }
 
     if (state.settings.lastSheetUrl && !$('#sheetUrl').value) $('#sheetUrl').value = state.settings.lastSheetUrl;
@@ -513,8 +597,8 @@
 
   async function saveSettings(extra = {}) {
     const body = {
-      senderName: $('#setSenderName').value,
       calendlyUrl: $('#setCalendlyUrl').value,
+      gmailSignature: $('#setGmailSignature').checked,
       ntfyTopic: $('#setNtfyTopic').value,
       smtpUser: $('#setSmtpUser').value,
       smtpPass: $('#setSmtpPass').value,
@@ -575,25 +659,37 @@
 
   // ---------------- Boot ----------------
   function renderAll() {
+    renderNotices();
     renderDashboard();
     renderCandidates();
     renderSettings();
-    // Only prime the template editor when it isn't being edited.
-    if (document.activeElement !== $('#tplSubject') && document.activeElement !== $('#tplBody')) {
+    // Only prime the template editor when there are no unsaved edits.
+    if (!templateDirty) {
       $('#tplSubject').value = state.template.subject;
       $('#tplBody').value = state.template.body;
     }
     renderTemplatePreview();
   }
 
-  (async () => {
+  // Booking times (feed + phone push) are formatted server-side in the
+  // user's zone, which is learned from the browser and saved with settings.
+  function syncTimeZone() {
     try {
-      await refresh();
-    } catch (err) {
-      oops(err);
-      return;
-    }
-    // Deep links from OAuth redirects: /#settings?connected=1
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz && state.settings.timeZone !== tz) {
+        api('/api/settings', { method: 'POST', body: { timeZone: tz } }).catch(() => {});
+      }
+    } catch {}
+  }
+
+  // Runs once we have an authenticated session (at boot, or after sign-in):
+  // handles OAuth deep links and starts the light polling that keeps
+  // bookings/status fresh while the tab is open.
+  let started = false;
+  function start() {
+    if (started) return;
+    started = true;
+    syncTimeZone();
     const hash = location.hash.replace('#', '');
     if (hash) {
       const [view, query] = hash.split('?');
@@ -603,7 +699,18 @@
       if (params.get('error')) toast(`Google sign-in problem: ${params.get('error')}`, true);
       history.replaceState(null, '', location.pathname);
     }
-    // Light polling keeps bookings/status fresh while the tab is open.
     setInterval(() => refresh().catch(() => {}), 30000);
+  }
+
+  (async () => {
+    try {
+      const a = await api('/api/auth/status');
+      if (a.setupRequired) { $('#setupScreen').hidden = false; return; }
+      if (a.required && !a.authed) { showLogin(); return; }
+      await refresh();
+      start();
+    } catch (err) {
+      if (err.message !== 'Please sign in.' && err.message !== 'Set APP_PASSWORD first.') oops(err);
+    }
   })();
 })();

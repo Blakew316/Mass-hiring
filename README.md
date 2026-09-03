@@ -10,6 +10,8 @@ A CRM-style dashboard for hiring outreach:
 
 Themed around the Wholesale Payments logo — Apple system typography, white surfaces, light hues of the logo's navy/blue/green as accents.
 
+**Full step-by-step integration walkthrough: [SETUP.md](SETUP.md).**
+
 ## Quick start
 
 ```bash
@@ -32,30 +34,36 @@ First row should be headers — e.g. `Name, Email, Role, Company`. The app guess
 1. Go to https://myaccount.google.com/apppasswords (requires 2-step verification on the account).
 2. Create an app password, then enter your work email + that password in **Settings → Gmail App Password**.
 
-**b) Google OAuth — full integration (Sheets + Gmail API)**
+**b) Google OAuth — full integration (Sheets + Gmail API + your signature)**
 1. In https://console.cloud.google.com/apis/credentials create an *OAuth client ID* (type: Web application).
 2. Add the redirect URI shown on the Settings page (`{your-url}/auth/google/callback`).
 3. Enable the *Gmail API* and *Google Sheets API* for the project.
 4. Paste the Client ID + Secret into **Settings → Google** and click **Connect Google**.
 
+With Google connected and the **"Append my Gmail signature"** box ticked in Settings, the signature configured on your work Gmail account is read from Gmail and appended to every outreach email automatically — there is nothing to type in the app. (Gmail only inserts signatures when you compose in Gmail itself; API and SMTP sends don't get it, so the app does this for you. SMTP/App Password sends can't include it.) Reading the signature uses Google's `gmail.settings.basic` permission, which Google classes as *restricted*: fine for a Workspace "Internal" app, but untick the box if you're using a personal-Gmail "External" app — see SETUP.md.
+
 Emails are sent one-by-one (~1s apart) so each candidate receives an individual, personal message — never a CC/BCC blast.
+
+## Protecting the dashboard
+
+Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in (sessions last 30 days; *Sign out* revokes every device; five wrong passwords lock that address for 15 minutes). A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
 
 ## 3. Calendly + phone notifications
 
 1. **Booking link**: put your Calendly URL in Settings — it's appended to every outreach email as a booking button.
 2. **Phone pushes**: install the free [ntfy](https://ntfy.sh) app (iOS/Android), subscribe to a hard-to-guess topic (e.g. `blake-hiring-8241`), enter the same topic in Settings, and hit *Send test*.
-3. **Booking webhook**: so Calendly can tell the app about bookings, the app must be reachable from the internet (deploy it, or tunnel with `ngrok http 3000`). Then paste a Calendly *Personal Access Token* (calendly.com → Integrations → API & webhooks) in Settings and click **Enable booking alerts**. The app registers the webhook and stores the signing key automatically.
+3. **Booking webhook**: so Calendly can tell the app about bookings, the app must be reachable from the internet (deploy it, or tunnel with `ngrok http 3000`). Then paste a Calendly *Personal Access Token* (calendly.com → Integrations & apps → API and webhooks) in Settings and click **Enable booking alerts**. The app registers the webhook with a signing key it generates, and rejects any webhook call that isn't correctly signed.
 
 When someone books: their pipeline status becomes **Booked**, the activity feed logs it, and your phone gets a push with their name and the interview time.
 
-> Calendly webhooks require a Calendly plan that includes the API (Standard and up).
+> Calendly webhooks require a paid Calendly plan (Standard, Teams or Enterprise).
 
 ## Deploy to Netlify
 
 The repo is Netlify-ready — `netlify.toml` publishes `public/` as the site and runs the Express API as a Netlify Function, with candidates/settings/tokens stored in **Netlify Blobs** (so nothing is lost between deploys).
 
-1. Netlify → *Add new site* → *Import an existing project* → pick this GitHub repo. Build settings are read from `netlify.toml`; nothing to change.
-2. Deploy. Open your site URL — the dashboard loads, and the API works at `/api/*`.
+1. Netlify → *Add new project* → *Import an existing project* → pick this GitHub repo. Build settings are read from `netlify.toml`; nothing to change.
+2. Add the `APP_PASSWORD` environment variable (*Project configuration → Environment variables*) and deploy. Open your site URL, sign in — the dashboard loads, and the API works at `/api/*`.
 3. In the app's Settings, connect email + Calendly + ntfy as above. The app already knows its public URL (Netlify's `URL` env var), so:
    - the Google OAuth redirect URI shown in Settings is `https://<your-site>.netlify.app/auth/google/callback`
    - "Enable booking alerts" registers the Calendly webhook at `https://<your-site>.netlify.app/webhooks/calendly` — no tunnel needed.
@@ -66,7 +74,7 @@ Optional: set `BASE_URL` in Netlify's environment variables if you use a custom 
 
 Everything can be set in the Settings UI. Alternatively copy `.env.example` to `.env` for server-side defaults (`PORT`, `BASE_URL`, Google OAuth credentials, SMTP, ntfy topic). Values saved in Settings take precedence.
 
-Data lives in `data/db.json` (candidates, template, settings) and `data/tokens.json` (Google tokens); both are gitignored. Back them up to keep your pipeline.
+All of your configuration (API keys, Google connection, Calendly, ntfy topic) and your candidates are stored **server-side**, never in the browser, so they persist across browsers, devices and sessions. Locally that's `data/db.json` and `data/tokens.json` (gitignored — back them up to keep your pipeline); on Netlify it's a Netlify Blobs store that survives redeploys.
 
 ## Stack
 

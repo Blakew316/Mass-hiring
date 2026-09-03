@@ -35,11 +35,13 @@
     </nav>
     <div class="sidebar-foot">
       <div class="conn-pill" id="connPill"><span class="dot"></span><span id="connText">Checking…</span></div>
+      <button class="signout" id="signOutBtn" hidden title="Signs out on every device">Sign out</button>
     </div>
   </aside>
 
   <!-- ================= Main ================= -->
   <main class="main">
+    <div class="notices" id="notices"></div>
 
     <!-- ===== Dashboard ===== -->
     <section class="view active" id="view-dashboard">
@@ -212,7 +214,6 @@
             <button class="token" data-token="{{fullName}}">full name</button>
             <button class="token" data-token="{{role}}">role</button>
             <button class="token" data-token="{{company}}">company</button>
-            <button class="token" data-token="{{senderName}}">your name</button>
           </div>
         </div>
         <div class="card">
@@ -226,8 +227,10 @@
               <div><span class="muted">Subject:</span> <strong id="pvSubject"></strong></div>
             </div>
             <div class="email-body" id="pvBody"></div>
+            <div class="email-signature" id="pvSignature" hidden></div>
           </div>
           <div class="hint" id="calendlyHintTpl"></div>
+          <div class="hint" id="signatureHintTpl"></div>
         </div>
       </div>
     </section>
@@ -237,29 +240,27 @@
       <header class="page-head">
         <div>
           <h1>Settings</h1>
-          <p class="page-sub">Connect your accounts. Everything is stored locally on this machine.</p>
+          <p class="page-sub">Connect your accounts. Everything you enter is saved on the server and follows you across browsers and devices.</p>
         </div>
         <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
       </header>
 
       <div class="settings-grid">
         <div class="card">
-          <div class="card-head"><h2>You</h2></div>
-          <label class="label">Your name (used to sign emails)</label>
-          <input type="text" id="setSenderName" class="input" placeholder="e.g. Blake Woodruff">
-        </div>
-
-        <div class="card">
           <div class="card-head">
             <h2>Google — Sheets & Gmail</h2>
             <span class="badge" id="googleBadge">not connected</span>
           </div>
-          <p class="muted">Connect your work Google account to import <strong>private</strong> sheets and send email through the official Gmail API.</p>
+          <p class="muted">Connect your work Google account to import <strong>private</strong> sheets, send email through the official Gmail API, and have your <strong>existing Gmail signature</strong> added to every outreach email automatically.</p>
           <label class="label">OAuth Client ID</label>
           <input type="text" id="setGoogleClientId" class="input" placeholder="xxxxx.apps.googleusercontent.com">
           <label class="label">OAuth Client Secret</label>
           <input type="password" id="setGoogleClientSecret" class="input" placeholder="GOCSPX-…">
           <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web). Add redirect URI: <code id="redirectUriCode"></code></div>
+          <label class="check">
+            <input type="checkbox" id="setGmailSignature" checked>
+            <span>Append my Gmail signature to every outreach email <span class="muted small">(asks for the “manage basic mail settings” permission when connecting — change this before you click Connect / Reconnect)</span></span>
+          </label>
           <div class="card-actions">
             <button class="btn" id="googleDisconnectBtn" hidden>Disconnect</button>
             <a class="btn btn-primary" href="/auth/google" id="googleConnectBtn">Connect Google</a>
@@ -271,7 +272,7 @@
             <h2>Gmail App Password</h2>
             <span class="badge tint-blue">easy alternative</span>
           </div>
-          <p class="muted">No Google Cloud setup needed: create an App Password at myaccount.google.com/apppasswords and emails send from your work Gmail over SMTP.</p>
+          <p class="muted">No Google Cloud setup needed: create an App Password at myaccount.google.com/apppasswords and emails send from your work Gmail over SMTP. Note: Gmail does not attach your signature to SMTP sends — connect Google (left) if you want it included.</p>
           <label class="label">Work email</label>
           <input type="email" id="setSmtpUser" class="input" placeholder="you@company.com">
           <label class="label">App password</label>
@@ -349,6 +350,33 @@
       <button class="btn btn-primary" id="addSaveBtn">Add candidate</button>
     </div>
   </div>
+</div>
+
+<!-- ===== Setup gate: public deploy without a password ===== -->
+<div class="login-screen" id="setupScreen" hidden>
+  <div class="login-card setup-card-gate">
+    <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
+    <h2>Lock the dashboard first</h2>
+    <p class="muted">This site is public, and the app can send email from your account, so it won't run until a password is set.</p>
+    <ol class="setup-steps">
+      <li>Netlify → <strong>Project configuration → Environment variables → Add a variable</strong> <span class="muted small">(called “Site configuration” in the older UI)</span></li>
+      <li>Key <code>APP_PASSWORD</code>, value = a strong password → Save</li>
+      <li><strong>Deploys → Trigger deploy → Deploy site</strong>, then reload this page</li>
+    </ol>
+    <button type="button" class="btn btn-primary login-btn" onclick="location.reload()">I’ve set it — reload</button>
+  </div>
+</div>
+
+<!-- ===== Sign-in (shown only when APP_PASSWORD is set) ===== -->
+<div class="login-screen" id="loginScreen" hidden>
+  <form class="login-card" id="loginForm">
+    <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
+    <h2>Hiring CRM</h2>
+    <p class="muted">Enter the dashboard password to continue.</p>
+    <input type="password" id="loginPassword" class="input" placeholder="Password" autocomplete="current-password" autofocus>
+    <button type="submit" class="btn btn-primary login-btn" id="loginBtn">Sign in</button>
+    <div class="hint" id="loginError"></div>
+  </form>
 </div>
 
 <div class="toast-wrap" id="toasts"></div>
