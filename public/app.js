@@ -266,7 +266,7 @@
             <div class="tile-side">
               ${i.joinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.joinUrl)}">Join call</a>` : ''}
               ${i.rescheduleUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.rescheduleUrl)}">Reschedule</a>` : ''}
-              ${c ? statusSelect(c) : ''}
+              ${c ? statusSelect(c) : `<button class="tile-link link-btn" data-uri="${esc(i.uri)}" data-email="${esc(i.inviteeEmail || '')}" data-name="${esc(i.inviteeName || '')}">${icon('users', 13)} Link to candidate</button>`}
             </div>
           </li>`;
         });
@@ -281,6 +281,41 @@
   $$('.stat-card[data-tile]').forEach((card) => {
     card.addEventListener('click', () => openTile(card.dataset.tile));
     card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTile(card.dataset.tile); } });
+  });
+  // Link an unmatched Calendly booking to a candidate: inline search, click to link.
+  $('#tileList').addEventListener('click', (e) => {
+    const btn = e.target.closest('.link-btn');
+    if (!btn) return;
+    const row = btn.closest('.tile-row');
+    const existing = row.querySelector('.link-box');
+    if (existing) { existing.remove(); return; }
+    const box = document.createElement('div');
+    box.className = 'link-box';
+    box.innerHTML = `<input class="input link-input" placeholder="Type the candidate's name or email…"><ul class="link-results"></ul>`;
+    row.querySelector('.tile-main').appendChild(box);
+    const input = box.querySelector('.link-input');
+    const ul = box.querySelector('.link-results');
+    const render = () => {
+      const qv = input.value.trim().toLowerCase();
+      const hits = qv.length < 2 ? [] : state.candidates.filter((c) => `${c.name || ''} ${c.email || ''} ${c.company || ''}`.toLowerCase().includes(qv)).slice(0, 6);
+      ul.innerHTML = hits.map((c) => `<li data-id="${c.id}"><strong>${esc(c.name || c.email)}</strong> <span class="muted small">${esc(c.email)}${c.role ? ` · ${esc(c.role)}` : ''}</span></li>`).join('')
+        || (qv.length >= 2 ? '<li class="link-none muted small">No candidate matches — try part of the name or email.</li>' : '');
+    };
+    input.addEventListener('input', render);
+    ul.addEventListener('click', async (ev) => {
+      const li = ev.target.closest('li[data-id]');
+      if (!li) return;
+      try {
+        const r = await api('/api/interviews/link', { method: 'POST', body: { uri: btn.dataset.uri, inviteeEmail: btn.dataset.email, candidateId: li.dataset.id } });
+        toast(`Linked to ${r.candidate.name || r.candidate.email}.`);
+        await refresh();
+        openTile('booked');
+      } catch (err) { oops(err); }
+    });
+    // Start from the name they booked with — usually enough to find them.
+    input.value = (btn.dataset.name || '').split(' ')[0] || '';
+    render();
+    input.focus();
   });
   $('#tileList').addEventListener('change', (e) => {
     if (!e.target.classList.contains('tile-status')) return;

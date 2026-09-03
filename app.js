@@ -590,6 +590,55 @@ function formatWhen(iso, timeZone) {
 
 let lastSignatureWarning = 0;
 
+// Who booked? Email first — including addresses learned from earlier
+// bookings — then a unique full-name match, because people often book with
+// a different address (work vs personal) than the one on the sheet.
+const normEmail = (e) => String(e || '').trim().toLowerCase();
+const normName = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function matchCandidate(candidates, email, name) {
+  const e = normEmail(email);
+  if (e) {
+    const byEmail = candidates.find((c) => normEmail(c.email) === e || (c.altEmails || []).some((a) => normEmail(a) === e));
+    if (byEmail) return byEmail;
+  }
+  const n = normName(name);
+  if (n.length >= 4) {
+    const byName = candidates.filter((c) => normName(c.name) === n || normName(`${c.firstName || ''}${c.lastName || ''}`) === n);
+    if (byName.length === 1) return byName[0];
+  }
+  return null;
+}
+// Remember the address they booked with so replies and later bookings match.
+function learnEmail(c, email) {
+  const e = normEmail(email);
+  if (!e || normEmail(c.email) === e) return;
+  c.altEmails = Array.from(new Set([...(c.altEmails || []), e]));
+}
+
+// Manual link from the Interviews tile for the rare booking the matcher
+// could not place (different name and address).
+app.post('/api/interviews/link', asyncRoute(async (req, res) => {
+  const { uri, inviteeEmail, candidateId } = req.body || {};
+  let linked = null;
+  await store.update((fresh) => {
+    const c = fresh.candidates.find((x) => x.id === candidateId);
+    if (!c) throw new Error('Candidate not found.');
+    const iv = (fresh.interviews || []).find((i) => i.uri === uri && normEmail(i.inviteeEmail) === normEmail(inviteeEmail));
+    if (!iv) throw new Error('That interview is no longer listed — sync and try again.');
+    iv.candidateId = c.id;
+    learnEmail(c, inviteeEmail);
+    if (iv.status === 'active') {
+      c.status = 'booked';
+      c.bookedAt = iv.start;
+      c.bookedEvent = iv.name;
+      c.calendlyEventUri = iv.uri;
+      c.bookedJoinUrl = iv.joinUrl || '';
+    }
+    linked = { id: c.id, name: c.name, email: c.email };
+  });
+  res.json({ ok: true, candidate: linked });
+}));
+
 app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
   const db = await store.load();
   const signingKey = db.settings.calendlySigningKey || process.env.CALENDLY_SIGNING_KEY || '';
@@ -613,13 +662,14 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
   const startTime = p.scheduled_event && p.scheduled_event.start_time;
   const when = formatWhen(startTime, db.settings.timeZone);
 
-  const c = db.candidates.find((x) => x.email.toLowerCase() === inviteeEmail);
+  const c = matchCandidate(db.candidates, inviteeEmail, p.name);
 
   if (event === 'invitee.created') {
     const ev = p.scheduled_event || {};
     await store.update((fresh) => {
       const fc = c && fresh.candidates.find((x) => x.id === c.id);
       if (fc) {
+        learnEmail(fc, inviteeEmail);
         fc.status = 'booked';
         fc.bookedAt = startTime || new Date().toISOString();
         fc.bookedEvent = eventName;
@@ -689,14 +739,14 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
   }
   const announce = [];
   await store.update((fresh) => {
-    const byEmail = new Map(fresh.candidates.map((c) => [c.email.toLowerCase(), c]));
     const list = [];
     for (const ev of result.interviews) {
       if (!ev.invitees.length) {
         list.push({ uri: ev.uri, name: ev.name, status: ev.status, start: ev.start, end: ev.end, joinUrl: ev.joinUrl, inviteeName: '', inviteeEmail: '', candidateId: null });
       }
       for (const inv of ev.invitees) {
-        const c = byEmail.get(String(inv.email || '').toLowerCase()) || null;
+        const c = matchCandidate(fresh.candidates, inv.email, inv.name);
+        if (c) learnEmail(c, inv.email);
         const active = ev.status === 'active' && inv.status !== 'canceled';
         list.push({
           uri: ev.uri, name: ev.name, status: active ? 'active' : 'canceled', start: ev.start, end: ev.end,
@@ -745,6 +795,8 @@ app.post('/api/test-notification', asyncRoute(async (_req, res) => {
     tags: 'white_check_mark',
   });
   if (!r.sent) throw new Error(r.reason);
+  // A working push retires any earlier "notification failed" warning.
+  await store.update((d) => { d.events = d.events.filter((e) => !(e.type === 'error' && /notification failed/i.test(e.message || ''))); });
   res.json({ ok: true });
 }));
 

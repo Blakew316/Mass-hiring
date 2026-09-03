@@ -65,7 +65,9 @@ The feed shows only candidate signals (opened, replied, booked, cancelled) — n
 
 ## Interviews synced from Calendly
 
-With a Calendly personal access token saved in Settings, the app pulls your scheduled interviews every few minutes (and on demand with **Sync now** in the Interviews booked tile), matches invitees to candidates by email, flips them to **Booked**, reverts cancellations, and lists every upcoming interview — including bookings made before the webhook existed or by people who used a different email (shown as "not in your candidate list"). The webhook still delivers instant booking alerts.
+With a Calendly personal access token saved in Settings, the app pulls your scheduled interviews every few minutes (and on demand with **Sync now** in the Interviews booked tile), matches invitees to candidates, flips them to **Booked**, reverts cancellations, and lists every upcoming interview — including bookings made before the webhook existed. The webhook still delivers instant booking alerts.
+
+Matching is by email first (any address the person has booked with before counts), then by full name when the name is unique in your list — people often book with a work address when the sheet has their personal one. A booking the app still cannot place shows **Link to candidate** in the tile: type part of the name or email, click the person, and the address is remembered for next time.
 
 ## Protecting the dashboard
 

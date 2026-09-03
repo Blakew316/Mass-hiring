@@ -453,3 +453,14 @@ tr:hover .row-actions { opacity: 1; }
   .sidebar-foot { display: none; }
   .main { padding: 18px 16px 40px; }
 }
+
+/* Link an unmatched interview to a candidate (Interviews tile) */
+.link-btn { background: none; border: none; padding: 0; cursor: pointer; font: inherit; }
+.link-box { margin-top: 8px; max-width: 420px; }
+.link-results { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff; }
+.link-results:empty { display: none; }
+.link-results li { padding: 8px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.link-results li:last-child { border-bottom: none; }
+.link-results li:hover { background: var(--blue-tint, #eaf4fe); }
+.link-results li.link-none { cursor: default; }
+.link-results li.link-none:hover { background: none; }
