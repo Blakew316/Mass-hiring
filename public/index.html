@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hiring CRM · Wholesale Payments</title>
+<link rel="icon" type="image/png" href="/assets/logo.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell">
+
+  <!-- ================= Sidebar ================= -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="/assets/logo.png" alt="Wholesale Payments" class="brand-logo">
+      <div class="brand-sub">Hiring CRM</div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard">
+        <span class="nav-ico">◫</span> Dashboard
+      </button>
+      <button class="nav-item" data-view="candidates">
+        <span class="nav-ico">☰</span> Candidates <span class="nav-count" id="navCount"></span>
+      </button>
+      <button class="nav-item" data-view="import">
+        <span class="nav-ico">⇣</span> Import
+      </button>
+      <button class="nav-item" data-view="template">
+        <span class="nav-ico">✎</span> Email Template
+      </button>
+      <button class="nav-item" data-view="settings">
+        <span class="nav-ico">⚙</span> Settings
+      </button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="conn-pill" id="connPill"><span class="dot"></span><span id="connText">Checking…</span></div>
+    </div>
+  </aside>
+
+  <!-- ================= Main ================= -->
+  <main class="main">
+
+    <!-- ===== Dashboard ===== -->
+    <section class="view active" id="view-dashboard">
+      <header class="page-head">
+        <div>
+          <h1>Dashboard</h1>
+          <p class="page-sub">Your hiring outreach at a glance.</p>
+        </div>
+        <button class="btn btn-primary" data-goto="import">+ Import candidates</button>
+      </header>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Candidates</div>
+          <div class="stat-value" id="statTotal">0</div>
+          <div class="stat-bars"><i class="bar bar-blue"></i><i class="bar bar-green"></i><i class="bar bar-mint"></i></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Emailed</div>
+          <div class="stat-value" id="statEmailed">0</div>
+          <div class="stat-foot tint-blue" id="statEmailedPct">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Replied</div>
+          <div class="stat-value" id="statReplied">0</div>
+          <div class="stat-foot tint-mint" id="statRepliedPct">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Interviews booked</div>
+          <div class="stat-value" id="statBooked">0</div>
+          <div class="stat-foot tint-green">via Calendly</div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <div class="card-head"><h2>Pipeline</h2></div>
+          <div id="pipeline" class="pipeline"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Recent activity</h2></div>
+          <ul class="activity" id="activityList"><li class="empty-line">Nothing yet — import your first candidates.</li></ul>
+        </div>
+      </div>
+
+      <div class="card setup-card" id="setupCard">
+        <div class="card-head"><h2>Setup checklist</h2></div>
+        <ul class="setup-list" id="setupList"></ul>
+      </div>
+    </section>
+
+    <!-- ===== Candidates ===== -->
+    <section class="view" id="view-candidates">
+      <header class="page-head">
+        <div>
+          <h1>Candidates</h1>
+          <p class="page-sub">Select people and send each a personal email from your work address.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="addCandidateBtn">+ Add manually</button>
+          <button class="btn btn-primary" id="sendSelectedBtn" disabled>✉ Email selected</button>
+        </div>
+      </header>
+
+      <div class="toolbar">
+        <input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…">
+        <div class="filter-chips" id="filterChips">
+          <button class="chip active" data-filter="all">All</button>
+          <button class="chip" data-filter="new">Not contacted</button>
+          <button class="chip" data-filter="emailed">Emailed</button>
+          <button class="chip" data-filter="replied">Replied</button>
+          <button class="chip" data-filter="booked">Booked</button>
+          <button class="chip" data-filter="declined">Not interested</button>
+        </div>
+      </div>
+
+      <div class="card table-card">
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="checkAll"></th>
+              <th>Name</th><th>Email</th><th>Role</th><th>Company</th><th>Status</th><th>Last emailed</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="candidateRows"></tbody>
+        </table>
+        <div class="empty-state" id="candidatesEmpty">
+          <div class="empty-art"><i class="bar bar-blue"></i><i class="bar bar-green"></i><i class="bar bar-mint"></i></div>
+          <h3>No candidates yet</h3>
+          <p>Connect a Google Sheet or upload a CSV to fill your pipeline.</p>
+          <button class="btn btn-primary" data-goto="import">Import candidates</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Import ===== -->
+    <section class="view" id="view-import">
+      <header class="page-head">
+        <div>
+          <h1>Import</h1>
+          <p class="page-sub">Pull potential hires in from Google Sheets, or upload a CSV.</p>
+        </div>
+      </header>
+
+      <div class="two-col">
+        <div class="card">
+          <div class="card-head">
+            <h2>Google Sheet</h2>
+            <span class="badge tint-green">recommended</span>
+          </div>
+          <p class="muted">Paste the link to your sheet. First row should be headers (e.g. Name, Email, Role…). Private sheets work once Google is connected in Settings; otherwise share the sheet as “Anyone with the link”.</p>
+          <div class="field-row">
+            <input type="text" id="sheetUrl" class="input" placeholder="https://docs.google.com/spreadsheets/d/…">
+            <button class="btn btn-primary" id="fetchSheetBtn">Fetch</button>
+          </div>
+          <div class="hint" id="sheetHint"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>CSV upload</h2></div>
+          <p class="muted">Export your list as CSV and drop it here for a one-time mass upload.</p>
+          <label class="dropzone" id="dropzone">
+            <input type="file" id="csvFile" accept=".csv,text/csv" hidden>
+            <span class="drop-ico">⇪</span>
+            <span><strong>Choose a CSV file</strong> or drag it here</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card" id="mappingCard" hidden>
+        <div class="card-head">
+          <h2>Map columns</h2>
+          <span class="badge tint-blue" id="previewCount"></span>
+        </div>
+        <p class="muted">Check that each field points at the right column, then import.</p>
+        <div class="mapping-grid" id="mappingGrid"></div>
+        <div class="preview-wrap">
+          <table class="table preview-table" id="previewTable"></table>
+        </div>
+        <div class="card-actions">
+          <button class="btn" id="cancelImportBtn">Cancel</button>
+          <button class="btn btn-primary" id="commitImportBtn">Import candidates</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Template ===== -->
+    <section class="view" id="view-template">
+      <header class="page-head">
+        <div>
+          <h1>Email template</h1>
+          <p class="page-sub">The default outreach email. It’s personalized per candidate, and your Calendly link is added at the end automatically.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="resetTemplateBtn">Reset to default</button>
+          <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
+        </div>
+      </header>
+
+      <div class="two-col template-cols">
+        <div class="card">
+          <div class="card-head"><h2>Edit</h2></div>
+          <label class="label">Subject</label>
+          <input type="text" id="tplSubject" class="input">
+          <label class="label">Body</label>
+          <textarea id="tplBody" class="input textarea" rows="14"></textarea>
+          <div class="token-row">
+            <span class="muted small">Insert:</span>
+            <button class="token" data-token="{{firstName}}">first name</button>
+            <button class="token" data-token="{{fullName}}">full name</button>
+            <button class="token" data-token="{{role}}">role</button>
+            <button class="token" data-token="{{company}}">company</button>
+            <button class="token" data-token="{{senderName}}">your name</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Live preview</h2>
+            <select id="previewCandidate" class="input select slim"></select>
+          </div>
+          <div class="email-preview">
+            <div class="email-meta">
+              <div><span class="muted">From:</span> <span id="pvFrom">your work email</span></div>
+              <div><span class="muted">Subject:</span> <strong id="pvSubject"></strong></div>
+            </div>
+            <div class="email-body" id="pvBody"></div>
+          </div>
+          <div class="hint" id="calendlyHintTpl"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Settings ===== -->
+    <section class="view" id="view-settings">
+      <header class="page-head">
+        <div>
+          <h1>Settings</h1>
+          <p class="page-sub">Connect your accounts. Everything is stored locally on this machine.</p>
+        </div>
+        <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
+      </header>
+
+      <div class="settings-grid">
+        <div class="card">
+          <div class="card-head"><h2>You</h2></div>
+          <label class="label">Your name (used to sign emails)</label>
+          <input type="text" id="setSenderName" class="input" placeholder="e.g. Blake Woodruff">
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Google — Sheets & Gmail</h2>
+            <span class="badge" id="googleBadge">not connected</span>
+          </div>
+          <p class="muted">Connect your work Google account to import <strong>private</strong> sheets and send email through the official Gmail API.</p>
+          <label class="label">OAuth Client ID</label>
+          <input type="text" id="setGoogleClientId" class="input" placeholder="xxxxx.apps.googleusercontent.com">
+          <label class="label">OAuth Client Secret</label>
+          <input type="password" id="setGoogleClientSecret" class="input" placeholder="GOCSPX-…">
+          <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web). Add redirect URI: <code id="redirectUriCode"></code></div>
+          <div class="card-actions">
+            <button class="btn" id="googleDisconnectBtn" hidden>Disconnect</button>
+            <a class="btn btn-primary" href="/auth/google" id="googleConnectBtn">Connect Google</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Gmail App Password</h2>
+            <span class="badge tint-blue">easy alternative</span>
+          </div>
+          <p class="muted">No Google Cloud setup needed: create an App Password at myaccount.google.com/apppasswords and emails send from your work Gmail over SMTP.</p>
+          <label class="label">Work email</label>
+          <input type="email" id="setSmtpUser" class="input" placeholder="you@company.com">
+          <label class="label">App password</label>
+          <input type="password" id="setSmtpPass" class="input" placeholder="16-character app password">
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Calendly</h2></div>
+          <label class="label">Your Calendly booking link (added to every email)</label>
+          <input type="text" id="setCalendlyUrl" class="input" placeholder="https://calendly.com/you/interview">
+          <label class="label">Personal Access Token <span class="muted small">(only used once, to register the booking webhook)</span></label>
+          <div class="field-row">
+            <input type="password" id="calendlyToken" class="input" placeholder="calendly.com → Integrations → API & webhooks">
+            <button class="btn" id="registerWebhookBtn">Enable booking alerts</button>
+          </div>
+          <div class="hint" id="calendlyHint">When someone books, their card flips to “Booked” and your phone gets a push. Requires this app to be reachable at a public URL.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Phone notifications</h2></div>
+          <p class="muted">Install the free <strong>ntfy</strong> app (App Store / Play Store), subscribe to a topic of your choosing, and enter the same topic here.</p>
+          <label class="label">ntfy topic</label>
+          <div class="field-row">
+            <input type="text" id="setNtfyTopic" class="input" placeholder="e.g. blake-hiring-alerts-8241">
+            <button class="btn" id="testNotifyBtn">Send test</button>
+          </div>
+          <div class="hint">Pick something hard to guess — anyone who knows the topic name can see its notifications.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ===== Compose modal ===== -->
+<div class="modal-backdrop" id="composeModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="composeTitle">Send email</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="compose-to" id="composeTo"></div>
+      <label class="label">Subject</label>
+      <input type="text" id="composeSubject" class="input">
+      <label class="label">Message <span class="muted small">(placeholders are filled per recipient)</span></label>
+      <textarea id="composeBody" class="input textarea" rows="10"></textarea>
+      <div class="hint" id="composeHint"></div>
+      <div class="send-progress" id="sendProgress" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="composeSendBtn">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Add candidate modal ===== -->
+<div class="modal-backdrop" id="addModal" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-head"><h2>Add candidate</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="modal-body">
+      <div class="grid-2">
+        <div><label class="label">First name</label><input class="input" id="addFirst"></div>
+        <div><label class="label">Last name</label><input class="input" id="addLast"></div>
+      </div>
+      <label class="label">Email *</label><input class="input" id="addEmail" type="email">
+      <div class="grid-2">
+        <div><label class="label">Role</label><input class="input" id="addRole"></div>
+        <div><label class="label">Company</label><input class="input" id="addCompany"></div>
+      </div>
+      <label class="label">Notes</label><input class="input" id="addNotes">
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="addSaveBtn">Add candidate</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>

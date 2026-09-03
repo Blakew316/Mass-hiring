@@ -1,0 +1,598 @@
+/* Wholesale Payments · Hiring CRM — frontend */
+(() => {
+  'use strict';
+
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+  let state = null;            // last /api/state payload
+  let selected = new Set();    // selected candidate ids
+  let filter = 'all';
+  let search = '';
+  let pendingImport = null;    // {headers, rows, mapping, source}
+  let composeIds = [];
+
+  const STATUS = {
+    new:      { label: 'Not contacted', cls: 'tint-navy' },
+    emailed:  { label: 'Emailed',       cls: 'tint-blue' },
+    replied:  { label: 'Replied',       cls: 'tint-mint' },
+    booked:   { label: 'Booked',        cls: 'tint-green' },
+    declined: { label: 'Not interested',cls: 'tint-red' },
+  };
+  const AVATAR_TINTS = ['tint-blue', 'tint-green', 'tint-mint', 'tint-navy'];
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // ---------------- API ----------------
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  }
+
+  async function refresh() {
+    state = await api('/api/state');
+    renderAll();
+  }
+
+  // ---------------- Toasts ----------------
+  function toast(msg, isErr = false) {
+    const el = document.createElement('div');
+    el.className = 'toast' + (isErr ? ' err' : '');
+    el.textContent = msg;
+    $('#toasts').appendChild(el);
+    setTimeout(() => el.remove(), isErr ? 6000 : 3500);
+  }
+  const oops = (err) => toast(err.message || String(err), true);
+
+  // ---------------- Navigation ----------------
+  function show(view) {
+    $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
+    $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+    if (view === 'template') renderTemplatePreview();
+  }
+  $$('.nav-item').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
+  document.addEventListener('click', (e) => {
+    const go = e.target.closest('[data-goto]');
+    if (go) show(go.dataset.goto);
+  });
+
+  // ---------------- Dashboard ----------------
+  function renderDashboard() {
+    const s = state.stats;
+    $('#statTotal').textContent = s.total;
+    $('#statEmailed').textContent = contactedCount();
+    $('#statReplied').textContent = s.replied;
+    $('#statBooked').textContent = s.booked;
+    const contacted = contactedCount();
+    $('#statEmailedPct').textContent = s.total ? `${Math.round((contacted / s.total) * 100)}% of pipeline` : '—';
+    $('#statRepliedPct').textContent = contacted ? `${Math.round((s.replied / contacted) * 100)}% response` : '—';
+    $('#navCount').textContent = s.total || '';
+
+    // Pipeline bars
+    const steps = [
+      ['Not contacted', s.new, 'var(--navy-soft)'],
+      ['Emailed', s.emailed, 'var(--blue)'],
+      ['Replied', s.replied, 'var(--mint)'],
+      ['Booked', s.booked, 'var(--green)'],
+      ['Not interested', s.declined, '#cfd4e0'],
+    ];
+    const max = Math.max(1, ...steps.map(([, n]) => n));
+    $('#pipeline').innerHTML = steps.map(([label, n, color]) => `
+      <div class="pipe-row">
+        <div class="pipe-label">${label}</div>
+        <div class="pipe-track"><div class="pipe-fill" style="width:${(n / max) * 100}%;background:${color};opacity:.75"></div></div>
+        <div class="pipe-count">${n}</div>
+      </div>`).join('');
+
+    // Activity
+    const icons = {
+      import: ['⇣', 'tint-blue'], email: ['✉', 'tint-blue'], booked: ['📅', 'tint-green'],
+      canceled: ['✕', 'tint-red'], add: ['+', 'tint-mint'], google: ['G', 'tint-navy'],
+      calendly: ['C', 'tint-navy'], error: ['!', 'tint-red'],
+    };
+    const list = state.events.slice(0, 12);
+    $('#activityList').innerHTML = list.length
+      ? list.map((ev) => {
+          const [ico, cls] = icons[ev.type] || ['•', 'tint-navy'];
+          return `<li><span class="act-ico ${cls}">${ico}</span>
+            <div><div>${esc(ev.message)}</div><div class="act-time">${timeAgo(ev.ts)}</div></div></li>`;
+        }).join('')
+      : '<li class="empty-line">Nothing yet — import your first candidates.</li>';
+
+    // Setup checklist
+    const st = state.settings;
+    const items = [
+      ['Import your candidates from Google Sheets or CSV', state.stats.total > 0, 'import'],
+      ['Set up sending from your work email', state.sending.ready, 'settings'],
+      ['Add your Calendly booking link', Boolean(st.calendlyUrl), 'settings'],
+      ['Turn on phone notifications for bookings', Boolean(st.ntfyTopic), 'settings'],
+      ['Personalize your default email template', true, 'template'],
+    ];
+    const allDone = items.every(([, d]) => d);
+    $('#setupCard').hidden = allDone;
+    $('#setupList').innerHTML = items.map(([label, done, goto]) => `
+      <li><span class="setup-check ${done ? 'done' : 'todo'}">${done ? '✓' : '○'}</span>
+        <span>${label}</span>
+        ${done ? '' : `<button class="btn link" data-goto="${goto}">Set up →</button>`}
+      </li>`).join('');
+  }
+
+  function contactedCount() {
+    const s = state.stats;
+    return s.emailed + s.replied + s.booked + s.declined;
+  }
+
+  function timeAgo(ts) {
+    const sec = (Date.now() - new Date(ts).getTime()) / 1000;
+    if (sec < 60) return 'just now';
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+    return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  // ---------------- Candidates ----------------
+  function visibleCandidates() {
+    const q = search.toLowerCase();
+    return state.candidates.filter((c) => {
+      if (filter !== 'all' && c.status !== filter) return false;
+      if (!q) return true;
+      return [c.name, c.firstName, c.lastName, c.email, c.role, c.company]
+        .some((f) => String(f || '').toLowerCase().includes(q));
+    });
+  }
+
+  function initials(c) {
+    const n = c.name || `${c.firstName} ${c.lastName}` || c.email;
+    const parts = n.trim().split(/\s+/);
+    return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
+  }
+
+  function renderCandidates() {
+    const rows = visibleCandidates();
+    const tbody = $('#candidateRows');
+    $('#candidatesEmpty').style.display = state.candidates.length ? 'none' : 'block';
+    tbody.innerHTML = rows.map((c, i) => {
+      const st = STATUS[c.status] || STATUS.new;
+      const displayName = c.name || `${c.firstName} ${c.lastName}`.trim() || '—';
+      return `<tr data-id="${c.id}">
+        <td class="col-check"><input type="checkbox" class="row-check" ${selected.has(c.id) ? 'checked' : ''}></td>
+        <td><div class="name-cell">
+          <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
+          <div><div class="cand-name">${esc(displayName)}</div>
+          ${c.notes ? `<div class="cand-sub">${esc(c.notes)}</div>` : ''}</div>
+        </div></td>
+        <td>${esc(c.email)}</td>
+        <td>${esc(c.role) || '<span class="muted">—</span>'}</td>
+        <td>${esc(c.company) || '<span class="muted">—</span>'}</td>
+        <td><span class="status-pill ${st.cls} status-btn" title="Click to change">${st.label}</span></td>
+        <td>${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
+        <td><div class="row-actions">
+          <button class="icon-btn act-email" title="Send personal email">✉</button>
+          <button class="icon-btn act-delete" title="Remove">🗑</button>
+        </div></td>
+      </tr>`;
+    }).join('');
+    updateSendButton();
+    $('#checkAll').checked = rows.length > 0 && rows.every((c) => selected.has(c.id));
+  }
+
+  function updateSendButton() {
+    const btn = $('#sendSelectedBtn');
+    btn.disabled = selected.size === 0;
+    btn.textContent = selected.size > 1 ? `✉ Email ${selected.size} selected` : '✉ Email selected';
+  }
+
+  $('#candidateRows').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr');
+    if (!tr) return;
+    const id = tr.dataset.id;
+    const cand = state.candidates.find((c) => c.id === id);
+    if (e.target.classList.contains('row-check')) {
+      e.target.checked ? selected.add(id) : selected.delete(id);
+      updateSendButton();
+      return;
+    }
+    if (e.target.closest('.act-email')) { openCompose([id]); return; }
+    if (e.target.closest('.act-delete')) {
+      if (confirm(`Remove ${cand.name || cand.email} from the pipeline?`)) {
+        api(`/api/candidates/${id}`, { method: 'DELETE' })
+          .then(() => { selected.delete(id); return refresh(); })
+          .catch(oops);
+      }
+      return;
+    }
+    if (e.target.closest('.status-btn')) {
+      const order = ['new', 'emailed', 'replied', 'booked', 'declined'];
+      const next = order[(order.indexOf(cand.status) + 1) % order.length];
+      api(`/api/candidates/${id}`, { method: 'PATCH', body: { status: next } }).then(refresh).catch(oops);
+    }
+  });
+
+  $('#checkAll').addEventListener('change', (e) => {
+    const rows = visibleCandidates();
+    rows.forEach((c) => (e.target.checked ? selected.add(c.id) : selected.delete(c.id)));
+    renderCandidates();
+  });
+  $('#searchInput').addEventListener('input', (e) => { search = e.target.value; renderCandidates(); });
+  $('#filterChips').addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    filter = chip.dataset.filter;
+    $$('#filterChips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+    renderCandidates();
+  });
+  $('#sendSelectedBtn').addEventListener('click', () => openCompose([...selected]));
+
+  // Add-candidate modal
+  $('#addCandidateBtn').addEventListener('click', () => { $('#addModal').hidden = false; });
+  $('#addSaveBtn').addEventListener('click', async () => {
+    try {
+      await api('/api/candidates', { method: 'POST', body: {
+        firstName: $('#addFirst').value, lastName: $('#addLast').value,
+        name: `${$('#addFirst').value} ${$('#addLast').value}`.trim(),
+        email: $('#addEmail').value, role: $('#addRole').value,
+        company: $('#addCompany').value, notes: $('#addNotes').value,
+      }});
+      ['#addFirst', '#addLast', '#addEmail', '#addRole', '#addCompany', '#addNotes'].forEach((s) => ($(s).value = ''));
+      $('#addModal').hidden = true;
+      toast('Candidate added.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  // ---------------- Compose & send ----------------
+  function openCompose(ids) {
+    if (!state.sending.ready) {
+      toast('Set up your work email first (Settings → Google or App Password).', true);
+      show('settings');
+      return;
+    }
+    composeIds = ids;
+    const cands = ids.map((id) => state.candidates.find((c) => c.id === id)).filter(Boolean);
+    $('#composeTitle').textContent = cands.length === 1
+      ? `Email ${cands[0].name || cands[0].email}`
+      : `Email ${cands.length} candidates personally`;
+    $('#composeTo').innerHTML =
+      cands.slice(0, 6).map((c) => `<span class="to-chip">${esc(c.name || c.email)}</span>`).join('') +
+      (cands.length > 6 ? `<span class="to-more">+${cands.length - 6} more</span>` : '');
+    $('#composeSubject').value = state.template.subject;
+    $('#composeBody').value = state.template.body;
+    $('#composeHint').textContent = cands.length === 1
+      ? `Placeholders like {{firstName}} will be filled in for ${firstNameOf(cands[0]) || 'this candidate'}. Your Calendly booking link is added at the end.`
+      : `Each candidate gets their own personal email — {{firstName}} etc. are filled per person, and your Calendly link is added at the end. Sends are spaced ~1s apart.`;
+    $('#sendProgress').hidden = true;
+    $('#sendProgress').innerHTML = '';
+    $('#composeSendBtn').disabled = false;
+    $('#composeSendBtn').textContent = cands.length > 1 ? `Send ${cands.length} emails` : 'Send';
+    $('#composeModal').hidden = false;
+  }
+
+  $('#composeSendBtn').addEventListener('click', async () => {
+    const btn = $('#composeSendBtn');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    const prog = $('#sendProgress');
+    prog.hidden = false;
+    prog.innerHTML = 'Sending personalized emails…';
+    try {
+      const data = await api('/api/send', { method: 'POST', body: {
+        candidateIds: composeIds,
+        template: { subject: $('#composeSubject').value, body: $('#composeBody').value },
+      }});
+      const ok = data.results.filter((r) => r.ok).length;
+      const fails = data.results.filter((r) => !r.ok);
+      prog.innerHTML = data.results.map((r) =>
+        r.ok ? `✅ ${esc(r.email)}` : `❌ ${esc(r.email || r.id)} — ${esc(r.error)}`).join('<br>');
+      toast(`Sent ${ok} of ${data.results.length} email${data.results.length === 1 ? '' : 's'}.`, fails.length > 0);
+      selected.clear();
+      await refresh();
+      if (!fails.length) setTimeout(() => { $('#composeModal').hidden = true; }, 1200);
+      else { btn.disabled = false; btn.textContent = 'Retry failed'; composeIds = fails.map((r) => r.id); }
+    } catch (err) {
+      oops(err);
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    }
+  });
+
+  // ---------------- Import ----------------
+  $('#fetchSheetBtn').addEventListener('click', async () => {
+    const url = $('#sheetUrl').value.trim();
+    if (!url) return toast('Paste your Google Sheet link first.', true);
+    $('#sheetHint').textContent = 'Fetching sheet…';
+    try {
+      const data = await api('/api/import/sheet', { method: 'POST', body: { url } });
+      $('#sheetHint').textContent = data.via === 'google-api'
+        ? 'Loaded via your connected Google account.'
+        : 'Loaded via public link.';
+      showMapping(data, 'google-sheet');
+    } catch (err) {
+      $('#sheetHint').textContent = '';
+      oops(err);
+    }
+  });
+
+  const dz = $('#dropzone');
+  $('#csvFile').addEventListener('change', (e) => e.target.files[0] && readCsv(e.target.files[0]));
+  dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dz.classList.remove('drag');
+    if (e.dataTransfer.files[0]) readCsv(e.dataTransfer.files[0]);
+  });
+
+  function readCsv(file) {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const data = await api('/api/import/csv', { method: 'POST', body: { text: reader.result } });
+        showMapping(data, 'csv');
+      } catch (err) { oops(err); }
+    };
+    reader.readAsText(file);
+  }
+
+  const MAP_FIELDS = [
+    ['email', 'Email *'], ['name', 'Full name'], ['firstName', 'First name'],
+    ['lastName', 'Last name'], ['role', 'Role / title'], ['company', 'Company'],
+    ['phone', 'Phone'], ['notes', 'Notes'],
+  ];
+
+  function showMapping(data, source) {
+    pendingImport = { ...data, source };
+    $('#previewCount').textContent = `${data.rows.length} rows`;
+    $('#mappingGrid').innerHTML = MAP_FIELDS.map(([key, label]) => `
+      <div><label class="label">${label}</label>
+        <select class="input map-select" data-key="${key}">
+          <option value="-1">— skip —</option>
+          ${data.headers.map((h, i) =>
+            `<option value="${i}" ${data.mapping[key] === i ? 'selected' : ''}>${esc(h)}</option>`).join('')}
+        </select></div>`).join('');
+    const preview = data.rows.slice(0, 5);
+    $('#previewTable').innerHTML =
+      `<thead><tr>${data.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>` +
+      `<tbody>${preview.map((r) => `<tr>${data.headers.map((_, i) => `<td>${esc(r[i] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    $('#mappingCard').hidden = false;
+    $('#mappingCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  $('#cancelImportBtn').addEventListener('click', () => { $('#mappingCard').hidden = true; pendingImport = null; });
+  $('#commitImportBtn').addEventListener('click', async () => {
+    if (!pendingImport) return;
+    const mapping = {};
+    $$('.map-select').forEach((sel) => { mapping[sel.dataset.key] = Number(sel.value); });
+    if (mapping.email === -1) return toast('Pick which column holds the email address.', true);
+    try {
+      const r = await api('/api/import/commit', { method: 'POST', body: {
+        rows: pendingImport.rows, mapping, source: pendingImport.source,
+      }});
+      toast(`Imported ${r.added} candidates${r.skipped ? ` (${r.skipped} skipped)` : ''}.`);
+      $('#mappingCard').hidden = true;
+      pendingImport = null;
+      await refresh();
+      show('candidates');
+    } catch (err) { oops(err); }
+  });
+
+  // ---------------- Template ----------------
+  const SAMPLE = { firstName: 'Jordan', lastName: 'Lee', name: 'Jordan Lee', role: 'Payments Analyst', company: 'Acme Corp', email: 'jordan@example.com' };
+
+  function firstNameOf(c) {
+    return c.firstName || (c.name ? c.name.trim().split(/\s+/)[0] : '');
+  }
+
+  // Client-side mirror of the server's placeholder fill, for live preview.
+  function fillClient(text, cand) {
+    const s = state.settings;
+    const vars = {
+      firstName: firstNameOf(cand) || 'there',
+      lastName: cand.lastName || '',
+      fullName: cand.name || 'there',
+      role: cand.role || 'professional',
+      company: cand.company || '',
+      email: cand.email || '',
+      senderName: s.senderName || '',
+      calendlyUrl: s.calendlyUrl || '',
+    };
+    return String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] ?? '');
+  }
+
+  function renderTemplatePreview() {
+    if (!state) return;
+    const sel = $('#previewCandidate');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Sample candidate</option>' +
+      state.candidates.slice(0, 50).map((c) =>
+        `<option value="${c.id}">${esc(c.name || c.email)}</option>`).join('');
+    if ([...sel.options].some((o) => o.value === current)) sel.value = current;
+    const cand = state.candidates.find((c) => c.id === sel.value) || SAMPLE;
+    $('#pvSubject').textContent = fillClient($('#tplSubject').value, cand);
+    $('#pvFrom').textContent = state.sending.from || 'your work email (set up in Settings)';
+    const bodyHtml = esc(fillClient($('#tplBody').value, cand)).split('\n').join('<br>');
+    const cal = state.settings.calendlyUrl;
+    $('#pvBody').innerHTML = bodyHtml + (cal
+      ? `<p style="margin:22px 0 6px"><a href="${esc(cal)}" style="display:inline-block;background:var(--blue);color:#fff;text-decoration:none;padding:10px 20px;border-radius:10px;font-weight:600;font-size:14px" onclick="return false">Book a time with me</a></p><p style="margin:0;font-size:12px;color:var(--muted)">${esc(cal)}</p>`
+      : '');
+    $('#calendlyHintTpl').innerHTML = cal
+      ? `The “Book a time with me” button links to <strong>${esc(cal)}</strong> and is appended to every email automatically.`
+      : `No Calendly link yet — add one in <a href="#" data-goto="settings">Settings</a> and a booking button is appended to every email automatically.`;
+  }
+
+  ['#tplSubject', '#tplBody'].forEach((s) =>
+    $(s).addEventListener('input', debounce(renderTemplatePreview, 200)));
+  $('#previewCandidate').addEventListener('change', renderTemplatePreview);
+
+  $$('.token').forEach((btn) => btn.addEventListener('click', () => {
+    const ta = $('#tplBody');
+    const t = btn.dataset.token;
+    const start = ta.selectionStart ?? ta.value.length;
+    ta.value = ta.value.slice(0, start) + t + ta.value.slice(ta.selectionEnd ?? start);
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = start + t.length;
+    renderTemplatePreview();
+  }));
+
+  $('#saveTemplateBtn').addEventListener('click', async () => {
+    try {
+      await api('/api/template', { method: 'POST', body: { subject: $('#tplSubject').value, body: $('#tplBody').value } });
+      toast('Template saved — it’s now the default for all outreach.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+  $('#resetTemplateBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/template/reset', { method: 'POST' });
+      $('#tplSubject').value = r.template.subject;
+      $('#tplBody').value = r.template.body;
+      renderTemplatePreview();
+      toast('Template reset to default.');
+    } catch (err) { oops(err); }
+  });
+
+  function debounce(fn, ms) {
+    let t;
+    return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+  }
+
+  // ---------------- Settings ----------------
+  function renderSettings() {
+    const s = state.settings;
+    const setIf = (sel, val) => { const el = $(sel); if (document.activeElement !== el) el.value = val || ''; };
+    setIf('#setSenderName', s.senderName);
+    setIf('#setCalendlyUrl', s.calendlyUrl);
+    setIf('#setNtfyTopic', s.ntfyTopic);
+    setIf('#setSmtpUser', s.smtpUser);
+    setIf('#setSmtpPass', s.smtpPass);
+    setIf('#setGoogleClientId', s.googleClientId);
+    setIf('#setGoogleClientSecret', s.googleClientSecret);
+    $('#redirectUriCode').textContent = state.google.redirectUri;
+
+    const badge = $('#googleBadge');
+    if (state.google.connected) {
+      badge.textContent = state.google.email ? `connected · ${state.google.email}` : 'connected';
+      badge.className = 'badge tint-green';
+      $('#googleConnectBtn').textContent = 'Reconnect';
+      $('#googleDisconnectBtn').hidden = false;
+    } else {
+      badge.textContent = state.google.configured ? 'ready to connect' : 'not configured';
+      badge.className = 'badge' + (state.google.configured ? ' tint-blue' : '');
+      $('#googleConnectBtn').textContent = 'Connect Google';
+      $('#googleDisconnectBtn').hidden = true;
+    }
+
+    const pill = $('#connPill');
+    if (state.sending.ready) {
+      pill.className = 'conn-pill ok';
+      $('#connText').textContent = `Sending as ${state.sending.from}`;
+    } else {
+      pill.className = 'conn-pill warn';
+      $('#connText').textContent = 'Email not set up';
+    }
+
+    if (state.settings.lastSheetUrl && !$('#sheetUrl').value) $('#sheetUrl').value = state.settings.lastSheetUrl;
+  }
+
+  async function saveSettings(extra = {}) {
+    const body = {
+      senderName: $('#setSenderName').value,
+      calendlyUrl: $('#setCalendlyUrl').value,
+      ntfyTopic: $('#setNtfyTopic').value,
+      smtpUser: $('#setSmtpUser').value,
+      smtpPass: $('#setSmtpPass').value,
+      googleClientId: $('#setGoogleClientId').value,
+      googleClientSecret: $('#setGoogleClientSecret').value,
+      ...extra,
+    };
+    await api('/api/settings', { method: 'POST', body });
+    await refresh();
+  }
+
+  $('#saveSettingsBtn').addEventListener('click', () =>
+    saveSettings().then(() => toast('Settings saved.')).catch(oops));
+
+  // Persist any typed credentials before leaving for Google's consent page.
+  $('#googleConnectBtn').addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      await saveSettings();
+      if (!state.google.configured) {
+        toast('Enter your Google OAuth Client ID and Secret first (see the hint below the fields).', true);
+        return;
+      }
+      window.location.href = '/auth/google';
+    } catch (err) { oops(err); }
+  });
+  $('#googleDisconnectBtn').addEventListener('click', () =>
+    api('/auth/google/disconnect', { method: 'POST' }).then(refresh).catch(oops));
+
+  $('#testNotifyBtn').addEventListener('click', async () => {
+    try {
+      await saveSettings();
+      await api('/api/test-notification', { method: 'POST' });
+      toast('Test notification sent — check your phone.');
+    } catch (err) { oops(err); }
+  });
+
+  $('#registerWebhookBtn').addEventListener('click', async () => {
+    try {
+      await saveSettings();
+      const r = await api('/api/calendly/register-webhook', { method: 'POST', body: {
+        token: $('#calendlyToken').value,
+        publicUrl: state.baseUrl,
+      }});
+      $('#calendlyToken').value = '';
+      $('#calendlyHint').textContent = `Booking alerts enabled — Calendly now notifies this app at ${r.url}.`;
+      toast('Calendly webhook registered. Bookings will update the pipeline and ping your phone.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  // ---------------- Modals ----------------
+  $$('.modal-backdrop').forEach((m) => {
+    m.addEventListener('click', (e) => {
+      if (e.target === m || e.target.closest('[data-close]')) m.hidden = true;
+    });
+  });
+
+  // ---------------- Boot ----------------
+  function renderAll() {
+    renderDashboard();
+    renderCandidates();
+    renderSettings();
+    // Only prime the template editor when it isn't being edited.
+    if (document.activeElement !== $('#tplSubject') && document.activeElement !== $('#tplBody')) {
+      $('#tplSubject').value = state.template.subject;
+      $('#tplBody').value = state.template.body;
+    }
+    renderTemplatePreview();
+  }
+
+  (async () => {
+    try {
+      await refresh();
+    } catch (err) {
+      oops(err);
+      return;
+    }
+    // Deep links from OAuth redirects: /#settings?connected=1
+    const hash = location.hash.replace('#', '');
+    if (hash) {
+      const [view, query] = hash.split('?');
+      if ($(`#view-${view}`)) show(view);
+      const params = new URLSearchParams(query || '');
+      if (params.get('connected')) toast('Google connected — you can now import private sheets and send Gmail.');
+      if (params.get('error')) toast(`Google sign-in problem: ${params.get('error')}`, true);
+      history.replaceState(null, '', location.pathname);
+    }
+    // Light polling keeps bookings/status fresh while the tab is open.
+    setInterval(() => refresh().catch(() => {}), 30000);
+  })();
+})();
