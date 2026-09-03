@@ -627,16 +627,18 @@
       $('#googleDisconnectBtn').hidden = true;
     }
 
-    const pill = $('#connPill');
+    const acct = $('#connPill');
     if (state.sending.ready) {
-      pill.className = 'conn-pill ok';
-      $('#connLabel').textContent = state.settings.fromName ? `Sending as ${state.settings.fromName}` : 'Sending as';
-      $('#connText').textContent = state.sending.from;
-      $('#connText').title = state.sending.from;
+      const name = (state.settings.fromName || '').trim() || state.sending.from;
+      acct.className = 'account ok';
+      $('#connLabel').textContent = name;
+      // Break only at the "@" if the address is too long for one line.
+      $('#connText').innerHTML = esc(state.sending.from).replace('@', '<wbr>@');
+      $('#connText').title = `Sending as ${name} <${state.sending.from}>`;
     } else {
-      pill.className = 'conn-pill warn';
-      $('#connLabel').textContent = state.google.expired ? 'Google expired — reconnect' : 'Email not set up';
-      $('#connText').textContent = '';
+      acct.className = 'account warn';
+      $('#connLabel').textContent = state.google.expired ? 'Google expired' : 'Email not set up';
+      $('#connText').textContent = state.google.expired ? 'Reconnect in Settings' : 'Connect in Settings';
     }
 
     if (state.settings.lastSheetUrl && !$('#sheetUrl').value) $('#sheetUrl').value = state.settings.lastSheetUrl;
