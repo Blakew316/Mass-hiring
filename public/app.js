@@ -192,10 +192,10 @@
     const show = q.active || q.failed > 0;
     card.hidden = !show;
     if (!show) return;
-    const total = q.pending + q.sentSinceStart;
-    const pct = total ? Math.round((q.sentSinceStart / total) * 100) : 100;
+    const total = q.total || (q.pending + q.sent);
+    const pct = total ? Math.round((q.sent / total) * 100) : 100;
     $('#sendingFill').style.width = `${pct}%`;
-    $('#sendingBadge').textContent = q.active ? `${q.sentSinceStart} of ${total} sent` : 'finished';
+    $('#sendingBadge').textContent = q.active ? `${q.sent} of ${total} sent` : `finished · ${q.sent} sent`;
     const parts = [];
     if (q.active) parts.push(`${q.pending} still to send at ~${q.perMinute}/min`);
     parts.push(`${q.sentToday} sent in the last 24h (limit ${q.dailyLimit})`);
@@ -226,7 +226,7 @@
       queueTimer = setInterval(async () => {
         try { await api('/api/queue/run', { method: 'POST' }); } catch {}
         refresh().catch(() => {});
-      }, 20000);
+      }, 60000);
     } else if (!active && queueTimer) {
       clearInterval(queueTimer);
       queueTimer = null;
@@ -462,16 +462,32 @@
         const chunk = pending.slice(0, BATCH);
         pending = pending.slice(BATCH);
         const data = await api('/api/send', { method: 'POST', body: { candidateIds: chunk, template } });
-        const throttled = data.results.filter((r) => r.retry);
+        const deferred = data.results.filter((r) => r.retry);
         for (const r of data.results) { if (r.ok) sent++; else if (!r.retry) failed.push(r); }
-        if (throttled.length) {
-          // Gmail asked us to slow down: wait until its retry time, then resend those.
-          if (++retries > 4) { failed.push(...throttled.map((r) => ({ ...r, error: 'Gmail kept throttling — try again in a few minutes.' }))); }
-          else {
-            const until = Math.min(new Date(throttled[0].retryAt).getTime(), Date.now() + 120000);
-            prog.innerHTML = `Gmail asked us to slow down — resuming in ${Math.max(1, Math.round((until - Date.now()) / 1000))}s…`;
-            while (Date.now() < until && !cancelSend) await wait(1000);
-            pending = [...throttled.map((r) => r.id), ...pending];
+        if (deferred.length) {
+          const rest = [...deferred.map((r) => r.id), ...pending];
+          if (deferred.some((r) => r.kind === 'daily')) {
+            // Gmail's 24-hour cap: hand the remainder to the queue, which resumes by itself.
+            pending = [];
+            await api('/api/queue', { method: 'POST', body: { candidateIds: rest, template } });
+            toast(`Gmail's daily limit is reached — the remaining ${rest.length} were queued and will send automatically.`, true);
+            break;
+          }
+          if (deferred.every((r) => r.kind === 'budget')) {
+            pending = rest;                       // request ran out of time; just continue
+          } else if (++retries > 6) {
+            pending = [];
+            await api('/api/queue', { method: 'POST', body: { candidateIds: rest, template } });
+            toast(`Gmail kept throttling — the remaining ${rest.length} were queued and will send automatically.`, true);
+            break;
+          } else {
+            // Gmail asked us to slow down: wait until its retry time, then resend those.
+            const until = Math.min(new Date(deferred[0].retryAt).getTime(), Date.now() + 10 * 60000);
+            while (Date.now() < until && !cancelSend) {
+              prog.innerHTML = `Gmail asked us to slow down — resuming in ${Math.max(1, Math.round((until - Date.now()) / 1000))}s…`;
+              await wait(1000);
+            }
+            pending = rest;
           }
         }
         update();

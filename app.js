@@ -93,6 +93,7 @@ const MAX_PER_REQUEST = 8;
 app.get('/api/state', asyncRoute(async (_req, res) => {
   const db = await store.load();
   const lastError = db.events.find((e) => e.type === 'error' && Date.now() - new Date(e.ts).getTime() < 24 * 3600 * 1000);
+  const sendingNow = await mailer.sendStatus(db.settings);
   res.json({
     candidates: db.candidates,
     events: db.events.filter((e) => store.FEED_TYPES.has(e.type)).slice(0, 60),
@@ -100,12 +101,12 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     template: db.template,
     settings: maskedSettings(db.settings),
     google: await google.status(db.settings),
-    sending: await mailer.sendStatus(db.settings),
+    sending: sendingNow,
     stats: stats(db),
     baseUrl: google.baseUrl(),
     storage: await storage.backend(),
     auth: { required: auth.required() },
-    queue: queue.status(db),
+    queue: queue.status(await queue.loadQ(), db.settings, sendingNow.from),
     maxImmediate: MAX_PER_REQUEST,
   });
 }));
@@ -265,44 +266,77 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // request has a 10s limit, so each call sends at most MAX_PER_REQUEST
 // emails, refreshes the signature once, and saves once.
 app.post('/api/send', asyncRoute(async (req, res) => {
+  const started = Date.now();
   const db = await store.load();
+  const q = await queue.loadQ();
   const ids = (Array.isArray(req.body.candidateIds) ? req.body.candidateIds : []).slice(0, MAX_PER_REQUEST);
   if (!ids.length) throw new Error('No candidates selected.');
-  // Optional per-send override lets the compose window customize one batch
-  // without changing the saved default template.
   const template = req.body.template || db.template;
-  if (!db.settings.trackingSecret) db.settings.trackingSecret = crypto.randomBytes(16).toString('hex');
-  const signature = await google.getSignature(db.settings, { refresh: true });
+  const st = await mailer.sendStatus(db.settings);
+  if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
+  const { dailyLimit } = queue.limits(db.settings, st.from);
   const results = [];
+  const deferAll = (kind, retryAt, error) => {
+    for (const id of ids.filter((x) => !results.some((r) => r.id === x))) {
+      const rc = db.candidates.find((x) => x.id === id);
+      results.push({ id, ok: false, retry: true, kind, retryAt: retryAt.toISOString(), email: rc ? rc.email : '', error });
+    }
+  };
+  // Respect an active Gmail pause or the daily cap before touching Gmail.
+  if (q.pausedUntil && new Date(q.pausedUntil).getTime() > Date.now()) {
+    deferAll('rate', new Date(q.pausedUntil), q.note || 'Gmail asked us to slow down.');
+    return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
+  }
+  if (queue.sentToday(q) >= dailyLimit) {
+    deferAll('daily', new Date(Date.now() + 3600 * 1000), `Daily limit of ${dailyLimit} reached.`);
+    return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
+  }
+  if (!db.settings.trackingSecret) {
+    await store.update((d) => { if (!d.settings.trackingSecret) d.settings.trackingSecret = crypto.randomBytes(16).toString('hex'); });
+    db.settings.trackingSecret = (await store.load()).settings.trackingSecret;
+  }
+  const signature = await google.getSignature(db.settings, { refresh: true });
+  const recent = queue.recentlySentIds(q);
+  const patches = {};
   for (const id of ids) {
     const c = db.candidates.find((x) => x.id === id);
     if (!c) { results.push({ id, ok: false, error: 'Not found' }); continue; }
+    if (recent.has(id)) { results.push({ id, ok: true, email: c.email, skipped: 'already emailed in the last 24 hours' }); continue; }
+    const left = 6500 - (Date.now() - started);
+    if (left < 2500) { deferAll('budget', new Date(), 'Continuing in the next batch.'); break; }
     try {
       const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
-      const sent = await queue.withTimeout(mailer.sendEmail(db.settings, { to: c.email, ...msg }), 8000);
-      if (c.status === 'new') c.status = 'emailed';
-      c.lastEmailedAt = new Date().toISOString();
-      if (sent.threadId) c.gmailThreadId = sent.threadId;
+      const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg }, Math.min(queue.SEND_TIMEOUT_MS, left - 300));
+      queue.recordSent(q, c.id, c.email);
+      patches[c.id] = { lastEmailedAt: new Date().toISOString(), gmailThreadId: sent.threadId || '' };
       results.push({ id, ok: true, email: c.email });
     } catch (err) {
-      const kind = queue.classifySendError(err.message);
+      const kind = queue.classifySendError(err);
       if (kind === 'rate' || kind === 'daily') {
-        // Gmail is throttling: stop here and tell the browser when to retry
-        // the rest instead of burning through the batch.
         const hinted = queue.retryAfterFrom(err.message);
         const retryAt = new Date(Math.max(hinted ? hinted.getTime() : 0, Date.now() + (kind === 'daily' ? 3600 : 60) * 1000));
-        for (const rest of ids.slice(ids.indexOf(id))) {
-          const rc = db.candidates.find((x) => x.id === rest);
-          results.push({ id: rest, ok: false, retry: true, retryAt: retryAt.toISOString(), email: rc ? rc.email : '', error: err.message });
-        }
+        q.pausedUntil = retryAt.toISOString();
+        q.note = kind === 'daily' ? 'Gmail reports the daily sending limit is reached.' : 'Gmail asked us to slow down.';
+        deferAll(kind, retryAt, err.message);
         break;
       }
-      results.push({ id, ok: false, email: c.email, error: err.message });
+      results.push({ id, ok: false, email: c.email, error: err.message, kind });
     }
-    if (ids.length > 1) await sleep(600);
+    await sleep(400);
   }
-  await store.save(db);
+  await queue.saveQ(q);
+  if (Object.keys(patches).length) {
+    await store.update((fresh) => {
+      for (const [id, p] of Object.entries(patches)) {
+        const fc = fresh.candidates.find((x) => x.id === id);
+        if (!fc) continue;
+        if (fc.status === 'new') fc.status = 'emailed';
+        fc.lastEmailedAt = p.lastEmailedAt;
+        if (p.gmailThreadId) fc.gmailThreadId = p.gmailThreadId;
+      }
+    });
+  }
   res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
 }));
 
@@ -313,30 +347,33 @@ app.post('/api/queue', asyncRoute(async (req, res) => {
   if (!ids.length) throw new Error('No candidates selected.');
   const st = await mailer.sendStatus(db.settings);
   if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
-  const added = queue.enqueue(db, ids, req.body.template || null);
-  await store.save(db);
-  res.json({ ok: true, added, queue: queue.status(db) });
+  const q = await queue.loadQ();
+  const added = queue.enqueue(q, db, ids, req.body.template || null);
+  await queue.saveQ(q);
+  res.json({ ok: true, added, queue: queue.status(q, db.settings, st.from) });
 }));
 
 app.delete('/api/queue', asyncRoute(async (_req, res) => {
   const db = await store.load();
-  queue.clearQueue(db);
-  await store.save(db);
-  res.json({ ok: true, queue: queue.status(db) });
+  const q = await queue.loadQ();
+  queue.clearQueue(q);
+  await queue.saveQ(q);
+  res.json({ ok: true, queue: queue.status(q, db.settings, null) });
 }));
 
 app.post('/api/queue/retry-failed', asyncRoute(async (_req, res) => {
   const db = await store.load();
-  const added = queue.retryFailed(db);
-  await store.save(db);
-  res.json({ ok: true, added, queue: queue.status(db) });
+  const q = await queue.loadQ();
+  const added = queue.retryFailed(q, db);
+  await queue.saveQ(q);
+  res.json({ ok: true, added, queue: queue.status(q, db.settings, null) });
 }));
 
 // On Netlify the scheduler drains the queue; locally (no scheduler) the
 // dashboard calls this once a minute while a queue is active.
 app.post('/api/queue/run', asyncRoute(async (_req, res) => {
   if (storage.onNetlify) return res.json({ ok: true, skipped: true });
-  const r = await queue.processQueue({ budgetMs: 8000 });
+  const r = await queue.processQueue({ budgetMs: 20000 });
   res.json({ ok: true, ...r });
 }));
 
@@ -369,23 +406,30 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
     .sort((a, b) => String(a.repliesCheckedAt || '').localeCompare(String(b.repliesCheckedAt || '')))
     .slice(0, 20);
   const replied = [];
+  const checked = {};   // id -> { gone }
   let scopeError = '';
   for (const c of pool) {
     try {
       const r = await google.threadHasReply(db.settings, c.gmailThreadId, g.email);
-      c.repliesCheckedAt = new Date().toISOString();
-      if (r.replied) {
-        c.status = 'replied';
-        c.repliedAt = new Date().toISOString();
-        replied.push(c);
-      }
+      checked[c.id] = { gone: false, replied: Boolean(r.replied) };
+      if (r.replied) replied.push(c);
     } catch (err) {
       if (err.scope) { scopeError = 'Reconnect Google (Settings) to allow reply detection.'; break; }
-      c.repliesCheckedAt = new Date().toISOString();
-      if (err.gone) c.gmailThreadId = '';
+      checked[c.id] = { gone: Boolean(err.gone), replied: false };
     }
   }
-  await store.save(db);
+  // Apply results to a fresh copy so the queue's status updates are never
+  // overwritten by this slow check.
+  const now = new Date().toISOString();
+  await store.update((fresh) => {
+    for (const [id, r] of Object.entries(checked)) {
+      const fc = fresh.candidates.find((x) => x.id === id);
+      if (!fc) continue;
+      fc.repliesCheckedAt = now;
+      if (r.gone) fc.gmailThreadId = '';
+      if (r.replied && fc.status !== 'booked') { fc.status = 'replied'; fc.repliedAt = now; }
+    }
+  });
   for (const c of replied) {
     await store.addEvent('replied', `${c.name || c.email} replied to your email.`, c.id);
     try {
