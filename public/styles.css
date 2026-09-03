@@ -90,8 +90,12 @@ button { font-family: var(--font); }
 }
 .nav-count:empty { display: none; }
 .sidebar-foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--line); }
-.conn-pill { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
-.conn-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #cfd4e0; }
+.conn-pill { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; color: var(--muted); min-width: 0; }
+.conn-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #cfd4e0; flex-shrink: 0; margin-top: 4px; }
+.conn-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.conn-label { font-size: 11px; line-height: 1.3; }
+.conn-email { font-size: 11.5px; font-weight: 600; color: var(--navy-soft); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-email:empty { display: none; }
 .conn-pill.ok .dot { background: var(--green); }
 .conn-pill.warn .dot { background: var(--amber); }
 
@@ -132,8 +136,6 @@ button { font-family: var(--font); }
 }
 .stat-label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .stat-value { font-size: 30px; font-weight: 700; color: var(--navy); letter-spacing: -0.03em; margin-top: 6px; }
-.stat-foot { display: inline-block; margin-top: 8px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 99px; }
-.stat-bars { display: flex; align-items: flex-end; gap: 4px; height: 22px; margin-top: 8px; }
 .bar { display: inline-block; width: 7px; border-radius: 3px; }
 .bar-blue { background: var(--blue); height: 60%; opacity: 0.85; }
 .bar-green { background: var(--green); height: 100%; opacity: 0.85; }
@@ -348,6 +350,10 @@ tr:hover .row-actions { opacity: 1; }
 .compose-to { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .compose-to .to-chip { background: var(--blue-tint); color: var(--blue-deep); font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 99px; }
 .compose-to .to-more { color: var(--muted); font-size: 12px; padding: 3px 4px; }
+.progress { height: 8px; background: var(--navy-tint); border-radius: 99px; overflow: hidden; margin-top: 16px; }
+.progress-fill { height: 100%; width: 0; background: var(--blue); border-radius: 99px; transition: width 0.3s ease; }
+.send-card { margin-top: 0; }
+.email-all-btn:disabled { opacity: 0.45; }
 .send-progress { margin-top: 14px; font-size: 13px; color: var(--navy-soft); background: var(--mint-tint); border-radius: 10px; padding: 12px 14px; line-height: 1.7; max-height: 160px; overflow-y: auto; }
 
 /* ---------------- Notices (persistence / security warnings) ---------------- */

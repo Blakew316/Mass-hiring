@@ -12,6 +12,8 @@ const google = require('./lib/google');
 const mailer = require('./lib/mailer');
 const notify = require('./lib/notify');
 const calendly = require('./lib/calendly');
+const tracking = require('./lib/tracking');
+const crypto = require('crypto');
 const { renderEmail } = require('./lib/template');
 
 const app = express();
@@ -86,9 +88,11 @@ function stats(db) {
 // ---------- App state ----------
 app.get('/api/state', asyncRoute(async (_req, res) => {
   const db = await store.load();
+  const lastError = db.events.find((e) => e.type === 'error' && Date.now() - new Date(e.ts).getTime() < 24 * 3600 * 1000);
   res.json({
     candidates: db.candidates,
-    events: db.events.slice(0, 60),
+    events: db.events.filter((e) => store.FEED_TYPES.has(e.type)).slice(0, 60),
+    lastError: lastError ? lastError.message : '',
     template: db.template,
     settings: maskedSettings(db.settings),
     google: await google.status(db.settings),
@@ -188,7 +192,6 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
     added++;
   }
   await store.save(db);
-  await store.addEvent('import', `Imported ${added} candidate${added === 1 ? '' : 's'} (${skipped} skipped as duplicates/invalid).`);
   res.json({ ok: true, added, skipped });
 }));
 
@@ -218,7 +221,6 @@ app.post('/api/candidates', asyncRoute(async (req, res) => {
   };
   db.candidates.push(c);
   await store.save(db);
-  await store.addEvent('add', `Added ${c.name || c.email} manually.`, c.id);
   res.json({ ok: true, candidate: c });
 }));
 
@@ -253,36 +255,98 @@ app.post('/api/preview', asyncRoute(async (req, res) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// The UI sends one candidate per request so progress is live and each call
-// stays well inside serverless time limits; arrays still work for scripts.
+// Sending happens in small batches driven by the browser: a serverless
+// request has a 10s limit, so each call sends at most MAX_PER_REQUEST
+// emails, refreshes the signature once, and saves once.
+const MAX_PER_REQUEST = 8;
+
 app.post('/api/send', asyncRoute(async (req, res) => {
-  const ids = Array.isArray(req.body.candidateIds) ? req.body.candidateIds : [];
+  const db = await store.load();
+  const ids = (Array.isArray(req.body.candidateIds) ? req.body.candidateIds : []).slice(0, MAX_PER_REQUEST);
   if (!ids.length) throw new Error('No candidates selected.');
+  // Optional per-send override lets the compose window customize one batch
+  // without changing the saved default template.
+  const template = req.body.template || db.template;
+  if (!db.settings.trackingSecret) db.settings.trackingSecret = crypto.randomBytes(16).toString('hex');
+  const signature = await google.getSignature(db.settings, { refresh: true });
   const results = [];
   for (const id of ids) {
-    // Reload per recipient so the activity log written by addEvent is never clobbered.
-    const db = await store.load();
-    // Optional override lets the compose modal customize one batch without
-    // changing the saved default template.
-    const template = req.body.template || db.template;
     const c = db.candidates.find((x) => x.id === id);
     if (!c) { results.push({ id, ok: false, error: 'Not found' }); continue; }
     try {
-      const signature = await google.getSignature(db.settings, { refresh: true });
-      const msg = renderEmail(template, c, db.settings, { signature });
+      const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
+      const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
       const sent = await mailer.sendEmail(db.settings, { to: c.email, ...msg });
-      c.status = c.status === 'new' ? 'emailed' : c.status;
+      if (c.status === 'new') c.status = 'emailed';
       c.lastEmailedAt = new Date().toISOString();
-      await store.save(db);
-      await store.addEvent('email', `Emailed ${c.name || c.email} ("${msg.subject}") via ${sent.via}.`, c.id);
+      if (sent.threadId) c.gmailThreadId = sent.threadId;
       results.push({ id, ok: true, email: c.email });
     } catch (err) {
       results.push({ id, ok: false, email: c.email, error: err.message });
     }
-    // Gentle throttle keeps Gmail happy on batch sends.
-    if (ids.length > 1) await sleep(1200);
+    if (ids.length > 1) await sleep(150);
   }
-  res.json({ ok: true, results });
+  await store.save(db);
+  res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
+}));
+
+// ---------- Open tracking pixel (public; token is signed) ----------
+app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const id = tracking.verify(db.settings, req.params.token);
+  const c = id && db.candidates.find((x) => x.id === id);
+  if (c && !c.openedAt) {
+    c.openedAt = new Date().toISOString();
+    await store.save(db);
+    await store.addEvent('opened', `${c.name || c.email} opened your email.`, c.id);
+  }
+  res.set({
+    'Content-Type': 'image/gif',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
+  res.end(tracking.GIF);
+}));
+
+// ---------- Reply detection (Gmail thread headers, a few at a time) ----------
+app.post('/api/replies/check', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  const g = await google.status(db.settings);
+  if (!g.connected) return res.json({ ok: true, checked: 0, replies: 0, unavailable: 'Google not connected' });
+  const pool = db.candidates
+    .filter((c) => c.status === 'emailed' && c.gmailThreadId)
+    .sort((a, b) => String(a.repliesCheckedAt || '').localeCompare(String(b.repliesCheckedAt || '')))
+    .slice(0, 20);
+  const replied = [];
+  let scopeError = '';
+  for (const c of pool) {
+    try {
+      const r = await google.threadHasReply(db.settings, c.gmailThreadId, g.email);
+      c.repliesCheckedAt = new Date().toISOString();
+      if (r.replied) {
+        c.status = 'replied';
+        c.repliedAt = new Date().toISOString();
+        replied.push(c);
+      }
+    } catch (err) {
+      if (err.scope) { scopeError = 'Reconnect Google (Settings) to allow reply detection.'; break; }
+      c.repliesCheckedAt = new Date().toISOString();
+      if (err.gone) c.gmailThreadId = '';
+    }
+  }
+  await store.save(db);
+  for (const c of replied) {
+    await store.addEvent('replied', `${c.name || c.email} replied to your email.`, c.id);
+    try {
+      await notify.pushToPhone(db.settings, {
+        title: `💬 ${c.name || c.email} replied`,
+        message: `${c.role ? c.role + (c.company ? ' @ ' + c.company : '') + ' — ' : ''}check your inbox.`,
+        tags: 'speech_balloon',
+      });
+    } catch {}
+  }
+  res.json({ ok: true, checked: pool.length, replies: replied.length, scopeError });
 }));
 
 // ---------- Google OAuth ----------
@@ -319,13 +383,11 @@ app.get('/auth/google/callback', asyncRoute(async (req, res) => {
   } catch (err) {
     return res.redirect('/#settings?error=' + encodeURIComponent(`${err.message} — check the OAuth Client ID and Secret, save, and try again.`));
   }
-  await store.addEvent('google', 'Connected Google account.');
   res.redirect('/#settings?connected=1');
 }));
 
 app.post('/auth/google/disconnect', asyncRoute(async (_req, res) => {
   await google.clearTokens();
-  await store.addEvent('google', 'Disconnected Google account.');
   res.json({ ok: true });
 }));
 
@@ -342,7 +404,6 @@ app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   if (result.signingKey) db.settings.calendlySigningKey = result.signingKey;
   if (!db.settings.calendlyUrl && result.schedulingUrl) db.settings.calendlyUrl = result.schedulingUrl;
   await store.save(db);
-  await store.addEvent('calendly', `${result.replaced ? 'Re-registered' : 'Registered'} Calendly webhook at ${result.url}.`);
   res.json({ ok: true, ...result, signingKey: undefined });
 }));
 

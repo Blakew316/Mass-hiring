@@ -34,7 +34,13 @@
       </button>
     </nav>
     <div class="sidebar-foot">
-      <div class="conn-pill" id="connPill"><span class="dot"></span><span id="connText">Checking…</span></div>
+      <div class="conn-pill" id="connPill">
+        <span class="dot"></span>
+        <div class="conn-text">
+          <span class="conn-label" id="connLabel">Checking…</span>
+          <span class="conn-email" id="connText"></span>
+        </div>
+      </div>
       <button class="signout" id="signOutBtn" hidden title="Signs out on every device">Sign out</button>
     </div>
   </aside>
@@ -50,29 +56,28 @@
           <h1>Dashboard</h1>
           <p class="page-sub">Your hiring outreach at a glance.</p>
         </div>
-        <button class="btn btn-primary" data-goto="import">+ Import candidates</button>
+        <div class="head-actions">
+          <button class="btn" data-goto="import">Import candidates</button>
+          <button class="btn btn-primary email-all-btn" id="dashEmailAllBtn">Email all not contacted</button>
+        </div>
       </header>
 
       <div class="stat-grid">
         <div class="stat-card">
           <div class="stat-label">Candidates</div>
           <div class="stat-value" id="statTotal">0</div>
-          <div class="stat-bars"><i class="bar bar-blue"></i><i class="bar bar-green"></i><i class="bar bar-mint"></i></div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Emailed</div>
           <div class="stat-value" id="statEmailed">0</div>
-          <div class="stat-foot tint-blue" id="statEmailedPct">—</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Replied</div>
           <div class="stat-value" id="statReplied">0</div>
-          <div class="stat-foot tint-mint" id="statRepliedPct">—</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Interviews booked</div>
           <div class="stat-value" id="statBooked">0</div>
-          <div class="stat-foot tint-green">via Calendly</div>
         </div>
       </div>
 
@@ -82,8 +87,8 @@
           <div id="pipeline" class="pipeline"></div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>Recent activity</h2></div>
-          <ul class="activity" id="activityList"><li class="empty-line">Nothing yet — import your first candidates.</li></ul>
+          <div class="card-head"><h2>Candidate updates</h2></div>
+          <ul class="activity" id="activityList"><li class="empty-line">No updates yet — opens, replies, bookings and cancellations show up here.</li></ul>
         </div>
       </div>
 
@@ -102,6 +107,7 @@
         </div>
         <div class="head-actions">
           <button class="btn" id="addCandidateBtn">+ Add manually</button>
+          <button class="btn email-all-btn" id="candEmailAllBtn">Email all not contacted</button>
           <button class="btn btn-primary" id="sendSelectedBtn" disabled>✉ Email selected</button>
         </div>
       </header>
@@ -233,6 +239,17 @@
           <div class="hint" id="signatureHintTpl"></div>
         </div>
       </div>
+
+      <div class="card send-card">
+        <div class="card-head">
+          <h2>Send</h2>
+          <span class="badge tint-blue" id="sendCountBadge"></span>
+        </div>
+        <p class="muted">Sends this email to everyone who hasn’t been contacted yet — each person gets their own message with their name filled in, your booking button and your signature. It goes out in small batches, so keep this tab open until the progress bar finishes.</p>
+        <div class="card-actions">
+          <button class="btn btn-primary email-all-btn" id="tplSendAllBtn">Email all not-contacted candidates</button>
+        </div>
+      </div>
     </section>
 
     <!-- ===== Settings ===== -->
@@ -259,7 +276,7 @@
           <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web). Add redirect URI: <code id="redirectUriCode"></code></div>
           <label class="check">
             <input type="checkbox" id="setGmailSignature" checked>
-            <span>Append my Gmail signature to every outreach email <span class="muted small">(asks for the “manage basic mail settings” permission when connecting — change this before you click Connect / Reconnect)</span></span>
+            <span>Use my Gmail signature and detect replies <span class="muted small">(asks for two extra Gmail permissions when connecting — change this before you click Connect / Reconnect)</span></span>
           </label>
           <div class="card-actions">
             <button class="btn" id="googleDisconnectBtn" hidden>Disconnect</button>
@@ -320,10 +337,11 @@
       <label class="label">Message <span class="muted small">(placeholders are filled per recipient)</span></label>
       <textarea id="composeBody" class="input textarea" rows="10"></textarea>
       <div class="hint" id="composeHint"></div>
+      <div class="progress" id="sendBar" hidden><div class="progress-fill" id="sendBarFill"></div></div>
       <div class="send-progress" id="sendProgress" hidden></div>
     </div>
     <div class="modal-foot">
-      <button class="btn" data-close>Cancel</button>
+      <button class="btn" id="composeCancelBtn" data-close>Cancel</button>
       <button class="btn btn-primary" id="composeSendBtn">Send</button>
     </div>
   </div>

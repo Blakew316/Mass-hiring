@@ -42,7 +42,14 @@ First row should be headers — e.g. `Name, Email, Role, Company`. The app guess
 
 With Google connected and the **"Append my Gmail signature"** box ticked in Settings, the signature configured on your work Gmail account is read from Gmail and appended to every outreach email automatically — there is nothing to type in the app. (Gmail only inserts signatures when you compose in Gmail itself; API and SMTP sends don't get it, so the app does this for you. SMTP/App Password sends can't include it.) Reading the signature uses Google's `gmail.settings.basic` permission, which Google classes as *restricted*: fine for a Workspace "Internal" app, but untick the box if you're using a personal-Gmail "External" app — see SETUP.md.
 
-Emails are sent one-by-one (~1s apart) so each candidate receives an individual, personal message — never a CC/BCC blast.
+Emails are sent one-by-one so each candidate receives an individual, personal message — never a CC/BCC blast. **Email all not-contacted candidates** (on the Email Template page, the Dashboard, or the Candidates page) sends to everyone still marked *Not contacted*, in batches of 8 with a progress bar — keep the tab open until it finishes.
+
+## Opens and replies
+
+- Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email".
+- With Google connected (and the "signature and detect replies" box ticked), the app checks the Gmail threads of sent emails every minute; a reply flips the candidate to **Replied**, appears in the feed, and pushes to your phone. If you connected Google before this feature existed, click **Reconnect** once so the extra permission is granted.
+
+The feed shows only candidate signals (opened, replied, booked, cancelled) — no connection or import history.
 
 ## Protecting the dashboard
 

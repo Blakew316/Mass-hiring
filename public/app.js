@@ -82,6 +82,9 @@
     if (state.storage && state.storage.deployed && state.auth && !state.auth.required) {
       n.push(`<div class="notice warn"><span>🔒</span><div><strong>This dashboard is public.</strong> Anyone with the URL could send email from your account. Add an environment variable named <code>APP_PASSWORD</code> in Netlify (Project configuration → Environment variables), then redeploy to require a sign-in.</div></div>`);
     }
+    if (state.lastError) {
+      n.push(`<div class="notice warn"><span>⚠️</span><div>${esc(state.lastError)}</div></div>`);
+    }
     $('#notices').innerHTML = n.join('');
     $('#signOutBtn').hidden = !(state.auth && state.auth.required);
   }
@@ -120,10 +123,8 @@
     $('#statEmailed').textContent = contactedCount();
     $('#statReplied').textContent = s.replied;
     $('#statBooked').textContent = s.booked;
-    const contacted = contactedCount();
-    $('#statEmailedPct').textContent = s.total ? `${Math.round((contacted / s.total) * 100)}% of pipeline` : '—';
-    $('#statRepliedPct').textContent = contacted ? `${Math.round((s.replied / contacted) * 100)}% response` : '—';
     $('#navCount').textContent = s.total || '';
+    renderEmailAllButtons();
 
     // Pipeline bars
     const steps = [
@@ -141,20 +142,19 @@
         <div class="pipe-count">${n}</div>
       </div>`).join('');
 
-    // Activity
+    // Candidate updates only: opens, replies, bookings, cancellations.
     const icons = {
-      import: ['⇣', 'tint-blue'], email: ['✉', 'tint-blue'], booked: ['📅', 'tint-green'],
-      canceled: ['✕', 'tint-red'], add: ['+', 'tint-mint'], google: ['G', 'tint-navy'],
-      calendly: ['C', 'tint-navy'], error: ['!', 'tint-red'],
+      opened: ['👁', 'tint-blue'], replied: ['💬', 'tint-mint'],
+      booked: ['📅', 'tint-green'], canceled: ['✕', 'tint-red'],
     };
-    const list = state.events.slice(0, 12);
+    const list = state.events.filter((ev) => icons[ev.type]).slice(0, 15);
     $('#activityList').innerHTML = list.length
       ? list.map((ev) => {
-          const [ico, cls] = icons[ev.type] || ['•', 'tint-navy'];
+          const [ico, cls] = icons[ev.type];
           return `<li><span class="act-ico ${cls}">${ico}</span>
             <div><div>${esc(ev.message)}</div><div class="act-time">${timeAgo(ev.ts)}</div></div></li>`;
         }).join('')
-      : '<li class="empty-line">Nothing yet — import your first candidates.</li>';
+      : '<li class="empty-line">No updates yet — opens, replies, bookings and cancellations show up here.</li>';
 
     // Setup checklist
     const st = state.settings;
@@ -177,6 +177,18 @@
   function contactedCount() {
     const s = state.stats;
     return s.emailed + s.replied + s.booked + s.declined;
+  }
+
+  // Everyone still at "Not contacted".
+  function uncontactedIds() {
+    return state.candidates.filter((c) => c.status === 'new').map((c) => c.id);
+  }
+
+  function renderEmailAllButtons() {
+    const n = uncontactedIds().length;
+    const label = n ? `Email all ${n} not contacted` : 'Everyone has been contacted';
+    $$('.email-all-btn').forEach((b) => { b.textContent = label; b.disabled = n === 0; });
+    $('#sendCountBadge').textContent = n ? `${n} to send` : 'nothing to send';
   }
 
   function timeAgo(ts) {
@@ -282,6 +294,11 @@
     renderCandidates();
   });
   $('#sendSelectedBtn').addEventListener('click', () => openCompose([...selected]));
+  $('#candEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
+  $('#dashEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
+  // From the template page, send exactly what's in the editor (saved or not).
+  $('#tplSendAllBtn').addEventListener('click', () =>
+    openCompose(uncontactedIds(), { subject: $('#tplSubject').value, body: $('#tplBody').value }));
 
   // Add-candidate modal
   $('#addCandidateBtn').addEventListener('click', () => { $('#addModal').hidden = false; });
@@ -301,13 +318,16 @@
   });
 
   // ---------------- Compose & send ----------------
-  function openCompose(ids) {
+  let cancelSend = false;
+  function openCompose(ids, override) {
     if (!state.sending.ready) {
       toast(state.sending.reason || 'Set up your work email first (Settings → Google or App Password).', true);
       show('settings');
       return;
     }
+    if (!ids.length) { toast('Nobody to email — everyone has been contacted.', true); return; }
     composeIds = ids;
+    cancelSend = false;
     const cands = ids.map((id) => state.candidates.find((c) => c.id === id)).filter(Boolean);
     $('#composeTitle').textContent = cands.length === 1
       ? `Email ${cands[0].name || cands[0].email}`
@@ -315,56 +335,77 @@
     $('#composeTo').innerHTML =
       cands.slice(0, 6).map((c) => `<span class="to-chip">${esc(c.name || c.email)}</span>`).join('') +
       (cands.length > 6 ? `<span class="to-more">+${cands.length - 6} more</span>` : '');
-    $('#composeSubject').value = state.template.subject;
-    $('#composeBody').value = state.template.body;
+    $('#composeSubject').value = override ? override.subject : state.template.subject;
+    $('#composeBody').value = override ? override.body : state.template.body;
     const sigNote = state.google.signature ? ' Your Gmail signature is added at the bottom.' : '';
     $('#composeHint').textContent = cands.length === 1
       ? `Placeholders like {{firstName}} will be filled in for ${firstNameOf(cands[0]) || 'this candidate'}. Your Calendly booking link is added at the end.${sigNote}`
       : `Each candidate gets their own personal email — {{firstName}} etc. are filled per person, and your Calendly link is added at the end.${sigNote} Sends are spaced ~1s apart.`;
     $('#sendProgress').hidden = true;
     $('#sendProgress').innerHTML = '';
+    $('#sendBar').hidden = true;
+    $('#sendBarFill').style.width = '0%';
     $('#composeSendBtn').disabled = false;
     $('#composeSendBtn').textContent = cands.length > 1 ? `Send ${cands.length} emails` : 'Send';
+    $('#composeCancelBtn').textContent = 'Cancel';
     $('#composeModal').hidden = false;
   }
 
+  $('#composeCancelBtn').addEventListener('click', () => { cancelSend = true; });
+
+  // Sends in batches of 8 (each request must finish inside the server's
+  // 10-second limit); the modal shows live progress and can be stopped
+  // between batches.
+  const BATCH = 8;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   $('#composeSendBtn').addEventListener('click', async () => {
     const btn = $('#composeSendBtn');
-    btn.disabled = true;
-    btn.textContent = 'Sending…';
-    const prog = $('#sendProgress');
-    prog.hidden = false;
-    prog.innerHTML = '';
+    const cancel = $('#composeCancelBtn');
+    const total = composeIds.length;
     const template = { subject: $('#composeSubject').value, body: $('#composeBody').value };
-    const results = [];
-    // One request per recipient: live progress, and each call stays short
-    // enough for serverless hosting (Netlify) time limits.
-    for (let i = 0; i < composeIds.length; i++) {
-      const id = composeIds[i];
-      const cand = state.candidates.find((c) => c.id === id);
-      const label = cand ? cand.email : id;
-      const line = document.createElement('div');
-      line.textContent = `… ${label}`;
-      prog.appendChild(line);
-      prog.scrollTop = prog.scrollHeight;
-      try {
-        const data = await api('/api/send', { method: 'POST', body: { candidateIds: [id], template } });
-        const r = data.results[0] || { id, ok: false, error: 'No result' };
-        results.push(r);
-        line.textContent = r.ok ? `✅ ${label}` : `❌ ${label} — ${r.error}`;
-      } catch (err) {
-        results.push({ id, ok: false, error: err.message });
-        line.textContent = `❌ ${label} — ${err.message}`;
+    btn.disabled = true;
+    cancel.textContent = 'Stop';
+    cancelSend = false;
+    const prog = $('#sendProgress');
+    const bar = $('#sendBar');
+    bar.hidden = false;
+    prog.hidden = false;
+    let sent = 0;
+    const failed = [];
+    const update = () => {
+      const done = sent + failed.length;
+      $('#sendBarFill').style.width = `${Math.round((done / total) * 100)}%`;
+      btn.textContent = `Sending… ${done} / ${total}`;
+      prog.innerHTML = `✅ ${sent} sent${failed.length ? ` · ❌ ${failed.length} failed` : ''}` +
+        (failed.length ? '<br>' + failed.slice(-5).map((f) => `❌ ${esc(f.email || f.id)} — ${esc(f.error)}`).join('<br>') : '');
+    };
+    update();
+    try {
+      for (let i = 0; i < total; i += BATCH) {
+        if (cancelSend) break;
+        const chunk = composeIds.slice(i, i + BATCH);
+        const data = await api('/api/send', { method: 'POST', body: { candidateIds: chunk, template } });
+        for (const r of data.results) (r.ok ? sent++ : failed.push(r));
+        update();
+        if (i + BATCH < total && !cancelSend) await wait(600);
       }
-      if (i < composeIds.length - 1) await new Promise((r) => setTimeout(r, 800));
+      const stopped = cancelSend && sent + failed.length < total;
+      toast(stopped ? `Stopped — ${sent} sent.` : `Sent ${sent} of ${total} email${total === 1 ? '' : 's'}.`, failed.length > 0);
+      selected.clear();
+      await refresh();
+      if (!failed.length && !stopped) setTimeout(() => { $('#composeModal').hidden = true; }, 1000);
+      else {
+        btn.disabled = failed.length === 0;
+        btn.textContent = failed.length ? `Retry ${failed.length} failed` : 'Done';
+        composeIds = failed.map((r) => r.id);
+        cancel.textContent = 'Close';
+      }
+    } catch (err) {
+      oops(err);
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+      cancel.textContent = 'Close';
     }
-    const ok = results.filter((r) => r.ok).length;
-    const fails = results.filter((r) => !r.ok);
-    toast(`Sent ${ok} of ${results.length} email${results.length === 1 ? '' : 's'}.`, fails.length > 0);
-    selected.clear();
-    await refresh().catch(() => {});
-    if (!fails.length) setTimeout(() => { $('#composeModal').hidden = true; }, 1200);
-    else { btn.disabled = false; btn.textContent = 'Retry failed'; composeIds = fails.map((r) => r.id); }
   });
 
   // ---------------- Import ----------------
@@ -586,10 +627,13 @@
     const pill = $('#connPill');
     if (state.sending.ready) {
       pill.className = 'conn-pill ok';
-      $('#connText').textContent = `Sending as ${state.sending.from}`;
+      $('#connLabel').textContent = 'Sending as';
+      $('#connText').textContent = state.sending.from;
+      $('#connText').title = state.sending.from;
     } else {
       pill.className = 'conn-pill warn';
-      $('#connText').textContent = state.google.expired ? 'Google connection expired — reconnect' : 'Email not set up';
+      $('#connLabel').textContent = state.google.expired ? 'Google expired — reconnect' : 'Email not set up';
+      $('#connText').textContent = '';
     }
 
     if (state.settings.lastSheetUrl && !$('#sheetUrl').value) $('#sheetUrl').value = state.settings.lastSheetUrl;
@@ -701,6 +745,20 @@
       history.replaceState(null, '', location.pathname);
     }
     setInterval(() => refresh().catch(() => {}), 30000);
+    checkReplies();
+    setInterval(checkReplies, 60000);
+  }
+
+  // Ask the server to look at a few sent threads for replies; new replies
+  // flip candidates to "Replied" and appear in the feed.
+  let scopeHintShown = false;
+  async function checkReplies() {
+    if (!state || !state.google.connected || document.hidden) return;
+    try {
+      const r = await api('/api/replies/check', { method: 'POST' });
+      if (r.scopeError && !scopeHintShown) { scopeHintShown = true; toast(r.scopeError, true); }
+      if (r.replies > 0) { await refresh(); toast(`${r.replies} new repl${r.replies === 1 ? 'y' : 'ies'} detected.`); }
+    } catch {}
   }
 
   (async () => {
