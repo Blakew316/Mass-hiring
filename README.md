@@ -49,7 +49,8 @@ Emails are sent one-by-one so each candidate receives an individual, personal me
 - Google Workspace allows roughly **2,000 messages per account per rolling 24 hours** (500 on free Gmail). The queue stops at the *Daily send limit* in Settings (default 1,800) and resumes by itself as the window frees up.
 - Google Workspace also caps unique external recipients at 2,000 per day, so for one-to-one outreach the effective ceiling is about 2,000 new people per day.
 - The Gmail API allows 6,000 quota units per minute per user for Cloud projects created after May 2026 (each send costs 100 units, so ~60 sends/minute; older projects get 15,000), and Gmail itself throttles bursts ("User-rate limit exceeded. Retry after …" — the same message it uses when the daily cap is hit, with a retry time hours away). The queue sends *Emails per minute* (default 6) and, when Gmail asks it to slow down, pauses until the time Gmail gives and retries — nothing is marked failed for being throttled.
-- A send that times out is cancelled and retried once; anything else that fails is listed on the dashboard with a *Retry failed* button.
+- A send that times out is never blindly repeated: with Google connected the app checks your Sent folder first and only sends if the email really did not go out; over SMTP (App Password) it is listed as failed with a note to check Sent before retrying. Anything else that fails is listed on the dashboard with a *Retry failed* button.
+- The pace applies across everything (queue and immediate sends together), and progress is saved after every single email, so a Stop pressed mid-run, a new batch queued mid-run, or a server hiccup can neither lose nor duplicate a send.
 - Small sends (8 or fewer) still go out immediately from the browser, with the same retry behaviour.
 
 ## Opens and replies

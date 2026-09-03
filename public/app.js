@@ -568,12 +568,13 @@
     bar.hidden = false;
     prog.hidden = false;
     let sent = 0;
+    let handedOff = 0;   // timed out: the background queue verifies with Gmail and finishes them
     const failed = [];
     const update = () => {
-      const done = sent + failed.length;
+      const done = sent + failed.length + handedOff;
       $('#sendBarFill').style.width = `${Math.round((done / total) * 100)}%`;
       btn.textContent = `Sending… ${done} / ${total}`;
-      prog.innerHTML = `<span class="ok-ico">${icon('checkcircle', 14)}</span> ${sent} sent${failed.length ? ` · <span class="bad-ico">${icon('xcircle', 14)}</span> ${failed.length} failed` : ''}` +
+      prog.innerHTML = `<span class="ok-ico">${icon('checkcircle', 14)}</span> ${sent} sent${handedOff ? ` · ${handedOff} finishing in the background` : ''}${failed.length ? ` · <span class="bad-ico">${icon('xcircle', 14)}</span> ${failed.length} failed` : ''}` +
         (failed.length ? '<br>' + failed.slice(-5).map((f) => `<span class="bad-ico">${icon('xcircle', 14)}</span> ${esc(f.email || f.id)} — ${esc(f.error)}`).join('<br>') : '');
     };
     update();
@@ -585,7 +586,7 @@
         pending = pending.slice(BATCH);
         const data = await api('/api/send', { method: 'POST', body: { candidateIds: chunk, template } });
         const deferred = data.results.filter((r) => r.retry);
-        for (const r of data.results) { if (r.ok) sent++; else if (!r.retry) failed.push(r); }
+        for (const r of data.results) { if (r.ok) sent++; else if (r.queued) handedOff++; else if (!r.retry) failed.push(r); }
         if (deferred.length) {
           const rest = [...deferred.map((r) => r.id), ...pending];
           if (deferred.some((r) => r.kind === 'daily')) {

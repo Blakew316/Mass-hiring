@@ -277,13 +277,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 app.post('/api/send', asyncRoute(async (req, res) => {
   const started = Date.now();
   const db = await store.load();
-  const q = await queue.loadQ();
+  const q = await queue.loadQ();   // read-only snapshot; every change below goes through queue.updateQ
   const ids = (Array.isArray(req.body.candidateIds) ? req.body.candidateIds : []).slice(0, MAX_PER_REQUEST);
   if (!ids.length) throw new Error('No candidates selected.');
   const template = req.body.template || db.template;
   const st = await mailer.sendStatus(db.settings);
   if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
-  const { dailyLimit } = queue.limits(db.settings, st.from);
+  const { dailyLimit, perMinute } = queue.limits(db.settings, st.from);
   const results = [];
   const deferAll = (kind, retryAt, error) => {
     for (const id of ids.filter((x) => !results.some((r) => r.id === x))) {
@@ -291,13 +291,18 @@ app.post('/api/send', asyncRoute(async (req, res) => {
       results.push({ id, ok: false, retry: true, kind, retryAt: retryAt.toISOString(), email: rc ? rc.email : '', error });
     }
   };
-  // Respect an active Gmail pause or the daily cap before touching Gmail.
+  // Respect an active Gmail pause, the daily cap and the shared per-minute pace before touching Gmail.
   if (q.pausedUntil && new Date(q.pausedUntil).getTime() > Date.now()) {
     deferAll('rate', new Date(q.pausedUntil), q.note || 'Gmail asked us to slow down.');
     return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
   }
   if (queue.sentToday(q) >= dailyLimit) {
     deferAll('daily', new Date(Date.now() + 3600 * 1000), `Daily limit of ${dailyLimit} reached.`);
+    return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
+  }
+  let paceLeft = perMinute - queue.sentInLastMinute(q);
+  if (paceLeft <= 0) {
+    deferAll('rate', new Date(Date.now() + 20 * 1000), `Pacing to ${perMinute} emails per minute.`);
     return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
   }
   if (!db.settings.trackingSecret) {
@@ -311,13 +316,17 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     const c = db.candidates.find((x) => x.id === id);
     if (!c) { results.push({ id, ok: false, error: 'Not found' }); continue; }
     if (recent.has(id)) { results.push({ id, ok: true, email: c.email, skipped: 'already emailed in the last 24 hours' }); continue; }
+    if (q.items.some((i) => i.id === id)) { results.push({ id, ok: false, queued: true, email: c.email, error: 'Already in the sending queue.' }); continue; }
     const left = 6500 - (Date.now() - started);
     if (left < 2500) { deferAll('budget', new Date(), 'Continuing in the next batch.'); break; }
+    if (paceLeft <= 0) { deferAll('rate', new Date(Date.now() + 20 * 1000), `Pacing to ${perMinute} emails per minute.`); break; }
+    const attemptAt = new Date().toISOString();
     try {
       const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
-      const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg }, Math.min(queue.SEND_TIMEOUT_MS, left - 300));
-      queue.recordSent(q, c.id, c.email);
+      const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
+      await queue.updateQ((f) => queue.recordSent(f, c.id, c.email));
+      paceLeft -= 1;
       patches[c.id] = { lastEmailedAt: new Date().toISOString(), gmailThreadId: sent.threadId || '' };
       results.push({ id, ok: true, email: c.email });
     } catch (err) {
@@ -325,16 +334,22 @@ app.post('/api/send', asyncRoute(async (req, res) => {
       if (kind === 'rate' || kind === 'daily') {
         const hinted = queue.retryAfterFrom(err.message);
         const retryAt = new Date(Math.max(hinted ? hinted.getTime() : 0, Date.now() + (kind === 'daily' ? 3600 : 60) * 1000));
-        q.pausedUntil = retryAt.toISOString();
-        q.note = kind === 'daily' ? 'Gmail reports the daily sending limit is reached.' : 'Gmail asked us to slow down.';
+        const note = kind === 'daily' ? 'Gmail reports the daily sending limit is reached.' : 'Gmail asked us to slow down.';
+        await queue.updateQ((f) => { f.pausedUntil = retryAt.toISOString(); f.note = note; });
         deferAll(kind, retryAt, err.message);
         break;
       }
+      if (err.name === 'AbortError' && st.via === 'gmail-api') {
+        // Outcome unknown: the queue checks the Sent folder before deciding — never a blind resend.
+        await queue.updateQ((f) => queue.deferUnverified(f, c.id, c.email, attemptAt));
+        results.push({ id, ok: false, queued: true, email: c.email, error: 'Timed out — Gmail will be checked and the send finished in the background.' });
+        continue;
+      }
+      if (err.name === 'AbortError') { results.push({ id, ok: false, email: c.email, error: queue.TIMEOUT_UNKNOWN, kind }); continue; }
       results.push({ id, ok: false, email: c.email, error: err.message, kind });
     }
     await sleep(400);
   }
-  await queue.saveQ(q);
   if (Object.keys(patches).length) {
     await store.update((fresh) => {
       for (const [id, p] of Object.entries(patches)) {
@@ -356,32 +371,30 @@ app.post('/api/queue', asyncRoute(async (req, res) => {
   if (!ids.length) throw new Error('No candidates selected.');
   const st = await mailer.sendStatus(db.settings);
   if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
-  const q = await queue.loadQ();
-  const added = queue.enqueue(q, db, ids, req.body.template || null);
-  await queue.saveQ(q);
+  let added = 0;
+  const q = await queue.updateQ((f) => { added = queue.enqueue(f, db, ids, req.body.template || null); });
   res.json({ ok: true, added, queue: queue.status(q, db.settings, st.from) });
 }));
 
 app.delete('/api/queue', asyncRoute(async (_req, res) => {
   const db = await store.load();
-  const q = await queue.loadQ();
-  queue.clearQueue(q);
-  await queue.saveQ(q);
+  const q = await queue.updateQ((f) => queue.clearQueue(f));
   res.json({ ok: true, queue: queue.status(q, db.settings, null) });
 }));
 
 app.post('/api/queue/retry-failed', asyncRoute(async (_req, res) => {
   const db = await store.load();
-  const q = await queue.loadQ();
-  const added = queue.retryFailed(q, db);
-  await queue.saveQ(q);
+  let added = 0;
+  const q = await queue.updateQ((f) => { added = queue.retryFailed(f, db); });
   res.json({ ok: true, added, queue: queue.status(q, db.settings, null) });
 }));
 
 // On Netlify the scheduler drains the queue; locally (no scheduler) the
 // dashboard calls this once a minute while a queue is active.
 app.post('/api/queue/run', asyncRoute(async (_req, res) => {
-  if (storage.onNetlify) return res.json({ ok: true, skipped: true });
+  // Deployed: the scheduled function drains the queue. Under `netlify dev`
+  // schedules never fire, so the dashboard's ticks drive it there as well.
+  if (storage.onNetlify && !process.env.NETLIFY_DEV && !process.env.NETLIFY_LOCAL) return res.json({ ok: true, skipped: true });
   const r = await queue.processQueue({ budgetMs: 20000 });
   res.json({ ok: true, ...r });
 }));
@@ -392,9 +405,12 @@ app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
   const id = tracking.verify(db.settings, req.params.token);
   const c = id && db.candidates.find((x) => x.id === id);
   if (c && !c.openedAt) {
-    c.openedAt = new Date().toISOString();
-    await store.save(db);
-    await store.addEvent('opened', `${c.name || c.email} opened your email.`, c.id);
+    let first = false;
+    await store.update((fresh) => {
+      const fc = fresh.candidates.find((x) => x.id === id);
+      if (fc && !fc.openedAt) { fc.openedAt = new Date().toISOString(); first = true; }
+    });
+    if (first) await store.addEvent('opened', `${c.name || c.email} opened your email.`, c.id);
   }
   res.set({
     'Content-Type': 'image/gif',
@@ -600,24 +616,26 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
   const c = db.candidates.find((x) => x.email.toLowerCase() === inviteeEmail);
 
   if (event === 'invitee.created') {
-    if (c) {
-      c.status = 'booked';
-      c.bookedAt = startTime || new Date().toISOString();
-      c.bookedEvent = eventName;
-      c.calendlyEventUri = (p.scheduled_event && p.scheduled_event.uri) || '';
-      c.bookedJoinUrl = (p.scheduled_event && p.scheduled_event.location && p.scheduled_event.location.join_url) || '';
-    }
     const ev = p.scheduled_event || {};
-    db.interviews = (db.interviews || []).filter((i) => !(i.uri === ev.uri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail));
-    if (ev.uri) {
-      db.interviews.push({
-        uri: ev.uri, name: eventName, status: 'active', start: startTime || new Date().toISOString(), end: ev.end_time || null,
-        joinUrl: (ev.location && ev.location.join_url) || null, inviteeName: p.name || '', inviteeEmail: p.email || '',
-        candidateId: c ? c.id : null, rescheduleUrl: p.reschedule_url || '', cancelUrl: p.cancel_url || '',
-      });
-      db.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
-    }
-    await store.save(db);
+    await store.update((fresh) => {
+      const fc = c && fresh.candidates.find((x) => x.id === c.id);
+      if (fc) {
+        fc.status = 'booked';
+        fc.bookedAt = startTime || new Date().toISOString();
+        fc.bookedEvent = eventName;
+        fc.calendlyEventUri = ev.uri || '';
+        fc.bookedJoinUrl = (ev.location && ev.location.join_url) || '';
+      }
+      fresh.interviews = (fresh.interviews || []).filter((i) => !(i.uri === ev.uri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail));
+      if (ev.uri) {
+        fresh.interviews.push({
+          uri: ev.uri, name: eventName, status: 'active', start: startTime || new Date().toISOString(), end: ev.end_time || null,
+          joinUrl: (ev.location && ev.location.join_url) || null, inviteeName: p.name || '', inviteeEmail: p.email || '',
+          candidateId: c ? c.id : null, rescheduleUrl: p.reschedule_url || '', cancelUrl: p.cancel_url || '',
+        });
+        fresh.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
+      }
+    });
     await store.addEvent('booked', `${inviteeName} booked "${eventName}" — ${when}.`, c ? c.id : null);
     try {
       await notify.pushToPhone(db.settings, {
@@ -629,15 +647,17 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
       await store.addEvent('error', `Phone notification failed: ${err.message}`);
     }
   } else if (event === 'invitee.canceled') {
-    if (c && c.status === 'booked') {
-      c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
-      c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
-    }
     const evUri = (p.scheduled_event && p.scheduled_event.uri) || '';
-    for (const i of db.interviews || []) {
-      if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) i.status = 'canceled';
-    }
-    await store.save(db);
+    await store.update((fresh) => {
+      const fc = c && fresh.candidates.find((x) => x.id === c.id);
+      if (fc && fc.status === 'booked') {
+        fc.status = (fc.replies || []).some((r) => !r.kind) ? 'replied' : 'emailed';
+        fc.bookedAt = null; fc.bookedEvent = ''; fc.calendlyEventUri = ''; fc.bookedJoinUrl = '';
+      }
+      for (const i of fresh.interviews || []) {
+        if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) i.status = 'canceled';
+      }
+    });
     await store.addEvent('canceled', `${inviteeName} canceled "${eventName}".`, c ? c.id : null);
     try {
       await notify.pushToPhone(db.settings, {
