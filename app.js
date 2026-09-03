@@ -286,6 +286,16 @@ app.post('/api/send', asyncRoute(async (req, res) => {
 }));
 
 // ---------- Google OAuth ----------
+// Used by the dashboard button: returns the consent URL (and sets the state
+// cookie) so the browser only navigates once everything server-side worked.
+app.get('/api/google/auth-url', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const st = await google.status(db.settings);
+  if (!st.configured) throw new Error('Enter your Google OAuth Client ID and Secret first, then save.');
+  const state = auth.issueOauthState(req, res);
+  res.json({ url: google.authUrl(db.settings, state) });
+}));
+
 app.get('/auth/google', asyncRoute(async (req, res) => {
   const db = await store.load();
   const st = await google.status(db.settings);

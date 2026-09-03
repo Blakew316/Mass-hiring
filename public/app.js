@@ -622,7 +622,8 @@
         toast('Enter your Google OAuth Client ID and Secret first (see the hint below the fields).', true);
         return;
       }
-      window.location.href = '/auth/google';
+      const { url } = await api('/api/google/auth-url');
+      window.location.href = url;
     } catch (err) { oops(err); }
   });
   $('#googleDisconnectBtn').addEventListener('click', () =>
