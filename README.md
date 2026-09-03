@@ -6,7 +6,7 @@ A CRM-style dashboard for hiring outreach:
 - **Email each candidate personally** from your work email — one at a time or in bulk, each message individually personalized ({{firstName}}, {{role}}, …) from a default template you control.
 - **Calendly booking link** appended to every email as a "Book a time with me" button.
 - **Booking alerts**: when a candidate books on your Calendly, their card flips to "Booked" and a **push notification is sent to your phone**.
-- Pipeline view (Not contacted → Emailed → Replied → Booked), activity feed, search and filters.
+- Pipeline view (Not contacted → Emailed → Replied → Booked, plus Bounced), activity feed, search and filters.
 
 Themed around the Wholesale Payments logo — Apple system typography, white surfaces, light hues of the logo's navy/blue/green as accents.
 
@@ -56,6 +56,8 @@ Emails are sent one-by-one so each candidate receives an individual, personal me
 
 - Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email".
 - With Google connected (and the "signature and detect replies" box ticked), the app checks the Gmail threads of sent emails every minute; a reply flips the candidate to **Replied**, appears in the feed with a preview of what they said, and pushes to your phone. Reading replies uses Gmail's read permission (`gmail.readonly`); if you connected Google before this existed, click **Reconnect** once.
+- **Only people count as replies.** Delivery failures ("Address not found", "Undeliverable", mailer-daemon messages) move the candidate to **Bounced** instead, and out-of-office / automatic replies and system notifications are ignored — none of them appear in the feed, the Replied tile or your phone. Anyone the old behaviour wrongly marked as Replied is corrected automatically on the next check, and their feed line is removed.
+- Reply text that was recorded before the read permission existed is fetched and filled in automatically, a few at a time.
 - The four dashboard tiles are clickable: **Emailed** lists who is still waiting (and whether they opened the email), **Replied** shows each reply's text with a link to the thread in Gmail, **Interviews booked** lists upcoming interviews, and **Candidates** opens the full list.
 
 The feed shows only candidate signals (opened, replied, booked, cancelled) — no connection or import history.

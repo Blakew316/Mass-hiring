@@ -84,6 +84,7 @@ function stats(db) {
     replied: by('replied'),
     booked: by('booked'),
     declined: by('declined'),
+    bounced: by('bounced'),
   };
 }
 
@@ -405,29 +406,48 @@ app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
 }));
 
 // ---------- Reply detection (Gmail thread headers, a few at a time) ----------
+// Local, cheap: (re)classify stored replies; drop bounces/auto-replies from
+// the record, fix the status, and remove feed lines that were not real replies.
+function reclassifyCandidate(c) {
+  const all = (c.replies || []).map((r) => ({ ...r, kind: r.kind !== undefined ? r.kind : google.classifyReply(r) }));
+  const real = all.filter((r) => !r.kind);
+  const bounced = all.some((r) => r.kind === 'bounce');
+  c.replies = all;
+  c.lastReplyAt = real.length ? real[real.length - 1].date || c.lastReplyAt : null;
+  if (c.status === 'replied' && !real.length) {
+    c.status = bounced ? 'bounced' : 'emailed';
+    c.repliedAt = null;
+    return { fixed: true };
+  }
+  if (c.status === 'emailed' && bounced && !real.length) { c.status = 'bounced'; return { fixed: true }; }
+  return { fixed: false };
+}
+
 app.post('/api/replies/check', asyncRoute(async (_req, res) => {
   const db = await store.load();
   const g = await google.status(db.settings);
   if (!g.connected) return res.json({ ok: true, checked: 0, replies: 0, unavailable: 'Google not connected' });
   const byCheck = (a, b) => String(a.repliesCheckedAt || '').localeCompare(String(b.repliesCheckedAt || ''));
-  const waiting = db.candidates.filter((c) => c.status === 'emailed' && c.gmailThreadId).sort(byCheck).slice(0, 20);
-  const conversing = db.candidates.filter((c) => c.status === 'replied' && c.gmailThreadId).sort(byCheck).slice(0, 5);
-  const pool = [...waiting, ...conversing];
-  const results = {};   // id -> { gone, newReplies: [], limited }
+  const withThread = db.candidates.filter((c) => c.gmailThreadId);
+  const waiting = withThread.filter((c) => c.status === 'emailed').sort(byCheck).slice(0, 20);
+  // Replies saved before the read permission existed have no text: refetch them.
+  const backfill = withThread.filter((c) => (c.replies || []).some((r) => !r.text && !r.kind && !r.textFetched)).slice(0, 8);
+  const conversing = withThread.filter((c) => c.status === 'replied').sort(byCheck).slice(0, 5);
+  const seen = new Set();
+  const pool = [...backfill, ...waiting, ...conversing].filter((c) => !seen.has(c.id) && seen.add(c.id));
+  const results = {};   // id -> { gone, limited, replies }
   let scopeError = '';
   let limitedAny = false;
   for (const c of pool) {
     try {
       const r = await google.threadReplies(db.settings, c.gmailThreadId, g.email);
-      const seen = new Set((c.replies || []).map((x) => x.id));
-      results[c.id] = { gone: false, limited: r.limited, newReplies: r.replies.filter((x) => !seen.has(x.id)) };
+      results[c.id] = { gone: false, limited: r.limited, replies: r.replies };
       if (r.limited) limitedAny = true;
     } catch (err) {
       if (err.scope) { scopeError = 'Reconnect Google (Settings) to allow reply detection.'; break; }
-      results[c.id] = { gone: Boolean(err.gone), newReplies: [] };
+      results[c.id] = { gone: Boolean(err.gone), replies: [] };
     }
   }
-  // Apply to a fresh copy so the queue's status updates are never overwritten.
   const now = new Date().toISOString();
   const announce = [];
   await store.update((fresh) => {
@@ -436,12 +456,38 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
       if (!fc) continue;
       fc.repliesCheckedAt = now;
       if (r.gone) { fc.gmailThreadId = ''; continue; }
-      if (!r.newReplies.length) continue;
-      fc.replies = [...(fc.replies || []), ...r.newReplies].slice(-10);
-      fc.lastReplyAt = r.newReplies[r.newReplies.length - 1].date || now;
-      if (fc.status !== 'booked' && fc.status !== 'declined') { fc.status = 'replied'; fc.repliedAt = fc.repliedAt || now; }
-      announce.push({ c: fc, reply: r.newReplies[r.newReplies.length - 1] });
+      const existing = new Map((fc.replies || []).map((x) => [x.id, x]));
+      const before = new Set(existing.keys());
+      for (const rep of r.replies) {
+        const prev = existing.get(rep.id) || {};
+        // textFetched: the full message was read once; if it has no readable
+        // text (attachment-only), stop re-fetching it every minute.
+        existing.set(rep.id, {
+          ...prev, ...rep,
+          text: rep.text || prev.text || '',
+          snippet: rep.snippet || prev.snippet || '',
+          textFetched: Boolean(prev.textFetched) || !r.limited,
+        });
+      }
+      fc.replies = [...existing.values()].sort((a, b) => String(a.date).localeCompare(String(b.date))).slice(-10);
+      const fresh_real = fc.replies.filter((x) => !x.kind);
+      const newReal = fresh_real.filter((x) => !before.has(x.id));
+      const bounced = fc.replies.some((x) => x.kind === 'bounce');
+      if (fresh_real.length) {
+        fc.lastReplyAt = fresh_real[fresh_real.length - 1].date || now;
+        if (fc.status === 'emailed' || fc.status === 'bounced') { fc.status = 'replied'; fc.repliedAt = fc.repliedAt || now; }
+        if (newReal.length) announce.push({ c: fc, reply: newReal[newReal.length - 1] });
+      } else if (bounced && fc.status === 'emailed') {
+        fc.status = 'bounced';
+      }
     }
+    // Housekeeping for everyone marked replied: bounces/auto-replies are not replies.
+    const cleaned = new Set();
+    for (const c of fresh.candidates) {
+      if (!(c.replies || []).length) continue;
+      if (reclassifyCandidate(c).fixed) cleaned.add(c.id);
+    }
+    if (cleaned.size) fresh.events = fresh.events.filter((e) => !(e.type === 'replied' && cleaned.has(e.candidateId)));
   });
   for (const { c, reply } of announce) {
     const preview = (reply.text || reply.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 140);

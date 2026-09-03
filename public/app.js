@@ -18,6 +18,7 @@
     replied:  { label: 'Replied',       cls: 'tint-mint' },
     booked:   { label: 'Booked',        cls: 'tint-green' },
     declined: { label: 'Not interested',cls: 'tint-red' },
+    bounced:  { label: 'Bounced',       cls: 'tint-amber' },
   };
   const AVATAR_TINTS = ['tint-blue', 'tint-green', 'tint-mint', 'tint-navy'];
 
@@ -120,7 +121,7 @@
   function renderDashboard() {
     const s = state.stats;
     $('#statTotal').textContent = s.total;
-    $('#statEmailed').textContent = contactedCount();
+    $('#statEmailed').textContent = s.emailed;
     $('#statReplied').textContent = s.replied;
     $('#statBooked').textContent = state.calendly && state.calendly.syncEnabled ? upcomingInterviews().length : s.booked;
     $('#navCount').textContent = s.total || '';
@@ -135,6 +136,7 @@
       ['Replied', s.replied, 'var(--mint)'],
       ['Booked', s.booked, 'var(--green)'],
       ['Not interested', s.declined, '#cfd4e0'],
+      ['Bounced', s.bounced || 0, 'var(--amber)'],
     ];
     const max = Math.max(1, ...steps.map(([, n]) => n));
     $('#pipeline').innerHTML = steps.map(([label, n, color]) => `
@@ -178,7 +180,7 @@
 
   function contactedCount() {
     const s = state.stats;
-    return s.emailed + s.replied + s.booked + s.declined;
+    return s.emailed + s.replied + s.booked + s.declined + (s.bounced || 0);
   }
 
   function upcomingInterviews() {
@@ -225,17 +227,21 @@
         `Sent ${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : ''} · ${c.openedAt ? `${icon('eye', 12)} opened ${timeAgo(c.openedAt)}` : 'not opened yet'}`,
         `${statusSelect(c)}${gmailLink(c)}`));
     } else if (kind === 'replied') {
-      const cs = state.candidates.filter((c) => c.status === 'replied' || (c.replies && c.replies.length)).sort((a, b) => String(b.lastReplyAt || b.repliedAt || '').localeCompare(String(a.lastReplyAt || a.repliedAt || '')));
+      const realReplies = (c) => (c.replies || []).filter((r) => !r.kind);
+      const cs = state.candidates.filter((c) => c.status === 'replied').sort((a, b) => String(b.lastReplyAt || b.repliedAt || '').localeCompare(String(a.lastReplyAt || a.repliedAt || '')));
       $('#tileTitle').textContent = `Replied (${cs.length})`;
-      $('#tileSub').textContent = 'Who replied and what they said. Change a status here once you have followed up.';
+      $('#tileSub').textContent = 'Real replies only — bounces and automatic replies are filtered out. Change a status here once you have followed up.';
       rows = cs.map((c) => {
-        const last = (c.replies || []).slice(-1)[0];
+        const reps = realReplies(c);
+        const last = reps.slice(-1)[0];
         const text = last ? (last.text || last.snippet || '') : '';
         const quote = text
           ? `<blockquote class="reply-quote">${esc(text)}</blockquote>`
-          : `<blockquote class="reply-quote muted-quote">Reply text not available yet — Settings → Google → Reconnect (and tick all permissions) lets the app read replies.</blockquote>`;
+          : `<blockquote class="reply-quote muted-quote">${replyTextLimited
+              ? 'Reply text can’t be read with the current Google permissions — Settings → Google → Reconnect and tick every box.'
+              : 'Reply text hasn’t been captured yet — it fills in automatically within a minute or two. Use “Open in Gmail” to read it now.'}</blockquote>`;
         const when = c.lastReplyAt || c.repliedAt;
-        return candRow(c, `Replied ${when ? timeAgo(when) : ''}${(c.replies || []).length > 1 ? ` · ${c.replies.length} messages` : ''}`,
+        return candRow(c, `Replied ${when ? timeAgo(when) : ''}${reps.length > 1 ? ` · ${reps.length} messages` : ''}`,
           `${statusSelect(c)}${gmailLink(c)}`, quote);
       });
     } else if (kind === 'booked') {
@@ -816,15 +822,23 @@
   }
 
   // ---------------- Settings ----------------
+  let settingsDirty = false;
+  function setSettingsDirty(d) {
+    settingsDirty = d;
+    $('#saveSettingsBtn').textContent = d ? 'Save settings •' : 'Save settings';
+  }
+  $$('#view-settings input').forEach((el) => el.addEventListener('input', () => setSettingsDirty(true)));
+
   function renderSettings() {
     const s = state.settings;
-    const setIf = (sel, val) => { const el = $(sel); if (document.activeElement !== el) el.value = val || ''; };
+    // Never overwrite what the user is typing: skip the form while it has unsaved edits.
+    const setIf = (sel, val) => { const el = $(sel); if (!settingsDirty && document.activeElement !== el) el.value = val || ''; };
     setIf('#setCalendlyUrl', s.calendlyUrl);
     setIf('#calendlyToken', s.calendlyToken);
     setIf('#setFromName', s.fromName);
     setIf('#setDailyLimit', s.dailyLimit);
     setIf('#setPerMinute', s.perMinute);
-    $('#setGmailSignature').checked = s.gmailSignature !== false;
+    if (!settingsDirty) $('#setGmailSignature').checked = s.gmailSignature !== false;
     setIf('#setNtfyTopic', s.ntfyTopic);
     setIf('#setSmtpUser', s.smtpUser);
     setIf('#setSmtpPass', s.smtpPass);
@@ -883,6 +897,7 @@
       ...extra,
     };
     await api('/api/settings', { method: 'POST', body });
+    setSettingsDirty(false);
     await refresh();
   }
 
@@ -931,6 +946,9 @@
     m.addEventListener('click', (e) => {
       if (e.target === m || e.target.closest('[data-close]')) m.hidden = true;
     });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') $$('.modal-backdrop:not([hidden])').forEach((m) => { m.hidden = true; });
   });
 
   // ---------------- Boot ----------------
@@ -985,10 +1003,12 @@
   // Ask the server to look at a few sent threads for replies; new replies
   // flip candidates to "Replied" and appear in the feed.
   let scopeHintShown = false;
+  let replyTextLimited = false;
   async function checkReplies() {
     if (!state || !state.google.connected || document.hidden) return;
     try {
       const r = await api('/api/replies/check', { method: 'POST' });
+      replyTextLimited = Boolean(r.scopeError);
       if (r.scopeError && !scopeHintShown) { scopeHintShown = true; toast(r.scopeError, true); }
       if (r.replies > 0) { await refresh(); toast(`${r.replies} new repl${r.replies === 1 ? 'y' : 'ies'} detected.`); }
     } catch {}
