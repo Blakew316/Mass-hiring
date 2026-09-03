@@ -42,7 +42,13 @@ First row should be headers — e.g. `Name, Email, Role, Company`. The app guess
 
 With Google connected and the **"Append my Gmail signature"** box ticked in Settings, the signature configured on your work Gmail account is read from Gmail and appended to every outreach email automatically — there is nothing to type in the app. (Gmail only inserts signatures when you compose in Gmail itself; API and SMTP sends don't get it, so the app does this for you. SMTP/App Password sends can't include it.) Reading the signature uses Google's `gmail.settings.basic` permission, which Google classes as *restricted*: fine for a Workspace "Internal" app, but untick the box if you're using a personal-Gmail "External" app — see SETUP.md.
 
-Emails are sent one-by-one so each candidate receives an individual, personal message — never a CC/BCC blast. **Email all not-contacted candidates** (on the Email Template page, the Dashboard, or the Candidates page) sends to everyone still marked *Not contacted*, in batches of 8 with a progress bar — keep the tab open until it finishes.
+Emails are sent one-by-one so each candidate receives an individual, personal message — never a CC/BCC blast. **Email all not-contacted candidates** (on the Email Template page, the Dashboard, or the Candidates page) queues everyone still marked *Not contacted*; a scheduled job on the server then sends them automatically, a few per minute, so you can close the tab. The Dashboard shows progress and a Stop button.
+
+### Gmail sending limits (why the queue paces itself)
+
+- Google Workspace allows roughly **2,000 messages per account per rolling 24 hours** (500 on free Gmail). The queue stops at the *Daily send limit* in Settings (default 1,800) and resumes by itself as the window frees up.
+- The Gmail API allows about 150 sends per minute and Gmail itself throttles bursts ("User-rate limit exceeded. Retry after …"). The queue sends *Emails per minute* (default 6) and, when Gmail asks it to slow down, pauses until the time Gmail gives and retries — nothing is marked failed for being throttled.
+- Small sends (8 or fewer) still go out immediately from the browser, with the same retry behaviour.
 
 ## Opens and replies
 

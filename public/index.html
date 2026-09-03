@@ -85,6 +85,19 @@
         </div>
       </div>
 
+      <div class="card sending-card" id="sendingCard" hidden>
+        <div class="card-head">
+          <h2>Sending in progress</h2>
+          <span class="badge tint-blue" id="sendingBadge"></span>
+        </div>
+        <div class="progress"><div class="progress-fill" id="sendingFill"></div></div>
+        <p class="muted sending-meta" id="sendingMeta"></p>
+        <div class="card-actions">
+          <button class="btn" id="retryFailedBtn" hidden>Retry failed</button>
+          <button class="btn btn-danger-ghost" id="stopQueueBtn">Stop sending</button>
+        </div>
+      </div>
+
       <div class="two-col">
         <div class="card">
           <div class="card-head"><h2>Pipeline</h2></div>
@@ -312,6 +325,15 @@
             <button class="btn" id="registerWebhookBtn">Enable booking alerts</button>
           </div>
           <div class="hint" id="calendlyHint">When someone books, their card flips to “Booked” and your phone gets a push. Requires this app to be reachable at a public URL.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Sending pace</h2></div>
+          <p class="muted">Large sends go out automatically in the background at this pace. Google Workspace allows about 2,000 messages per account per rolling 24 hours (500 on free Gmail); the defaults leave headroom for your normal email.</p>
+          <div class="grid-2">
+            <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"></div>
+            <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="12" placeholder="6"></div>
+          </div>
         </div>
 
         <div class="card">

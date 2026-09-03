@@ -8,8 +8,9 @@ import { mkdirSync } from 'fs';
 
 mkdirSync('netlify/functions', { recursive: true });
 await build({
-  entryPoints: ['netlify/src/api.mjs'],
-  outfile: 'netlify/functions/api.mjs',
+  entryPoints: ['netlify/src/api.mjs', 'netlify/src/send-queue.mjs'],
+  outdir: 'netlify/functions',
+  outExtension: { '.js': '.mjs' },
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -32,4 +33,4 @@ await build({
     ].join('\n'),
   },
 });
-console.log('Built netlify/functions/api.mjs');
+console.log('Built netlify/functions/api.mjs and send-queue.mjs');

@@ -125,6 +125,8 @@
     $('#statBooked').textContent = s.booked;
     $('#navCount').textContent = s.total || '';
     renderEmailAllButtons();
+    renderSendingCard();
+    scheduleQueueWork();
 
     // Pipeline bars
     const steps = [
@@ -182,6 +184,53 @@
   // Everyone still at "Not contacted".
   function uncontactedIds() {
     return state.candidates.filter((c) => c.status === 'new').map((c) => c.id);
+  }
+
+  function renderSendingCard() {
+    const q = state.queue || {};
+    const card = $('#sendingCard');
+    const show = q.active || q.failed > 0;
+    card.hidden = !show;
+    if (!show) return;
+    const total = q.pending + q.sentSinceStart;
+    const pct = total ? Math.round((q.sentSinceStart / total) * 100) : 100;
+    $('#sendingFill').style.width = `${pct}%`;
+    $('#sendingBadge').textContent = q.active ? `${q.sentSinceStart} of ${total} sent` : 'finished';
+    const parts = [];
+    if (q.active) parts.push(`${q.pending} still to send at ~${q.perMinute}/min`);
+    parts.push(`${q.sentToday} sent in the last 24h (limit ${q.dailyLimit})`);
+    if (q.pausedUntil) parts.push(`paused until ${new Date(q.pausedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+    if (q.note) parts.push(q.note);
+    if (q.failed) parts.push(`${q.failed} failed — ${q.failures.map((f) => `${f.email}: ${f.error}`).slice(-3).join(' · ')}`);
+    $('#sendingMeta').textContent = parts.join(' · ');
+    $('#retryFailedBtn').hidden = !q.failed;
+    $('#retryFailedBtn').textContent = `Retry ${q.failed} failed`;
+    $('#stopQueueBtn').hidden = !q.active;
+    $('#stopQueueBtn').textContent = 'Stop sending';
+  }
+
+  $('#stopQueueBtn').addEventListener('click', async () => {
+    if (!confirm('Stop sending? Emails not yet sent stay marked "Not contacted".')) return;
+    try { await api('/api/queue', { method: 'DELETE' }); toast('Sending stopped.'); await refresh(); } catch (err) { oops(err); }
+  });
+  $('#retryFailedBtn').addEventListener('click', async () => {
+    try { const r = await api('/api/queue/retry-failed', { method: 'POST' }); toast(`${r.added} emails re-queued.`); await refresh(); } catch (err) { oops(err); }
+  });
+
+  // While a queue is active, refresh faster and (locally, without Netlify's
+  // scheduler) drive the queue from here.
+  let queueTimer = null;
+  function scheduleQueueWork() {
+    const active = state && state.queue && state.queue.active;
+    if (active && !queueTimer) {
+      queueTimer = setInterval(async () => {
+        try { await api('/api/queue/run', { method: 'POST' }); } catch {}
+        refresh().catch(() => {});
+      }, 20000);
+    } else if (!active && queueTimer) {
+      clearInterval(queueTimer);
+      queueTimer = null;
+    }
   }
 
   function renderEmailAllButtons() {
@@ -346,10 +395,25 @@
     $('#sendBar').hidden = true;
     $('#sendBarFill').style.width = '0%';
     $('#composeSendBtn').disabled = false;
-    $('#composeSendBtn').textContent = cands.length > 1 ? `Send ${cands.length} emails` : 'Send';
     $('#composeCancelBtn').textContent = 'Cancel';
+    queueMode = cands.length > (state.maxImmediate || 8);
+    if (queueMode) {
+      const q = state.queue || {};
+      const room = Math.max(0, (q.dailyLimit || 0) - (q.sentToday || 0));
+      const today = Math.min(cands.length, room);
+      const perHour = (q.perMinute || 6) * 60;
+      $('#composeHint').textContent =
+        `${cands.length} emails will be sent automatically in the background at about ${q.perMinute || 6} per minute (${perHour}/hour), each personalized. ` +
+        `Gmail allows about ${q.dailyLimit} per day and you've sent ${q.sentToday || 0} in the last 24 hours, so ${today} go out today` +
+        (today < cands.length ? ` and the remaining ${cands.length - today} continue automatically tomorrow.` : '.') +
+        ` You can close this tab; progress shows on the Dashboard.`;
+      $('#composeSendBtn').textContent = `Queue ${cands.length} emails`;
+    } else {
+      $('#composeSendBtn').textContent = cands.length > 1 ? `Send ${cands.length} emails` : 'Send';
+    }
     $('#composeModal').hidden = false;
   }
+  let queueMode = false;
 
   $('#composeCancelBtn').addEventListener('click', () => { cancelSend = true; });
 
@@ -364,6 +428,17 @@
     const total = composeIds.length;
     const template = { subject: $('#composeSubject').value, body: $('#composeBody').value };
     btn.disabled = true;
+    if (queueMode) {
+      try {
+        const r = await api('/api/queue', { method: 'POST', body: { candidateIds: composeIds, template } });
+        $('#composeModal').hidden = true;
+        selected.clear();
+        toast(`${r.added} emails queued — sending has started.`);
+        await refresh();
+        show('dashboard');
+      } catch (err) { oops(err); btn.disabled = false; }
+      return;
+    }
     cancel.textContent = 'Stop';
     cancelSend = false;
     const prog = $('#sendProgress');
@@ -381,13 +456,26 @@
     };
     update();
     try {
-      for (let i = 0; i < total; i += BATCH) {
-        if (cancelSend) break;
-        const chunk = composeIds.slice(i, i + BATCH);
+      let pending = composeIds.slice();
+      let retries = 0;
+      while (pending.length && !cancelSend) {
+        const chunk = pending.slice(0, BATCH);
+        pending = pending.slice(BATCH);
         const data = await api('/api/send', { method: 'POST', body: { candidateIds: chunk, template } });
-        for (const r of data.results) (r.ok ? sent++ : failed.push(r));
+        const throttled = data.results.filter((r) => r.retry);
+        for (const r of data.results) { if (r.ok) sent++; else if (!r.retry) failed.push(r); }
+        if (throttled.length) {
+          // Gmail asked us to slow down: wait until its retry time, then resend those.
+          if (++retries > 4) { failed.push(...throttled.map((r) => ({ ...r, error: 'Gmail kept throttling — try again in a few minutes.' }))); }
+          else {
+            const until = Math.min(new Date(throttled[0].retryAt).getTime(), Date.now() + 120000);
+            prog.innerHTML = `Gmail asked us to slow down — resuming in ${Math.max(1, Math.round((until - Date.now()) / 1000))}s…`;
+            while (Date.now() < until && !cancelSend) await wait(1000);
+            pending = [...throttled.map((r) => r.id), ...pending];
+          }
+        }
         update();
-        if (i + BATCH < total && !cancelSend) await wait(600);
+        if (pending.length && !cancelSend) await wait(1500);
       }
       const stopped = cancelSend && sent + failed.length < total;
       toast(stopped ? `Stopped — ${sent} sent.` : `Sent ${sent} of ${total} email${total === 1 ? '' : 's'}.`, failed.length > 0);
@@ -601,6 +689,8 @@
     const setIf = (sel, val) => { const el = $(sel); if (document.activeElement !== el) el.value = val || ''; };
     setIf('#setCalendlyUrl', s.calendlyUrl);
     setIf('#setFromName', s.fromName);
+    setIf('#setDailyLimit', s.dailyLimit);
+    setIf('#setPerMinute', s.perMinute);
     $('#setGmailSignature').checked = s.gmailSignature !== false;
     setIf('#setNtfyTopic', s.ntfyTopic);
     setIf('#setSmtpUser', s.smtpUser);
@@ -648,6 +738,8 @@
     const body = {
       calendlyUrl: $('#setCalendlyUrl').value,
       fromName: $('#setFromName').value,
+      dailyLimit: $('#setDailyLimit').value,
+      perMinute: $('#setPerMinute').value,
       gmailSignature: $('#setGmailSignature').checked,
       ntfyTopic: $('#setNtfyTopic').value,
       smtpUser: $('#setSmtpUser').value,

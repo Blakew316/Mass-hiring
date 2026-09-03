@@ -13,6 +13,7 @@ const mailer = require('./lib/mailer');
 const notify = require('./lib/notify');
 const calendly = require('./lib/calendly');
 const tracking = require('./lib/tracking');
+const queue = require('./lib/queue');
 const crypto = require('crypto');
 const { renderEmail } = require('./lib/template');
 
@@ -85,6 +86,9 @@ function stats(db) {
   };
 }
 
+// Immediate sends (small selections) go out at most this many per request.
+const MAX_PER_REQUEST = 8;
+
 // ---------- App state ----------
 app.get('/api/state', asyncRoute(async (_req, res) => {
   const db = await store.load();
@@ -101,13 +105,15 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     baseUrl: google.baseUrl(),
     storage: await storage.backend(),
     auth: { required: auth.required() },
+    queue: queue.status(db),
+    maxImmediate: MAX_PER_REQUEST,
   });
 }));
 
 // ---------- Settings & template ----------
 app.post('/api/settings', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'ntfyTopic', 'smtpUser', 'smtpPass',
+  const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'ntfyTopic', 'smtpUser', 'smtpPass',
     'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'lastSheetUrl', 'timeZone'];
   for (const k of allowed) {
     if (!(k in req.body) || req.body[k] === '••••••••') continue;
@@ -258,8 +264,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Sending happens in small batches driven by the browser: a serverless
 // request has a 10s limit, so each call sends at most MAX_PER_REQUEST
 // emails, refreshes the signature once, and saves once.
-const MAX_PER_REQUEST = 8;
-
 app.post('/api/send', asyncRoute(async (req, res) => {
   const db = await store.load();
   const ids = (Array.isArray(req.body.candidateIds) ? req.body.candidateIds : []).slice(0, MAX_PER_REQUEST);
@@ -276,18 +280,64 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     try {
       const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
-      const sent = await mailer.sendEmail(db.settings, { to: c.email, ...msg });
+      const sent = await queue.withTimeout(mailer.sendEmail(db.settings, { to: c.email, ...msg }), 8000);
       if (c.status === 'new') c.status = 'emailed';
       c.lastEmailedAt = new Date().toISOString();
       if (sent.threadId) c.gmailThreadId = sent.threadId;
       results.push({ id, ok: true, email: c.email });
     } catch (err) {
+      const kind = queue.classifySendError(err.message);
+      if (kind === 'rate' || kind === 'daily') {
+        // Gmail is throttling: stop here and tell the browser when to retry
+        // the rest instead of burning through the batch.
+        const hinted = queue.retryAfterFrom(err.message);
+        const retryAt = new Date(Math.max(hinted ? hinted.getTime() : 0, Date.now() + (kind === 'daily' ? 3600 : 60) * 1000));
+        for (const rest of ids.slice(ids.indexOf(id))) {
+          const rc = db.candidates.find((x) => x.id === rest);
+          results.push({ id: rest, ok: false, retry: true, retryAt: retryAt.toISOString(), email: rc ? rc.email : '', error: err.message });
+        }
+        break;
+      }
       results.push({ id, ok: false, email: c.email, error: err.message });
     }
-    if (ids.length > 1) await sleep(150);
+    if (ids.length > 1) await sleep(600);
   }
   await store.save(db);
   res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
+}));
+
+// ---------- Send queue (large sends; drained by the scheduled function) ----------
+app.post('/api/queue', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const ids = Array.isArray(req.body.candidateIds) ? req.body.candidateIds : [];
+  if (!ids.length) throw new Error('No candidates selected.');
+  const st = await mailer.sendStatus(db.settings);
+  if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
+  const added = queue.enqueue(db, ids, req.body.template || null);
+  await store.save(db);
+  res.json({ ok: true, added, queue: queue.status(db) });
+}));
+
+app.delete('/api/queue', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  queue.clearQueue(db);
+  await store.save(db);
+  res.json({ ok: true, queue: queue.status(db) });
+}));
+
+app.post('/api/queue/retry-failed', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  const added = queue.retryFailed(db);
+  await store.save(db);
+  res.json({ ok: true, added, queue: queue.status(db) });
+}));
+
+// On Netlify the scheduler drains the queue; locally (no scheduler) the
+// dashboard calls this once a minute while a queue is active.
+app.post('/api/queue/run', asyncRoute(async (_req, res) => {
+  if (storage.onNetlify) return res.json({ ok: true, skipped: true });
+  const r = await queue.processQueue({ budgetMs: 8000 });
+  res.json({ ok: true, ...r });
 }));
 
 // ---------- Open tracking pixel (public; token is signed) ----------

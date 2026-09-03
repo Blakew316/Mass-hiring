@@ -371,6 +371,8 @@ tr:hover .row-actions { opacity: 1; }
 .progress { height: 8px; background: var(--navy-tint); border-radius: 99px; overflow: hidden; margin-top: 16px; }
 .progress-fill { height: 100%; width: 0; background: var(--blue); border-radius: 99px; transition: width 0.3s ease; }
 .send-card { margin-top: 0; }
+.sending-card .progress { margin-top: 4px; }
+.sending-meta { margin-top: 10px; font-size: 12.5px; }
 .email-all-btn:disabled { opacity: 0.45; }
 .send-progress { margin-top: 14px; font-size: 13px; color: var(--navy-soft); background: var(--mint-tint); border-radius: 10px; padding: 12px 14px; line-height: 1.7; max-height: 160px; overflow-y: auto; }
 
