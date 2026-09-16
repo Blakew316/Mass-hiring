@@ -10,6 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <script src="/icons.js"></script>
+<script src="/xlsx-lite.js"></script>
 </head>
 <body>
 <div class="shell">
@@ -166,7 +167,7 @@
       <header class="page-head">
         <div>
           <h1>Import</h1>
-          <p class="page-sub">Pull potential hires in from Google Sheets, or upload a CSV.</p>
+          <p class="page-sub">Pull potential hires in from a Google Sheet, any spreadsheet or CSV file, or a paste.</p>
         </div>
       </header>
 
@@ -185,26 +186,36 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>CSV upload</h2></div>
-          <p class="muted">Export your list as CSV and drop it here for a one-time mass upload.</p>
+          <div class="card-head"><h2>Upload a file</h2></div>
+          <p class="muted">CSV, TSV, TXT or Excel (.xlsx) — from Excel, Numbers, Google Sheets or any CRM export. Columns are recognised automatically, even without a header row.</p>
           <label class="dropzone" id="dropzone">
-            <input type="file" id="csvFile" accept=".csv,text/csv" hidden>
+            <input type="file" id="csvFile" accept=".csv,.tsv,.txt,.xlsx,text/csv,text/tab-separated-values,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
             <span class="drop-ico" data-icon="upload" data-size="24"></span>
-            <span><strong>Choose a CSV file</strong> or drag it here</span>
+            <span><strong>Choose a file</strong> or drag it here</span>
           </label>
+          <details class="paste-details">
+            <summary>…or paste rows copied from a spreadsheet</summary>
+            <textarea id="pasteBox" class="input textarea" rows="4" placeholder="Select the cells in Excel or Google Sheets, copy, and paste here (a header row is optional)."></textarea>
+            <div class="card-actions"><button class="btn" id="pasteImportBtn">Use pasted rows</button></div>
+          </details>
+          <div class="hint" id="importStatus"></div>
         </div>
       </div>
 
+      <div class="notice" id="importResult" hidden></div>
+
       <div class="card" id="mappingCard" hidden>
         <div class="card-head">
-          <h2>Map columns</h2>
+          <h2>Check the columns</h2>
           <span class="badge tint-blue" id="previewCount"></span>
         </div>
-        <p class="muted">Check that each field points at the right column, then import.</p>
+        <p class="muted">Each field below points at a column from your file — change any that look wrong. <span id="headerlessNote" hidden>This file has no header row, so the columns were recognised from their contents.</span></p>
         <div class="mapping-grid" id="mappingGrid"></div>
         <div class="preview-wrap">
           <table class="table preview-table" id="previewTable"></table>
         </div>
+        <div class="import-summary" id="importSummary"></div>
+        <label class="check-row"><input type="checkbox" id="importUpdateExisting" checked> Fill in blank details (phone, company, location…) for people already in the list</label>
         <div class="card-actions">
           <button class="btn" id="cancelImportBtn">Cancel</button>
           <button class="btn btn-primary" id="commitImportBtn">Import candidates</button>

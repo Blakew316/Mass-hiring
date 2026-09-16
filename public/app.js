@@ -434,7 +434,7 @@
         <td><div class="name-cell">
           <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
           <div><div class="cand-name">${esc(displayName)}</div>
-          ${c.notes ? `<div class="cand-sub">${esc(c.notes)}</div>` : ''}</div>
+          ${(c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
         </div></td>
         <td>${esc(c.email)}</td>
         <td>${esc(c.role) || '<span class="muted">—</span>'}</td>
@@ -674,6 +674,14 @@
   });
 
   // ---------------- Import ----------------
+  const MAP_FIELDS = [
+    ['email', 'Email *'], ['name', 'Full name'], ['firstName', 'First name'], ['lastName', 'Last name'],
+    ['role', 'Role / title'], ['company', 'Company'], ['phone', 'Phone'], ['location', 'Location'], ['notes', 'Notes'],
+  ];
+  const IMPORT_TEXT_CHUNK = 3 * 1024 * 1024;   // characters of file text per request (the server accepts 6 MB)
+  const IMPORT_ROW_BATCH = 2000;
+  const setImportStatus = (msg) => { $('#importStatus').textContent = msg || ''; };
+
   $('#fetchSheetBtn').addEventListener('click', async () => {
     const url = $('#sheetUrl').value.trim();
     if (!url) return toast('Paste your Google Sheet link first.', true);
@@ -683,7 +691,7 @@
       $('#sheetHint').textContent = data.via === 'google-api'
         ? 'Loaded via your connected Google account.'
         : 'Loaded via public link.';
-      showMapping(data, 'google-sheet');
+      showMapping(data, 'google-sheet', 'Google Sheet');
     } catch (err) {
       $('#sheetHint').textContent = '';
       oops(err);
@@ -691,67 +699,247 @@
   });
 
   const dz = $('#dropzone');
-  $('#csvFile').addEventListener('change', (e) => e.target.files[0] && readCsv(e.target.files[0]));
+  $('#csvFile').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importFile(f); });
   dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
   dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
   dz.addEventListener('drop', (e) => {
     e.preventDefault();
     dz.classList.remove('drag');
-    if (e.dataTransfer.files[0]) readCsv(e.dataTransfer.files[0]);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+    if (files.length > 1) toast(`One file at a time — importing ${files[0].name}.`);
+    importFile(files[0]);
+  });
+  $('#pasteImportBtn').addEventListener('click', () => {
+    importText($('#pasteBox').value, 'paste', 'pasted rows').catch((err) => { setImportStatus(''); oops(err); });
   });
 
-  function readCsv(file) {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const data = await api('/api/import/csv', { method: 'POST', body: { text: reader.result } });
-        showMapping(data, 'csv');
-      } catch (err) { oops(err); }
-    };
-    reader.readAsText(file);
+  // Any file → rows. Spreadsheets are read in the browser; text is decoded
+  // whatever its encoding, then handed to the server in pieces if it is big.
+  async function importFile(file) {
+    setImportStatus(`Reading ${file.name}…`);
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+      if (isZip || /\.xlsx$/i.test(file.name)) {
+        if (!isZip) throw new Error(`${file.name} is not a real .xlsx file — export it again from Excel or Google Sheets, or save as CSV.`);
+        const rows = await window.XlsxLite.read(buf);
+        const data = await api('/api/import/csv', { method: 'POST', body: { rows, via: 'xlsx' } });
+        showMapping(data, 'xlsx', file.name);
+        return;
+      }
+      if (/\.(xls|numbers|ods)$/i.test(file.name)) throw new Error(`${file.name} is in a format the app cannot read — save it as .xlsx or .csv and try again.`);
+      await importText(decodeText(bytes), 'csv', file.name);
+    } catch (err) { setImportStatus(''); oops(err); }
   }
 
-  const MAP_FIELDS = [
-    ['email', 'Email *'], ['name', 'Full name'], ['firstName', 'First name'],
-    ['lastName', 'Last name'], ['role', 'Role / title'], ['company', 'Company'],
-    ['phone', 'Phone'], ['notes', 'Notes'],
-  ];
+  function decodeText(bytes) {
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+    // UTF-16 without a mark: in Latin text every other byte is zero.
+    const n = Math.min(bytes.length, 4000);
+    let zeros = 0;
+    for (let i = 1; i < n; i += 2) if (bytes[i] === 0) zeros++;
+    if (n > 40 && zeros > n / 4) return new TextDecoder('utf-16le').decode(bytes);
+    const utf8 = new TextDecoder('utf-8').decode(bytes);
+    // Windows exports (Excel "CSV") are often Windows-1252; UTF-8 shows that as the replacement character.
+    if (/\ufffd/.test(utf8)) { try { return new TextDecoder('windows-1252').decode(bytes); } catch { return utf8; } }
+    return utf8;
+  }
 
-  function showMapping(data, source) {
+  async function importText(text, source, label) {
+    const t = String(text || '');
+    if (!t.trim()) throw new Error(source === 'paste' ? 'Paste some rows first.' : 'That file is empty.');
+    setImportStatus(`Reading ${label || 'rows'}…`);
+    let data;
+    if (t.length <= IMPORT_TEXT_CHUNK) {
+      data = await api('/api/import/csv', { method: 'POST', body: { text: t, via: source } });
+    } else {
+      const pieces = chunkText(t, IMPORT_TEXT_CHUNK);
+      data = await api('/api/import/csv', { method: 'POST', body: { text: pieces[0], via: source } });
+      const header = data.headerless ? '' : pieces[0].split(/\r\n|\r|\n/, 1)[0] + '\n';
+      for (let i = 1; i < pieces.length; i++) {
+        setImportStatus(`Reading ${label || 'rows'}… part ${i + 1} of ${pieces.length}`);
+        const more = await api('/api/import/csv', { method: 'POST', body: { text: header + pieces[i], via: source } });
+        data.rows.push(...more.rows);
+      }
+    }
+    showMapping(data, source, label);
+  }
+
+  // Split at line breaks that are not inside a quoted field.
+  function chunkText(t, size) {
+    const out = [];
+    let start = 0;
+    while (start < t.length) {
+      if (t.length - start <= size) { out.push(t.slice(start)); break; }
+      let cut = start + size;
+      let q = false;
+      for (let i = start; i < cut; i++) if (t[i] === '"') q = !q;
+      while (cut > start && !(t[cut] === '\n' && !q)) { cut--; if (t[cut] === '"') q = !q; }
+      if (cut <= start) cut = start + size;
+      out.push(t.slice(start, cut));
+      start = cut + 1;
+    }
+    return out;
+  }
+
+  const currentMapping = () => {
+    const mapping = {};
+    $$('.map-select').forEach((sel) => { mapping[sel.dataset.key] = Number(sel.value); });
+    return mapping;
+  };
+
+  function showMapping(data, source, label) {
     pendingImport = { ...data, source };
-    $('#previewCount').textContent = `${data.rows.length} rows`;
-    $('#mappingGrid').innerHTML = MAP_FIELDS.map(([key, label]) => `
-      <div><label class="label">${label}</label>
+    setImportStatus('');
+    $('#previewCount').textContent = `${data.rows.length.toLocaleString()} row${data.rows.length === 1 ? '' : 's'}${label ? ` · ${label}` : ''}`;
+    const conf = data.confidence || {};
+    const note = (key) => conf[key] === 'content'
+      ? ' <span class="map-note" title="Recognised from the values in the column">recognised</span>'
+      : conf[key] === 'guess' ? ' <span class="map-note map-guess" title="Best guess — check it">guessed</span>' : '';
+    $('#mappingGrid').innerHTML = MAP_FIELDS.map(([key, lbl]) => `
+      <div><label class="label">${lbl}${note(key)}</label>
         <select class="input map-select" data-key="${key}">
           <option value="-1">— skip —</option>
           ${data.headers.map((h, i) =>
             `<option value="${i}" ${data.mapping[key] === i ? 'selected' : ''}>${esc(h)}</option>`).join('')}
         </select></div>`).join('');
+    $('#headerlessNote').hidden = !data.headerless;
     const preview = data.rows.slice(0, 5);
     $('#previewTable').innerHTML =
       `<thead><tr>${data.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>` +
       `<tbody>${preview.map((r) => `<tr>${data.headers.map((_, i) => `<td>${esc(r[i] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    $('#importUpdateExisting').checked = true;
+    $('#importResult').hidden = true;
     $('#mappingCard').hidden = false;
     $('#mappingCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    runDryRun();
+  }
+
+  // What the import would do, shown before it happens and refreshed whenever
+  // a column choice changes.
+  let dryRunSeq = 0;
+  async function runDryRun() {
+    if (!pendingImport) return;
+    const seq = ++dryRunSeq;
+    const mapping = currentMapping();
+    const sum = $('#importSummary');
+    if (mapping.email === -1) {
+      sum.innerHTML = '<span class="bad-text">Pick which column holds the email address.</span>';
+      setCommitLabel(null);
+      return;
+    }
+    sum.textContent = 'Checking these rows against your list…';
+    setCommitLabel(null);
+    try {
+      const totals = await dryRunBatches(pendingImport.rows, mapping);
+      if (seq !== dryRunSeq || !pendingImport) return;
+      pendingImport.dryRun = totals;
+      renderSummary(totals);
+    } catch (err) {
+      if (seq === dryRunSeq) sum.textContent = `Could not check the rows: ${err.message}`;
+    }
+  }
+  const debouncedDryRun = debounce(runDryRun, 200);
+  $('#mappingGrid').addEventListener('change', debouncedDryRun);
+  $('#importUpdateExisting').addEventListener('change', () => { if (pendingImport && pendingImport.dryRun) setCommitLabel(pendingImport.dryRun); });
+
+  async function dryRunBatches(rows, mapping) {
+    const totals = { total: 0, newCount: 0, existing: 0, updatable: 0, duplicate: 0, invalid: 0, invalidSamples: [], existingSamples: [] };
+    for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
+      const r = await api('/api/import/preview', { method: 'POST', body: { rows: rows.slice(i, i + IMPORT_ROW_BATCH), mapping } });
+      for (const k of ['total', 'newCount', 'existing', 'updatable', 'duplicate', 'invalid']) totals[k] += r[k] || 0;
+      if (totals.invalidSamples.length < 10) totals.invalidSamples.push(...(r.invalidSamples || []).map((x) => ({ ...x, row: x.row + i })));
+      if (totals.existingSamples.length < 5) totals.existingSamples.push(...(r.existingSamples || []));
+    }
+    return totals;
+  }
+
+  function renderSummary(t) {
+    const parts = [`<strong>${t.newCount.toLocaleString()} new</strong>`];
+    if (t.existing) parts.push(`${t.existing.toLocaleString()} already in your list${t.updatable ? ` (${t.updatable.toLocaleString()} with blank details this file can fill in)` : ''}`);
+    if (t.duplicate) parts.push(`${t.duplicate.toLocaleString()} repeated in the file`);
+    if (t.invalid) parts.push(`<span class="bad-text">${t.invalid.toLocaleString()} without a usable email</span>`);
+    let html = `<div class="summary-line">${t.total.toLocaleString()} row${t.total === 1 ? '' : 's'}: ${parts.join(' · ')}</div>`;
+    if (t.existing && !t.newCount) {
+      html += `<div class="muted small">Everyone in this file is already in your candidate list, so there is nobody new to add${t.updatable ? ' — their blank details can still be filled in from the file' : ''}.</div>`;
+    }
+    if (t.invalidSamples.length) {
+      html += `<ul class="problem-list">${t.invalidSamples.slice(0, 10).map((x) =>
+        `<li>Row ${x.row}${x.name ? ` (${esc(x.name)})` : ''}: ${x.cell ? `“${esc(x.cell)}” is not an email address` : 'no email address in the row'}</li>`).join('')}` +
+        `${t.invalid > 10 ? `<li class="muted">…and ${(t.invalid - 10).toLocaleString()} more</li>` : ''}</ul>`;
+    }
+    $('#importSummary').innerHTML = html;
+    setCommitLabel(t);
+  }
+
+  function setCommitLabel(t) {
+    const btn = $('#commitImportBtn');
+    if (!t) { btn.disabled = true; btn.textContent = 'Import candidates'; return; }
+    const upd = $('#importUpdateExisting').checked ? t.updatable : 0;
+    if (t.newCount) {
+      btn.disabled = false;
+      btn.textContent = `Import ${t.newCount.toLocaleString()} candidate${t.newCount === 1 ? '' : 's'}${upd ? ` and update ${upd.toLocaleString()}` : ''}`;
+    } else if (upd) {
+      btn.disabled = false;
+      btn.textContent = `Update ${upd.toLocaleString()} existing candidate${upd === 1 ? '' : 's'}`;
+    } else {
+      btn.disabled = true;
+      btn.textContent = 'Nothing new to import';
+    }
   }
 
   $('#cancelImportBtn').addEventListener('click', () => { $('#mappingCard').hidden = true; pendingImport = null; });
   $('#commitImportBtn').addEventListener('click', async () => {
     if (!pendingImport) return;
-    const mapping = {};
-    $$('.map-select').forEach((sel) => { mapping[sel.dataset.key] = Number(sel.value); });
+    const mapping = currentMapping();
     if (mapping.email === -1) return toast('Pick which column holds the email address.', true);
+    const btn = $('#commitImportBtn');
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Importing…';
+    const totals = { added: 0, updated: 0, existing: 0, duplicate: 0, invalid: 0 };
     try {
-      const r = await api('/api/import/commit', { method: 'POST', body: {
-        rows: pendingImport.rows, mapping, source: pendingImport.source,
-      }});
-      toast(`Imported ${r.added} candidates${r.skipped ? ` (${r.skipped} skipped)` : ''}.`);
+      const rows = pendingImport.rows;
+      for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
+        if (rows.length > IMPORT_ROW_BATCH) btn.textContent = `Importing… ${Math.min(i + IMPORT_ROW_BATCH, rows.length).toLocaleString()} / ${rows.length.toLocaleString()}`;
+        const r = await api('/api/import/commit', { method: 'POST', body: {
+          rows: rows.slice(i, i + IMPORT_ROW_BATCH), mapping, source: pendingImport.source, updateExisting: $('#importUpdateExisting').checked,
+        }});
+        for (const k of Object.keys(totals)) totals[k] += r[k] || 0;
+      }
       $('#mappingCard').hidden = true;
       pendingImport = null;
+      showImportResult(totals);
       await refresh();
-      show('candidates');
-    } catch (err) { oops(err); }
+      $('#importResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = label;
+      oops(err);
+    }
   });
+
+  function showImportResult(t) {
+    const el = $('#importResult');
+    const good = t.added > 0 || t.updated > 0;
+    const bits = [`<strong>${t.added.toLocaleString()} added</strong>`];
+    if (t.updated) bits.push(`${t.updated.toLocaleString()} existing updated with new details`);
+    if (t.existing) bits.push(`${t.existing.toLocaleString()} already in your list`);
+    if (t.duplicate) bits.push(`${t.duplicate.toLocaleString()} repeated in the file`);
+    if (t.invalid) bits.push(`${t.invalid.toLocaleString()} without a usable email`);
+    el.className = `notice ${good ? 'ok' : 'warn'}`;
+    el.innerHTML = `<span class="notice-ico">${icon(good ? 'checkcircle' : 'alert', 16)}</span><div>${bits.join(' · ')}` +
+      (!t.added && t.existing ? '<br><span class="small">Nothing was added because every address in the file is already in your candidate list.</span>' : '') +
+      `</div><button class="btn notice-action" id="viewCandidatesBtn">View candidates</button>`;
+    el.hidden = false;
+    $('#viewCandidatesBtn').addEventListener('click', () => show('candidates'));
+    toast(t.added ? `Imported ${t.added.toLocaleString()} candidate${t.added === 1 ? '' : 's'}.`
+      : t.updated ? `Updated ${t.updated.toLocaleString()} existing candidate${t.updated === 1 ? '' : 's'}.`
+      : 'Nothing new to import — everyone in that file is already in your list.', !good);
+  }
 
   // ---------------- Template ----------------
   const SAMPLE = { firstName: 'Jordan', lastName: 'Lee', name: 'Jordan Lee', role: 'Payments Analyst', company: 'Acme Corp', email: 'jordan@example.com' };

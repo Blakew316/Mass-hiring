@@ -24,9 +24,12 @@ That's it for browsing the dashboard. The integrations below each take a couple 
 ## 1. Import candidates
 
 - **Google Sheet**: paste the sheet link on the Import page. If the sheet is shared as *"Anyone with the link → Viewer"* it works immediately, with no Google setup. Private sheets work once Google is connected (step 2b).
-- **CSV**: drag-and-drop on the Import page.
+- **A file**: drag-and-drop or choose a CSV, TSV, TXT or Excel (.xlsx) file on the Import page — exports from Excel (Windows or Mac), Numbers, Google Sheets, Outlook, LinkedIn or any CRM. Any delimiter, encoding or line-ending works, files up to 50,000 rows are read in pieces, and Excel files are read in the browser with no add-ons.
+- **Paste**: copy cells straight out of a spreadsheet and paste them into the box under the drop zone.
 
-First row should be headers — e.g. `Name, Email, Role, Company`. The app guesses the column mapping and lets you correct it before importing. Rows whose email cell isn't a single valid address are skipped and counted, so nothing a spreadsheet contains can end up in a message header.
+A header row helps but is optional: columns are recognised from what they contain (a column of email addresses is the email column whatever it is called), and every guess is shown for you to correct. Before anything is imported the page tells you exactly what will happen — how many people are new, how many are already in your list, how many rows repeat inside the file and which rows have no usable email (with the row number and the offending cell). Re-importing a master list is safe and useful: nobody is added twice, and blank details (phone, company, location…) on people already in the list are filled in from the file when the box is ticked. The result shows the same counts afterwards.
+
+Rows whose email cell isn't a single valid address are listed rather than imported, so nothing a spreadsheet contains can end up in a message header.
 
 ## 2. Send from your work email (pick ONE)
 

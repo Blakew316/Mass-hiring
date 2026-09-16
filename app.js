@@ -210,66 +210,146 @@ app.get('/api/template/attachments/:id/preview', asyncRoute(async (req, res) => 
   res.json({ ok: true, dataUrl: `data:${meta.type};base64,${bytes.toString('base64')}` });
 }));
 
-// ---------- Import (Google Sheet / CSV) ----------
-function toPreview(rows) {
-  if (!rows.length) throw new Error('No rows found.');
-  const headers = rows[0].map((h, i) => String(h || '').trim() || `Column ${i + 1}`);
-  return {
-    headers,
-    rows: rows.slice(1),
-    mapping: csv.guessMapping(rows[0]),
-  };
+// ---------- Import (Google Sheet / CSV / spreadsheet / paste) ----------
+const MAX_IMPORT_ROWS = 50000;
+const IMPORT_FIELDS = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes'];
+
+// Rows → { headers, rows, mapping, confidence, headerless }. When the first
+// row is data rather than labels, headers are synthesised and the columns
+// are recognised from their contents.
+function toPreview(allRows) {
+  const rows = (Array.isArray(allRows) ? allRows : [])
+    .filter((r) => Array.isArray(r))
+    .map((r) => r.map(csv.cleanCell))
+    .filter((r) => r.some(Boolean));
+  if (!rows.length) throw new Error('No rows found in that file — it appears to be empty.');
+  if (rows.length > MAX_IMPORT_ROWS + 1) throw new Error(`That is more than ${MAX_IMPORT_ROWS.toLocaleString()} rows — split the file and import it in parts.`);
+  const width = rows.reduce((w, r) => Math.max(w, r.length), 0);
+  for (const r of rows) while (r.length < width) r.push('');
+  const headerless = !csv.looksLikeHeader(rows[0]);
+  const headers = headerless
+    ? rows[0].map((_, i) => `Column ${i + 1}`)
+    : rows[0].map((h, i) => h || `Column ${i + 1}`);
+  const data = headerless ? rows : rows.slice(1);
+  const { mapping, confidence } = csv.guessMapping(headerless ? headers.map(() => '') : rows[0], data);
+  return { headers, rows: data, mapping, confidence, headerless };
+}
+
+function rowsFromBody(body) {
+  if (Array.isArray(body.rows)) return body.rows;
+  if (typeof body.text === 'string') return csv.parseCsv(body.text, { delimiter: body.delimiter || undefined });
+  throw new Error('Nothing to import — send the file text or its rows.');
 }
 
 app.post('/api/import/sheet', asyncRoute(async (req, res) => {
   const db = await store.load();
   const { rows, via } = await google.fetchSheetRows(req.body.url, db.settings);
-  db.settings.lastSheetUrl = String(req.body.url || '').trim();
-  await store.save(db);
+  await store.update((d) => { d.settings.lastSheetUrl = String(req.body.url || '').trim(); });
   res.json({ ...toPreview(rows), via });
 }));
-
 app.post('/api/import/csv', asyncRoute(async (req, res) => {
-  const rows = csv.parseCsv(String(req.body.text || ''));
-  res.json({ ...toPreview(rows), via: 'csv' });
+  res.json({ ...toPreview(rowsFromBody(req.body || {})), via: req.body.via || 'csv' });
+}));
+
+// The one place that decides what each row means. Used by the dry run the
+// dashboard shows before importing and by the import itself, so the numbers
+// the user sees are the numbers they get.
+//   new        – a usable address not yet in the list
+//   existing   – already in the list (optionally enriched with blank fields)
+//   duplicate  – the same address earlier in this same file
+//   invalid    – no usable email address anywhere in the row
+function analyzeImport(candidates, rows, mapping) {
+  const m = mapping || {};
+  const col = (row, key) => (m[key] != null && m[key] >= 0 ? csv.cleanCell(row[m[key]]) : '');
+  const byEmail = new Map(candidates.map((c) => [c.email.toLowerCase(), c]));
+  const seen = new Set();
+  const out = [];
+  rows.forEach((row, idx) => {
+    if (!Array.isArray(row)) return;
+    let email = address.normalize(col(row, 'email'));
+    // A shifted row: the address is there, just not in the mapped column.
+    if (!email) {
+      const found = row.map((v) => address.normalize(v)).filter(Boolean);
+      if (found.length === 1) email = found[0];
+    }
+    const firstName = col(row, 'firstName');
+    const lastName = col(row, 'lastName');
+    const fields = {
+      name: col(row, 'name') || [firstName, lastName].filter(Boolean).join(' '),
+      firstName, lastName,
+      role: col(row, 'role'), company: col(row, 'company'), phone: col(row, 'phone'),
+      location: col(row, 'location'), notes: col(row, 'notes'),
+    };
+    if (!email) { out.push({ idx, kind: 'invalid', cell: col(row, 'email') || row.find((v) => String(v || '').includes('@')) || '', fields }); return; }
+    const key = email.toLowerCase();
+    if (seen.has(key)) { out.push({ idx, kind: 'duplicate', email, fields }); return; }
+    seen.add(key);
+    const existing = byEmail.get(key);
+    if (existing) {
+      const fill = {};
+      for (const k of IMPORT_FIELDS) if (fields[k] && !String(existing[k] || '').trim()) fill[k] = fields[k];
+      out.push({ idx, kind: 'existing', email, fields, existing, fill });
+      return;
+    }
+    out.push({ idx, kind: 'new', email, fields });
+  });
+  return out;
+}
+
+function summarize(analysis) {
+  const count = (k) => analysis.filter((a) => a.kind === k).length;
+  return {
+    total: analysis.length,
+    newCount: count('new'),
+    existing: count('existing'),
+    updatable: analysis.filter((a) => a.kind === 'existing' && Object.keys(a.fill).length).length,
+    duplicate: count('duplicate'),
+    invalid: count('invalid'),
+    invalidSamples: analysis.filter((a) => a.kind === 'invalid').slice(0, 10).map((a) => ({ row: a.idx + 2, cell: String(a.cell || '').slice(0, 80), name: a.fields.name })),
+    existingSamples: analysis.filter((a) => a.kind === 'existing').slice(0, 5).map((a) => ({ email: a.email, name: a.existing.name || a.fields.name })),
+  };
+}
+
+// Dry run: exactly what the import would do, against the list as it is now.
+app.post('/api/import/preview', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  res.json({ ok: true, ...summarize(analyzeImport(db.candidates, rows, req.body.mapping)) });
 }));
 
 app.post('/api/import/commit', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  const { rows, mapping, source } = req.body;
-  const pick = (row, key) => {
-    const idx = mapping[key];
-    return idx != null && idx >= 0 ? String(row[idx] ?? '').trim() : '';
-  };
-  const existing = new Set(db.candidates.map((c) => c.email.toLowerCase()));
-  let added = 0, skipped = 0;
-  for (const row of rows) {
-    // Sheet cells are outside data: an address that could not go in a header
-    // (newlines, extra recipients, junk) is dropped rather than stored.
-    const email = address.normalize(pick(row, 'email'));
-    if (!email) { skipped++; continue; }
-    if (existing.has(email.toLowerCase())) { skipped++; continue; }
-    existing.add(email.toLowerCase());
-    const firstName = pick(row, 'firstName');
-    const lastName = pick(row, 'lastName');
-    const name = pick(row, 'name') || [firstName, lastName].filter(Boolean).join(' ');
-    db.candidates.push({
-      id: store.rid(),
-      name, firstName, lastName, email,
-      role: pick(row, 'role'),
-      company: pick(row, 'company'),
-      phone: pick(row, 'phone'),
-      notes: pick(row, 'notes'),
-      status: 'new',
-      source: source || 'import',
-      addedAt: new Date().toISOString(),
-      lastEmailedAt: null,
-      bookedAt: null,
-    });
-    added++;
-  }
-  await store.save(db);
-  res.json({ ok: true, added, skipped });
+  const { rows, mapping, source } = req.body || {};
+  if (!Array.isArray(rows) || !rows.length) throw new Error('Nothing to import.');
+  if (rows.length > MAX_IMPORT_ROWS) throw new Error(`Import at most ${MAX_IMPORT_ROWS.toLocaleString()} rows at a time.`);
+  const updateExisting = req.body.updateExisting !== false;
+  let result = null;
+  // Decided against the latest version of the list, retried on a concurrent
+  // change, so a send running in the background can never make rows vanish.
+  await store.update((db) => {
+    const analysis = analyzeImport(db.candidates, rows, mapping);
+    let added = 0, updated = 0;
+    const now = new Date().toISOString();
+    for (const a of analysis) {
+      if (a.kind === 'new') {
+        db.candidates.push({
+          id: store.rid(),
+          ...a.fields,
+          email: a.email,
+          status: 'new',
+          source: source || 'import',
+          addedAt: now,
+          lastEmailedAt: null,
+          bookedAt: null,
+        });
+        added++;
+      } else if (a.kind === 'existing' && updateExisting && Object.keys(a.fill).length) {
+        Object.assign(a.existing, a.fill);
+        updated++;
+      }
+    }
+    result = { ok: true, added, updated, ...summarize(analysis) };
+  });
+  res.json(result);
 }));
 
 // ---------- Candidates ----------
@@ -290,6 +370,7 @@ app.post('/api/candidates', asyncRoute(async (req, res) => {
     role: String(b.role || '').trim(),
     company: String(b.company || '').trim(),
     phone: String(b.phone || '').trim(),
+    location: String(b.location || '').trim(),
     notes: String(b.notes || '').trim(),
     status: 'new',
     source: 'manual',
@@ -306,7 +387,7 @@ app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
   const db = await store.load();
   const c = db.candidates.find((x) => x.id === req.params.id);
   if (!c) throw new Error('Candidate not found.');
-  const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'notes', 'status'];
+  const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
   for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
   if ('email' in req.body) {
     const email = address.normalize(req.body.email);

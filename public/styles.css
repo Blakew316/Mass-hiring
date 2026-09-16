@@ -480,3 +480,21 @@ tr:hover .row-actions { opacity: 1; }
 .pv-attach { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--navy-soft); background: var(--navy-tint); padding: 4px 10px; border-radius: 99px; }
 .btn-link { background: none; border: none; padding: 0; font: inherit; font-size: 12px; font-weight: 600; color: var(--blue-deep); cursor: pointer; }
 .btn-link:hover { text-decoration: underline; }
+
+/* Import: paste box, dry-run summary, results */
+.paste-details { margin-top: 12px; }
+.paste-details summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--blue-deep); list-style: none; }
+.paste-details summary::-webkit-details-marker { display: none; }
+.paste-details[open] summary { margin-bottom: 8px; }
+.paste-details .card-actions { margin-top: 8px; }
+.import-summary { margin: 14px 0 6px; font-size: 13.5px; color: var(--navy); }
+.import-summary .summary-line { margin-bottom: 4px; }
+.import-summary .bad-text, .bad-text { color: var(--red); font-weight: 600; }
+.problem-list { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+.problem-list li { margin: 2px 0; }
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--navy); margin: 8px 0 4px; cursor: pointer; }
+.check-row input { width: 15px; height: 15px; }
+.map-note { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--green); background: var(--green-tint); padding: 1px 6px; border-radius: 99px; margin-left: 4px; vertical-align: middle; }
+.map-note.map-guess { color: var(--amber); background: var(--amber-tint); }
+.notice.ok { background: var(--green-tint); color: #145a32; border-color: #cdeedb; }
+.notice .notice-action { margin-left: auto; flex: none; align-self: center; }
