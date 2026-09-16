@@ -15,6 +15,7 @@ const calendly = require('./lib/calendly');
 const tracking = require('./lib/tracking');
 const queue = require('./lib/queue');
 const attachments = require('./lib/attachments');
+const address = require('./lib/email-address');
 const crypto = require('crypto');
 const { renderEmail } = require('./lib/template');
 
@@ -159,7 +160,19 @@ const publicAttachment = ({ id, name, type, size, builtin }) => ({ id, name, typ
 app.post('/api/template/attachments', asyncRoute(async (req, res) => {
   const db = await store.load();
   const meta = await attachments.add(db, req.body || {});
-  const fresh = await store.update((d) => { d.template.attachments = [...attachments.list(d), meta]; });
+  let fresh;
+  try {
+    // The limits are enforced here too: between the check above and this
+    // commit another upload may have landed, and the commit is what counts.
+    fresh = await store.update((d) => {
+      const current = attachments.list(d);
+      attachments.checkRoom(current, meta.size);
+      d.template.attachments = [...current, meta];
+    });
+  } catch (err) {
+    await attachments.discard(meta);   // the bytes were stored but never attached
+    throw err;
+  }
   res.json({ ok: true, attachment: publicAttachment(meta), attachments: attachments.list(fresh).map(publicAttachment) });
 }));
 
@@ -168,7 +181,21 @@ app.delete('/api/template/attachments/:id', asyncRoute(async (req, res) => {
   const meta = attachments.list(db).find((a) => a.id === req.params.id);
   if (!meta) throw new Error('Attachment not found.');
   const fresh = await store.update((d) => { d.template.attachments = attachments.list(d).filter((a) => a.id !== meta.id); });
-  await attachments.remove(meta);
+  // Already unreferenced: a failure to delete the bytes must not fail the
+  // request, or a retry would report "not found" and leave them anyway.
+  await attachments.discard(meta);
+  res.json({ ok: true, attachments: attachments.list(fresh).map(publicAttachment) });
+}));
+
+// Put the flyer that ships with the app back after it was removed.
+app.post('/api/template/attachments/restore-builtin', asyncRoute(async (_req, res) => {
+  const meta = attachments.builtinMeta();
+  if (!meta) throw new Error('The built-in flyer is not available in this build.');
+  const fresh = await store.update((d) => {
+    const current = attachments.list(d).filter((a) => a.id !== meta.id);
+    attachments.checkRoom(current, meta.size);
+    d.template.attachments = [meta, ...current];
+  });
   res.json({ ok: true, attachments: attachments.list(fresh).map(publicAttachment) });
 }));
 
@@ -217,8 +244,10 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
   const existing = new Set(db.candidates.map((c) => c.email.toLowerCase()));
   let added = 0, skipped = 0;
   for (const row of rows) {
-    const email = pick(row, 'email');
-    if (!email || !email.includes('@')) { skipped++; continue; }
+    // Sheet cells are outside data: an address that could not go in a header
+    // (newlines, extra recipients, junk) is dropped rather than stored.
+    const email = address.normalize(pick(row, 'email'));
+    if (!email) { skipped++; continue; }
     if (existing.has(email.toLowerCase())) { skipped++; continue; }
     existing.add(email.toLowerCase());
     const firstName = pick(row, 'firstName');
@@ -247,8 +276,9 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
 app.post('/api/candidates', asyncRoute(async (req, res) => {
   const db = await store.load();
   const b = req.body;
-  if (!b.email || !String(b.email).includes('@')) throw new Error('A valid email is required.');
-  if (db.candidates.some((c) => c.email.toLowerCase() === String(b.email).toLowerCase())) {
+  const email = address.normalize(b.email);
+  if (!email) throw new Error('A valid email address is required.');
+  if (db.candidates.some((c) => c.email.toLowerCase() === email.toLowerCase())) {
     throw new Error('A candidate with that email already exists.');
   }
   const c = {
@@ -256,7 +286,7 @@ app.post('/api/candidates', asyncRoute(async (req, res) => {
     name: String(b.name || '').trim(),
     firstName: String(b.firstName || '').trim(),
     lastName: String(b.lastName || '').trim(),
-    email: String(b.email).trim(),
+    email,
     role: String(b.role || '').trim(),
     company: String(b.company || '').trim(),
     phone: String(b.phone || '').trim(),
@@ -276,8 +306,13 @@ app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
   const db = await store.load();
   const c = db.candidates.find((x) => x.id === req.params.id);
   if (!c) throw new Error('Candidate not found.');
-  const fields = ['name', 'firstName', 'lastName', 'email', 'role', 'company', 'phone', 'notes', 'status'];
+  const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'notes', 'status'];
   for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
+  if ('email' in req.body) {
+    const email = address.normalize(req.body.email);
+    if (!email) throw new Error('That is not a valid email address.');
+    c.email = email;
+  }
   await store.save(db);
   res.json({ ok: true, candidate: c });
 }));

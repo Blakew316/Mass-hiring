@@ -827,6 +827,9 @@
         <span class="attach-size muted small">${fmtSize(a.size)}</span>
         <button class="icon-btn attach-remove" title="Remove" aria-label="Remove ${esc(a.name)}" data-id="${esc(a.id)}">${icon('x', 14)}</button>
       </li>`).join('') || '<li class="attach-empty muted small">No attachments — emails go out as text only.</li>';
+    // The flyer that ships with the app can always be put back.
+    const hasBuiltin = list.some((a) => a.builtin);
+    $('#attachRestore').hidden = hasBuiltin || list.length >= 3;
     $('#attachAddBtn').disabled = list.length >= 3;
     list.filter((a) => a.type && a.type.startsWith('image/') && !thumbs[a.id]).forEach((a) => loadThumb(a.id));
     const pv = $('#pvAttachments');
@@ -848,17 +851,48 @@
     fr.readAsDataURL(blob);
   });
   // Big images are re-encoded in the browser so they fit and send quickly.
+  // A transparent image stays a PNG (JPEG has no transparency, and flattening
+  // one onto a default black canvas ruins dark artwork); only if that is still
+  // too large is it flattened onto white and saved as a JPEG.
   async function shrinkImage(file) {
     const bmp = await createImageBitmap(file);
-    const scale = Math.min(1, 2200 / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bmp.width * scale));
-    canvas.height = Math.max(1, Math.round(bmp.height * scale));
-    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.9));
-    if (!blob) throw new Error('Could not shrink the image.');
-    return { blob, type: 'image/jpeg', name: file.name.replace(/\.[^.]+$/, '') + '.jpg' };
+    const draw = (maxEdge, background) => {
+      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bmp.width * scale));
+      canvas.height = Math.max(1, Math.round(bmp.height * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      if (background) { ctx.fillStyle = background; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+      ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      return { canvas, ctx };
+    };
+    const base = file.name.replace(/\.[^.]+$/, '');
+    const toBlob = (canvas, type, q) => new Promise((r) => canvas.toBlob(r, type, q));
+    const { canvas, ctx } = draw(2200, null);
+    let transparent = false;
+    try {
+      const px = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 3; i < px.length; i += 4) { if (px[i] < 255) { transparent = true; break; } }
+    } catch { transparent = true; }   // tainted canvas: assume transparency and keep PNG
+    if (transparent) {
+      const png = await toBlob(canvas, 'image/png');
+      if (png && png.size <= MAX_ATTACH) return { blob: png, type: 'image/png', name: `${base}.png` };
+    }
+    const flat = draw(2200, '#ffffff').canvas;
+    for (const q of [0.9, 0.8, 0.7]) {
+      const jpg = await toBlob(flat, 'image/jpeg', q);
+      if (jpg && jpg.size <= MAX_ATTACH) return { blob: jpg, type: 'image/jpeg', name: `${base}.jpg` };
+    }
+    throw new Error('That image is too large even after shrinking — export it smaller, or as a PDF.');
   }
+  $('#attachRestore').addEventListener('click', async () => {
+    try {
+      await api('/api/template/attachments/restore-builtin', { method: 'POST' });
+      toast('The Account Executive flyer is attached again.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
   $('#attachAddBtn').addEventListener('click', () => $('#attachFile').click());
   $('#attachFile').addEventListener('change', async () => {
     const file = $('#attachFile').files[0];
@@ -867,14 +901,14 @@
     const btn = $('#attachAddBtn');
     btn.disabled = true;
     try {
-      let blob = file, name = file.name, type = file.type;
+      let blob = file, name = file.name;
       if (file.size > MAX_ATTACH && /^image\/(png|jpeg|webp)$/.test(file.type)) {
         toast('Large image — shrinking it so it sends quickly…');
-        ({ blob, type, name } = await shrinkImage(file));
+        ({ blob, name } = await shrinkImage(file));
       }
       if (blob.size > MAX_ATTACH) throw new Error('That file is over 4 MB. Export it smaller, or as a PDF.');
       const data = await toBase64(blob);
-      await api('/api/template/attachments', { method: 'POST', body: { name, type, data } });
+      await api('/api/template/attachments', { method: 'POST', body: { name, data } });
       toast(`${name} will be attached to every email.`);
       await refresh();
     } catch (err) { oops(err); }

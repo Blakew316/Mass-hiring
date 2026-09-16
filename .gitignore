@@ -1,7 +1,7 @@
 node_modules/
 .env
-data/db.json
-data/tokens.json
+# Local data: candidates, tokens, queue state and attachment bytes.
+data/
 *.log
 .DS_Store
 
