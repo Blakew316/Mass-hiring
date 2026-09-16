@@ -239,6 +239,15 @@
             <button class="token" data-token="{{role}}">role</button>
             <button class="token" data-token="{{company}}">company</button>
           </div>
+          <div class="attach-block">
+            <label class="label">Attachments <span class="muted small">— sent with every email</span></label>
+            <ul class="attach-list" id="attachList"></ul>
+            <div class="attach-actions">
+              <button class="btn" id="attachAddBtn"><span data-icon="paperclip" data-size="14"></span> Add file</button>
+              <input type="file" id="attachFile" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" hidden>
+              <span class="muted small">PNG, JPG, GIF, WebP or PDF · up to 4 MB each, 3 files</span>
+            </div>
+          </div>
         </div>
         <div class="card">
           <div class="card-head">
@@ -252,6 +261,7 @@
             </div>
             <div class="email-body" id="pvBody"></div>
             <div class="email-signature" id="pvSignature" hidden></div>
+            <div class="pv-attachments" id="pvAttachments" hidden></div>
           </div>
           <div class="hint" id="calendlyHintTpl"></div>
           <div class="hint" id="signatureHintTpl"></div>
@@ -366,6 +376,7 @@
       <label class="label">Message <span class="muted small">(placeholders are filled per recipient)</span></label>
       <textarea id="composeBody" class="input textarea" rows="10"></textarea>
       <div class="hint" id="composeHint"></div>
+      <div class="compose-attach" id="composeAttach" hidden></div>
       <div class="progress" id="sendBar" hidden><div class="progress-fill" id="sendBarFill"></div></div>
       <div class="send-progress" id="sendProgress" hidden></div>
     </div>

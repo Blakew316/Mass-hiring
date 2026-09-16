@@ -16,6 +16,8 @@ await build({
   format: 'esm',
   target: 'node20',
   legalComments: 'none',
+  // The built-in flyer (assets/attachments) travels inside the bundle.
+  loader: { '.png': 'binary' },
   logLevel: 'info',
   // Bundled CommonJS packages still use require()/__dirname/__filename. Netlify's
   // packager prepends its own `let require/__dirname/__filename` shims to the

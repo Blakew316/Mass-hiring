@@ -42,6 +42,8 @@ First row should be headers — e.g. `Name, Email, Role, Company`. The app guess
 
 With Google connected and the **"Append my Gmail signature"** box ticked in Settings, the signature configured on your work Gmail account is read from Gmail and appended to every outreach email automatically — there is nothing to type in the app. (Gmail only inserts signatures when you compose in Gmail itself; API and SMTP sends don't get it, so the app does this for you. SMTP/App Password sends can't include it.) Reading the signature uses Google's `gmail.settings.basic` permission, which Google classes as *restricted*: fine for a Workspace "Internal" app, but untick the box if you're using a personal-Gmail "External" app — see SETUP.md.
 
+**Attachments.** The *Account Executive* careers flyer ships with the app and is attached to every outreach email out of the box. On the Email Template page you can remove it or add up to three files of your own (PNG, JPG, GIF, WebP or PDF, 4 MB each; a bigger image is shrunk in the browser before upload). Attachments are sent on both the Gmail API and App Password paths and are listed in the preview and the send dialog.
+
 Emails are sent one-by-one so each candidate receives an individual, personal message — never a CC/BCC blast. **Email all not-contacted candidates** (on the Email Template page, the Dashboard, or the Candidates page) queues everyone still marked *Not contacted*; a scheduled job on the server then sends them automatically, a few per minute, so you can close the tab. The Dashboard shows progress and a Stop button.
 
 ### Gmail sending limits (why the queue paces itself)

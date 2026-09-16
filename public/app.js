@@ -543,6 +543,9 @@
       (cands.length > 6 ? `<span class="to-more">+${cands.length - 6} more</span>` : '');
     $('#composeSubject').value = override ? override.subject : state.template.subject;
     $('#composeBody').value = override ? override.body : state.template.body;
+    const atts = (state.template && state.template.attachments) || [];
+    $('#composeAttach').hidden = !atts.length;
+    $('#composeAttach').innerHTML = atts.map((a) => `<span class="pv-attach">${icon('paperclip', 13)} ${esc(a.name)} <span class="muted">(${fmtSize(a.size)})</span></span>`).join('');
     const sigNote = state.google.signature ? ' Your Gmail signature is added at the bottom.' : '';
     $('#composeHint').textContent = cands.length === 1
       ? `Placeholders like {{firstName}} will be filled in for ${firstNameOf(cands[0]) || 'this candidate'}. Your Calendly booking link is added at the end.${sigNote}`
@@ -812,6 +815,81 @@
   }
 
   // Unsaved edits must survive the 30s refresh and page switches.
+  // ---------------- Attachments ----------------
+  const MAX_ATTACH = 4 * 1048576;
+  const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`);
+  const thumbs = {};
+  function renderAttachments() {
+    const list = (state.template && state.template.attachments) || [];
+    $('#attachList').innerHTML = list.map((a) => `<li class="attach-item" data-id="${esc(a.id)}">
+        <span class="attach-thumb" data-id="${esc(a.id)}">${a.type && a.type.startsWith('image/') && thumbs[a.id] ? `<img src="${thumbs[a.id]}" alt="">` : icon('doc', 16)}</span>
+        <span class="attach-name" title="${esc(a.name)}">${esc(a.name)}</span>
+        <span class="attach-size muted small">${fmtSize(a.size)}</span>
+        <button class="icon-btn attach-remove" title="Remove" aria-label="Remove ${esc(a.name)}" data-id="${esc(a.id)}">${icon('x', 14)}</button>
+      </li>`).join('') || '<li class="attach-empty muted small">No attachments — emails go out as text only.</li>';
+    $('#attachAddBtn').disabled = list.length >= 3;
+    list.filter((a) => a.type && a.type.startsWith('image/') && !thumbs[a.id]).forEach((a) => loadThumb(a.id));
+    const pv = $('#pvAttachments');
+    pv.hidden = !list.length;
+    pv.innerHTML = list.map((a) => `<span class="pv-attach">${icon('paperclip', 13)} ${esc(a.name)} <span class="muted">(${fmtSize(a.size)})</span></span>`).join('');
+  }
+  async function loadThumb(id) {
+    try {
+      const r = await api(`/api/template/attachments/${encodeURIComponent(id)}/preview`);
+      thumbs[id] = r.dataUrl;
+      const el = $(`.attach-thumb[data-id="${CSS.escape(id)}"]`);
+      if (el) el.innerHTML = `<img src="${r.dataUrl}" alt="">`;
+    } catch {}
+  }
+  const toBase64 = (blob) => new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => reject(new Error('Could not read the file.'));
+    fr.readAsDataURL(blob);
+  });
+  // Big images are re-encoded in the browser so they fit and send quickly.
+  async function shrinkImage(file) {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 2200 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bmp.width * scale));
+    canvas.height = Math.max(1, Math.round(bmp.height * scale));
+    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.9));
+    if (!blob) throw new Error('Could not shrink the image.');
+    return { blob, type: 'image/jpeg', name: file.name.replace(/\.[^.]+$/, '') + '.jpg' };
+  }
+  $('#attachAddBtn').addEventListener('click', () => $('#attachFile').click());
+  $('#attachFile').addEventListener('change', async () => {
+    const file = $('#attachFile').files[0];
+    $('#attachFile').value = '';
+    if (!file) return;
+    const btn = $('#attachAddBtn');
+    btn.disabled = true;
+    try {
+      let blob = file, name = file.name, type = file.type;
+      if (file.size > MAX_ATTACH && /^image\/(png|jpeg|webp)$/.test(file.type)) {
+        toast('Large image — shrinking it so it sends quickly…');
+        ({ blob, type, name } = await shrinkImage(file));
+      }
+      if (blob.size > MAX_ATTACH) throw new Error('That file is over 4 MB. Export it smaller, or as a PDF.');
+      const data = await toBase64(blob);
+      await api('/api/template/attachments', { method: 'POST', body: { name, type, data } });
+      toast(`${name} will be attached to every email.`);
+      await refresh();
+    } catch (err) { oops(err); }
+    finally { btn.disabled = false; renderAttachments(); }
+  });
+  $('#attachList').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.attach-remove');
+    if (!btn) return;
+    try {
+      await api(`/api/template/attachments/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+      toast('Attachment removed — emails will go out without it.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
   let templateDirty = false;
   function setTemplateDirty(d) {
     templateDirty = d;
@@ -998,6 +1076,7 @@
       $('#tplSubject').value = state.template.subject;
       $('#tplBody').value = state.template.body;
     }
+    renderAttachments();
     renderTemplatePreview();
   }
 

@@ -464,3 +464,17 @@ tr:hover .row-actions { opacity: 1; }
 .link-results li:hover { background: var(--blue-tint, #eaf4fe); }
 .link-results li.link-none { cursor: default; }
 .link-results li.link-none:hover { background: none; }
+
+/* Attachments (Email Template page, preview, compose) */
+.attach-block { margin-top: 16px; }
+.attach-list { list-style: none; margin: 6px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.attach-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.attach-thumb { width: 38px; height: 38px; border-radius: 7px; background: var(--blue-tint); display: inline-flex; align-items: center; justify-content: center; overflow: hidden; flex: none; color: var(--blue-deep); }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-name { font-size: 13px; font-weight: 600; color: var(--navy); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-size { flex: none; }
+.attach-remove { flex: none; }
+.attach-empty { padding: 4px 0; }
+.attach-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pv-attachments, .compose-attach { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.pv-attach { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--navy-soft); background: var(--navy-tint); padding: 4px 10px; border-radius: 99px; }

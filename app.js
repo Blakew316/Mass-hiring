@@ -14,6 +14,7 @@ const notify = require('./lib/notify');
 const calendly = require('./lib/calendly');
 const tracking = require('./lib/tracking');
 const queue = require('./lib/queue');
+const attachments = require('./lib/attachments');
 const crypto = require('crypto');
 const { renderEmail } = require('./lib/template');
 
@@ -137,6 +138,7 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
 app.post('/api/template', asyncRoute(async (req, res) => {
   const db = await store.load();
   db.template = {
+    ...db.template,   // attachments are managed by their own routes
     subject: String(req.body.subject ?? db.template.subject),
     body: String(req.body.body ?? db.template.body),
   };
@@ -146,9 +148,39 @@ app.post('/api/template', asyncRoute(async (req, res) => {
 
 app.post('/api/template/reset', asyncRoute(async (_req, res) => {
   const db = await store.load();
-  db.template = structuredClone(store.DEFAULT_TEMPLATE);
+  db.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: db.template.attachments };
   await store.save(db);
   res.json({ ok: true, template: db.template });
+}));
+
+// ---------- Attachments (sent with every email) ----------
+const publicAttachment = ({ id, name, type, size, builtin }) => ({ id, name, type, size, builtin: Boolean(builtin) });
+
+app.post('/api/template/attachments', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const meta = await attachments.add(db, req.body || {});
+  const fresh = await store.update((d) => { d.template.attachments = [...attachments.list(d), meta]; });
+  res.json({ ok: true, attachment: publicAttachment(meta), attachments: attachments.list(fresh).map(publicAttachment) });
+}));
+
+app.delete('/api/template/attachments/:id', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const meta = attachments.list(db).find((a) => a.id === req.params.id);
+  if (!meta) throw new Error('Attachment not found.');
+  const fresh = await store.update((d) => { d.template.attachments = attachments.list(d).filter((a) => a.id !== meta.id); });
+  await attachments.remove(meta);
+  res.json({ ok: true, attachments: attachments.list(fresh).map(publicAttachment) });
+}));
+
+// Thumbnail for the template page (as a data URL, so no binary response handling).
+app.get('/api/template/attachments/:id/preview', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const meta = attachments.list(db).find((a) => a.id === req.params.id);
+  if (!meta) throw new Error('Attachment not found.');
+  const bytes = await attachments.bytesFor(meta);
+  if (!bytes) throw new Error('Attachment data is missing — remove it and add the file again.');
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.json({ ok: true, dataUrl: `data:${meta.type};base64,${bytes.toString('base64')}` });
 }));
 
 // ---------- Import (Google Sheet / CSV) ----------
@@ -266,7 +298,7 @@ app.post('/api/preview', asyncRoute(async (req, res) => {
   if (!c) throw new Error('Candidate not found.');
   const template = req.body.template || db.template;
   const signature = await google.getSignature(db.settings);
-  res.json(renderEmail(template, c, db.settings, { signature }));
+  res.json({ ...renderEmail(template, c, db.settings, { signature }), attachments: attachments.list(db).map(publicAttachment) });
 }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -310,6 +342,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     db.settings.trackingSecret = (await store.load()).settings.trackingSecret;
   }
   const signature = await google.getSignature(db.settings, { refresh: true });
+  const files = await attachments.loadAll(db);
   const recent = queue.recentlySentIds(q);
   const patches = {};
   for (const id of ids) {
@@ -324,7 +357,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     try {
       const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
-      const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
+      const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg, attachments: files }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
       await queue.updateQ((f) => queue.recordSent(f, c.id, c.email));
       paceLeft -= 1;
       patches[c.id] = { lastEmailedAt: new Date().toISOString(), gmailThreadId: sent.threadId || '' };
