@@ -69,10 +69,10 @@ This is the official Google OAuth integration. It gives the app three things at 
 ## Step 2 — Import candidates from Google Sheets (3 min)
 
 1. Make row 1 the headers — e.g. `Name | Email | Role | Company` (or `First Name | Last Name | Email | …`). Email is the only required column. Columns A–Z and up to 10,000 rows are read. If the list is on a second tab, open that tab before copying the link (the link then ends in `#gid=…`, which the app uses to pick the tab); otherwise the first tab is imported.
-2. Dashboard → **Import → Google Sheet**: paste the sheet's URL → **Fetch**. Under the box you'll see **"Loaded via your connected Google account."** if Step 1 worked (or *"Loaded via public link."* for a sheet shared as *Anyone with the link → Viewer*), and a **Map columns** panel with the first 5 rows.
-3. Check the mapping (the app guesses it; **Email \*** must not be "— skip —") → **Import candidates**. You're taken to Candidates and a toast reads *Imported 42 candidates (3 skipped)*. Rows without a valid email, or with an email already in the pipeline, are skipped — so re-importing an updated sheet only adds the new people.
+2. Dashboard → **Import → Google Sheet**: paste the sheet's URL → **Fetch**. Under the box you'll see **"Loaded via your connected Google account."** if Step 1 worked (or *"Loaded via public link."* for a sheet shared as *Anyone with the link → Viewer*), and a **Check the columns** panel with the first 5 rows.
+3. Check the columns (the app recognises them; **Email \*** must not be "— skip —"). Under the preview the page says exactly what will happen — *42 new · 3 already in your list · 1 without a usable email (row 17)* — and the button reads **Import 42 candidates**. Afterwards a result panel repeats the counts, with a **View candidates** button. Re-importing an updated sheet only adds the new people and, with the box ticked, fills in blank details for those already there.
 
-CSV works the same way: **Import → CSV upload**.
+Files work the same way: **Import → Upload a file** takes CSV, TSV, TXT or Excel (.xlsx), and there is a paste box for cells copied out of a spreadsheet.
 
 ---
 

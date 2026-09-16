@@ -533,10 +533,10 @@
       await api('/api/candidates', { method: 'POST', body: {
         firstName: $('#addFirst').value, lastName: $('#addLast').value,
         name: `${$('#addFirst').value} ${$('#addLast').value}`.trim(),
-        email: $('#addEmail').value, role: $('#addRole').value,
+        email: $('#addEmail').value, role: $('#addRole').value, location: $('#addLocation').value,
         company: $('#addCompany').value, notes: $('#addNotes').value,
       }});
-      ['#addFirst', '#addLast', '#addEmail', '#addRole', '#addCompany', '#addNotes'].forEach((s) => ($(s).value = ''));
+      ['#addFirst', '#addLast', '#addEmail', '#addRole', '#addCompany', '#addLocation', '#addNotes'].forEach((s) => ($(s).value = ''));
       $('#addModal').hidden = true;
       toast('Candidate added.');
       await refresh();
@@ -712,7 +712,9 @@
     ['role', 'Role / title'], ['company', 'Company'], ['phone', 'Phone'], ['location', 'Location'], ['notes', 'Notes'],
   ];
   const IMPORT_TEXT_CHUNK = 3 * 1024 * 1024;   // characters of file text per request (the server accepts 6 MB)
+  const IMPORT_ROW_SLICE = 4000;               // spreadsheet rows per request when reading an .xlsx
   const IMPORT_ROW_BATCH = 2000;
+  const MAX_IMPORT_ROWS = 50000;
   const setImportStatus = (msg) => { $('#importStatus').textContent = msg || ''; };
 
   $('#fetchSheetBtn').addEventListener('click', async () => {
@@ -755,14 +757,25 @@
       const buf = await file.arrayBuffer();
       const bytes = new Uint8Array(buf);
       const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+      if (/\.numbers$/i.test(file.name)) throw new Error(`${file.name} is a Numbers document — in Numbers choose File → Export To → CSV (or Excel) and import that.`);
+      if (/\.(xls|ods)$/i.test(file.name)) throw new Error(`${file.name} is in a format the app cannot read — save it as .xlsx or .csv and try again.`);
       if (isZip || /\.xlsx$/i.test(file.name)) {
         if (!isZip) throw new Error(`${file.name} is not a real .xlsx file — export it again from Excel or Google Sheets, or save as CSV.`);
         const rows = await window.XlsxLite.read(buf);
-        const data = await api('/api/import/csv', { method: 'POST', body: { rows, via: 'xlsx' } });
+        if (rows.length > MAX_IMPORT_ROWS + 1) throw new Error(`That sheet has more than ${MAX_IMPORT_ROWS.toLocaleString()} rows — split it and import it in parts.`);
+        setImportStatus(`Reading ${file.name}… ${rows.length.toLocaleString()} rows`);
+        // Big sheets go to the server in slices; only the first can hold the header.
+        const data = await api('/api/import/csv', { method: 'POST', body: { rows: rows.slice(0, IMPORT_ROW_SLICE), lines: rows.slice(0, IMPORT_ROW_SLICE).map((_, i) => i + 1), via: 'xlsx' } });
+        for (let i = IMPORT_ROW_SLICE; i < rows.length; i += IMPORT_ROW_SLICE) {
+          setImportStatus(`Reading ${file.name}… ${Math.min(i + IMPORT_ROW_SLICE, rows.length).toLocaleString()} of ${rows.length.toLocaleString()} rows`);
+          const slice = rows.slice(i, i + IMPORT_ROW_SLICE);
+          const more = await api('/api/import/csv', { method: 'POST', body: { rows: slice, lines: slice.map((_, k) => i + k + 1), noHeader: true, via: 'xlsx' } });
+          data.rows.push(...more.rows);
+          data.lines.push(...more.lines);
+        }
         showMapping(data, 'xlsx', file.name);
         return;
       }
-      if (/\.(xls|numbers|ods)$/i.test(file.name)) throw new Error(`${file.name} is in a format the app cannot read — save it as .xlsx or .csv and try again.`);
       await importText(decodeText(bytes), 'csv', file.name);
     } catch (err) { setImportStatus(''); oops(err); }
   }
@@ -775,10 +788,10 @@
     let zeros = 0;
     for (let i = 1; i < n; i += 2) if (bytes[i] === 0) zeros++;
     if (n > 40 && zeros > n / 4) return new TextDecoder('utf-16le').decode(bytes);
-    const utf8 = new TextDecoder('utf-8').decode(bytes);
-    // Windows exports (Excel "CSV") are often Windows-1252; UTF-8 shows that as the replacement character.
-    if (/\ufffd/.test(utf8)) { try { return new TextDecoder('windows-1252').decode(bytes); } catch { return utf8; } }
-    return utf8;
+    // Valid UTF-8 is taken as is (a genuine U+FFFD inside it is fine); only
+    // bytes that are not UTF-8 at all are read as Windows-1252 (Excel on Windows).
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { try { return new TextDecoder('windows-1252').decode(bytes); } catch { return new TextDecoder('utf-8').decode(bytes); } }
   }
 
   async function importText(text, source, label) {
@@ -789,30 +802,45 @@
     if (t.length <= IMPORT_TEXT_CHUNK) {
       data = await api('/api/import/csv', { method: 'POST', body: { text: t, via: source } });
     } else {
+      // Big file: line-safe pieces; later pieces never contain the header.
       const pieces = chunkText(t, IMPORT_TEXT_CHUNK);
-      data = await api('/api/import/csv', { method: 'POST', body: { text: pieces[0], via: source } });
-      const header = data.headerless ? '' : pieces[0].split(/\r\n|\r|\n/, 1)[0] + '\n';
+      data = await api('/api/import/csv', { method: 'POST', body: { text: pieces[0].text, via: source } });
       for (let i = 1; i < pieces.length; i++) {
         setImportStatus(`Reading ${label || 'rows'}… part ${i + 1} of ${pieces.length}`);
-        const more = await api('/api/import/csv', { method: 'POST', body: { text: header + pieces[i], via: source } });
+        const more = await api('/api/import/csv', { method: 'POST', body: { text: pieces[i].text, noHeader: true, via: source } });
         data.rows.push(...more.rows);
+        data.lines.push(...more.lines.map((n) => n + pieces[i].line - 1));
       }
+      if (data.rows.length > MAX_IMPORT_ROWS) throw new Error(`That is more than ${MAX_IMPORT_ROWS.toLocaleString()} rows — split the file and import it in parts.`);
     }
     showMapping(data, source, label);
   }
 
-  // Split at line breaks that are not inside a quoted field.
-  function chunkText(t, size) {
+  // Split at line breaks that are not inside a quoted field, using the same
+  // rule as the parser (a quote only opens a field at its start). Returns
+  // pieces with the physical line each one starts on.
+  function chunkText(raw, size) {
+    const t = raw.replace(/\r\n?/g, '\n');
     const out = [];
     let start = 0;
+    let line = 1;
     while (start < t.length) {
-      if (t.length - start <= size) { out.push(t.slice(start)); break; }
-      let cut = start + size;
-      let q = false;
-      for (let i = start; i < cut; i++) if (t[i] === '"') q = !q;
-      while (cut > start && !(t[cut] === '\n' && !q)) { cut--; if (t[cut] === '"') q = !q; }
-      if (cut <= start) cut = start + size;
-      out.push(t.slice(start, cut));
+      if (t.length - start <= size) { out.push({ text: t.slice(start), line }); break; }
+      let cut = -1;
+      let q = false, atStart = true, lastSafe = -1;
+      for (let i = start; i < start + size; i++) {
+        const c = t[i];
+        if (q) { if (c === '"') q = false; continue; }
+        if (c === '"' && atStart) { q = true; atStart = false; continue; }
+        if (c === '\n') { lastSafe = i; atStart = true; continue; }
+        if (c === ',' || c === ';' || c === '\t' || c === '|') { atStart = true; continue; }
+        if (c !== ' ') atStart = false;
+      }
+      cut = lastSafe >= 0 ? lastSafe : t.indexOf('\n', start + size);   // no safe break inside: take the next line break, whatever it is
+      if (cut < 0) { out.push({ text: t.slice(start), line }); break; }
+      const piece = t.slice(start, cut);
+      out.push({ text: piece, line });
+      line += (piece.match(/\n/g) || []).length + 1;
       start = cut + 1;
     }
     return out;
@@ -872,21 +900,46 @@
       pendingImport.dryRun = totals;
       renderSummary(totals);
     } catch (err) {
-      if (seq === dryRunSeq) sum.textContent = `Could not check the rows: ${err.message}`;
+      if (seq === dryRunSeq) {
+        sum.innerHTML = `<span class="bad-text">Could not check the rows: ${esc(err.message)}</span> <button class="btn-link" id="dryRunRetry">Try again</button>`;
+        $('#dryRunRetry').addEventListener('click', runDryRun);
+      }
     }
   }
   const debouncedDryRun = debounce(runDryRun, 200);
   $('#mappingGrid').addEventListener('change', debouncedDryRun);
   $('#importUpdateExisting').addEventListener('change', () => { if (pendingImport && pendingImport.dryRun) setCommitLabel(pendingImport.dryRun); });
 
-  async function dryRunBatches(rows, mapping) {
-    const totals = { total: 0, newCount: 0, existing: 0, updatable: 0, duplicate: 0, invalid: 0, invalidSamples: [], existingSamples: [] };
+  // Rows repeated later in the file are settled here, before batching, so a
+  // repeat in batch 3 of an address from batch 1 is counted as a repeat.
+  const rowEmailKey = (row, mapping) => {
+    const cell = mapping.email >= 0 ? String(row[mapping.email] || '') : '';
+    const m = cell.match(/<([^<>]+)>\s*$/);
+    return (m ? m[1] : cell).replace(/^mailto:/i, '').trim().toLowerCase();
+  };
+  function splitRepeats(rows, lines, mapping) {
+    const seen = new Set();
+    const keep = [], keepLines = [];
+    let repeats = 0;
+    rows.forEach((row, i) => {
+      const k = rowEmailKey(row, mapping);
+      if (k && seen.has(k)) { repeats++; return; }
+      if (k) seen.add(k);
+      keep.push(row); keepLines.push(lines ? lines[i] : i + 1);
+    });
+    return { rows: keep, lines: keepLines, repeats };
+  }
+  async function dryRunBatches(allRows, mapping) {
+    const totals = { total: 0, newCount: 0, existing: 0, updatable: 0, duplicate: 0, invalid: 0, shifted: 0, invalidSamples: [], existingSamples: [] };
+    const { rows, lines, repeats } = splitRepeats(allRows, pendingImport.lines, mapping);
+    totals.total += repeats; totals.duplicate += repeats;
     for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
-      const r = await api('/api/import/preview', { method: 'POST', body: { rows: rows.slice(i, i + IMPORT_ROW_BATCH), mapping } });
-      for (const k of ['total', 'newCount', 'existing', 'updatable', 'duplicate', 'invalid']) totals[k] += r[k] || 0;
-      if (totals.invalidSamples.length < 10) totals.invalidSamples.push(...(r.invalidSamples || []).map((x) => ({ ...x, row: x.row + i })));
+      const r = await api('/api/import/preview', { method: 'POST', body: { rows: rows.slice(i, i + IMPORT_ROW_BATCH), lines: lines.slice(i, i + IMPORT_ROW_BATCH), headerless: pendingImport.headerless, mapping } });
+      for (const k of ['total', 'newCount', 'existing', 'updatable', 'duplicate', 'invalid', 'shifted']) totals[k] += r[k] || 0;
+      if (totals.invalidSamples.length < 10) totals.invalidSamples.push(...(r.invalidSamples || []));
       if (totals.existingSamples.length < 5) totals.existingSamples.push(...(r.existingSamples || []));
     }
+    totals.invalidSamples.sort((a, b) => a.row - b.row);
     return totals;
   }
 
@@ -896,6 +949,8 @@
     if (t.duplicate) parts.push(`${t.duplicate.toLocaleString()} repeated in the file`);
     if (t.invalid) parts.push(`<span class="bad-text">${t.invalid.toLocaleString()} without a usable email</span>`);
     let html = `<div class="summary-line">${t.total.toLocaleString()} row${t.total === 1 ? '' : 's'}: ${parts.join(' · ')}</div>`;
+    if (t.shifted) html += `<div class="muted small">${t.shifted.toLocaleString()} row${t.shifted === 1 ? '' : 's'} had the email in a different column than the rest — worth a glance in the preview.</div>`;
+    if (pendingImport && pendingImport.skipped) html += `<div class="muted small">${pendingImport.skipped} line${pendingImport.skipped === 1 ? '' : 's'} above the header row (a title or notes) ${pendingImport.skipped === 1 ? 'was' : 'were'} ignored.</div>`;
     if (t.existing && !t.newCount) {
       html += `<div class="muted small">Everyone in this file is already in your candidate list, so there is nobody new to add${t.updatable ? ' — their blank details can still be filled in from the file' : ''}.</div>`;
     }
@@ -930,18 +985,26 @@
     const mapping = currentMapping();
     if (mapping.email === -1) return toast('Pick which column holds the email address.', true);
     const btn = $('#commitImportBtn');
+    if (btn.dataset.busy) return;
     const label = btn.textContent;
+    btn.dataset.busy = '1';
     btn.disabled = true;
     btn.textContent = 'Importing…';
+    $('#importUpdateExisting').disabled = true;
+    $$('.map-select').forEach((el) => { el.disabled = true; });
     const totals = { added: 0, updated: 0, existing: 0, duplicate: 0, invalid: 0 };
+    const { rows, lines, repeats } = splitRepeats(pendingImport.rows, pendingImport.lines, mapping);
+    totals.duplicate += repeats;
+    let done = 0;
     try {
-      const rows = pendingImport.rows;
       for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
         if (rows.length > IMPORT_ROW_BATCH) btn.textContent = `Importing… ${Math.min(i + IMPORT_ROW_BATCH, rows.length).toLocaleString()} / ${rows.length.toLocaleString()}`;
         const r = await api('/api/import/commit', { method: 'POST', body: {
-          rows: rows.slice(i, i + IMPORT_ROW_BATCH), mapping, source: pendingImport.source, updateExisting: $('#importUpdateExisting').checked,
+          rows: rows.slice(i, i + IMPORT_ROW_BATCH), lines: lines.slice(i, i + IMPORT_ROW_BATCH), headerless: pendingImport.headerless,
+          mapping, source: pendingImport.source, updateExisting: $('#importUpdateExisting').checked,
         }});
         for (const k of Object.keys(totals)) totals[k] += r[k] || 0;
+        done = Math.min(i + IMPORT_ROW_BATCH, rows.length);
       }
       $('#mappingCard').hidden = true;
       pendingImport = null;
@@ -949,26 +1012,39 @@
       await refresh();
       $('#importResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (err) {
-      btn.disabled = false;
+      // Say exactly what already went in, and leave the rest ready to retry.
+      if (done > 0 && pendingImport) {
+        pendingImport.rows = rows.slice(done);
+        pendingImport.lines = lines.slice(done);
+        showImportResult(totals, `Stopped partway: ${err.message} — ${totals.added.toLocaleString()} added so far. The remaining ${(rows.length - done).toLocaleString()} rows are still loaded below; click Import again to continue.`);
+        runDryRun();
+      } else {
+        oops(err);
+      }
       btn.textContent = label;
-      oops(err);
+    } finally {
+      delete btn.dataset.busy;
+      btn.disabled = !pendingImport;
+      $('#importUpdateExisting').disabled = false;
+      $$('.map-select').forEach((el) => { el.disabled = false; });
     }
   });
 
-  function showImportResult(t) {
+  function showImportResult(t, note) {
     const el = $('#importResult');
     const good = t.added > 0 || t.updated > 0;
     const bits = [`<strong>${t.added.toLocaleString()} added</strong>`];
-    if (t.updated) bits.push(`${t.updated.toLocaleString()} existing updated with new details`);
-    if (t.existing) bits.push(`${t.existing.toLocaleString()} already in your list`);
+    if (t.existing) bits.push(`${t.existing.toLocaleString()} already in your list${t.updated ? ` (${t.updated.toLocaleString()} of them updated with new details)` : ''}`);
     if (t.duplicate) bits.push(`${t.duplicate.toLocaleString()} repeated in the file`);
     if (t.invalid) bits.push(`${t.invalid.toLocaleString()} without a usable email`);
-    el.className = `notice ${good ? 'ok' : 'warn'}`;
-    el.innerHTML = `<span class="notice-ico">${icon(good ? 'checkcircle' : 'alert', 16)}</span><div>${bits.join(' · ')}` +
-      (!t.added && t.existing ? '<br><span class="small">Nothing was added because every address in the file is already in your candidate list.</span>' : '') +
+    el.className = `notice ${note ? 'warn' : good ? 'ok' : 'warn'}`;
+    el.innerHTML = `<span class="notice-ico">${icon(good && !note ? 'checkcircle' : 'alert', 16)}</span><div>${bits.join(' · ')}` +
+      (note ? `<br><span class="small">${esc(note)}</span>` : '') +
+      (!note && !t.added && t.existing ? '<br><span class="small">Nothing was added because every address in the file is already in your candidate list.</span>' : '') +
       `</div><button class="btn notice-action" id="viewCandidatesBtn">View candidates</button>`;
     el.hidden = false;
     $('#viewCandidatesBtn').addEventListener('click', () => show('candidates'));
+    if (note) return;
     toast(t.added ? `Imported ${t.added.toLocaleString()} candidate${t.added === 1 ? '' : 's'}.`
       : t.updated ? `Updated ${t.updated.toLocaleString()} existing candidate${t.updated === 1 ? '' : 's'}.`
       : 'Nothing new to import — everyone in that file is already in your list.', !good);

@@ -244,25 +244,35 @@ app.get('/api/template/attachments/:id/preview', asyncRoute(async (req, res) => 
 const MAX_IMPORT_ROWS = 50000;
 const IMPORT_FIELDS = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes'];
 
-// Rows → { headers, rows, mapping, confidence, headerless }. When the first
-// row is data rather than labels, headers are synthesised and the columns
-// are recognised from their contents.
-function toPreview(allRows) {
-  const rows = (Array.isArray(allRows) ? allRows : [])
-    .filter((r) => Array.isArray(r))
-    .map((r) => r.map(csv.cleanCell))
-    .filter((r) => r.some(Boolean));
+// Rows → { headers, rows, lines, mapping, confidence, headerless, skipped }.
+// The header row is searched for (title lines above it are skipped); when
+// there is none, headers are synthesised and the columns are recognised from
+// their contents. `noHeader` is for continuation pieces of a big file.
+function toPreview(allRows, { noHeader = false, lines: givenLines = null } = {}) {
+  const src = Array.isArray(allRows) ? allRows : [];
+  const srcLines = Array.isArray(givenLines) && givenLines.length === src.length ? givenLines : (src.lines || src.map((_, i) => i + 1));
+  const rows = [];
+  const lines = [];
+  src.forEach((r, i) => {
+    if (!Array.isArray(r)) return;
+    const cells = r.slice(0, csv.MAX_COLUMNS).map(csv.cleanCell);
+    if (cells.some(Boolean)) { rows.push(cells); lines.push(srcLines[i]); }
+  });
   if (!rows.length) throw new Error('No rows found in that file — it appears to be empty.');
   if (rows.length > MAX_IMPORT_ROWS + 1) throw new Error(`That is more than ${MAX_IMPORT_ROWS.toLocaleString()} rows — split the file and import it in parts.`);
-  const width = rows.reduce((w, r) => Math.max(w, r.length), 0);
-  for (const r of rows) while (r.length < width) r.push('');
-  const headerless = !csv.looksLikeHeader(rows[0]);
-  const headers = headerless
-    ? rows[0].map((_, i) => `Column ${i + 1}`)
-    : rows[0].map((h, i) => h || `Column ${i + 1}`);
-  const data = headerless ? rows : rows.slice(1);
-  const { mapping, confidence } = csv.guessMapping(headerless ? headers.map(() => '') : rows[0], data);
-  return { headers, rows: data, mapping, confidence, headerless };
+  const found = noHeader ? { index: -1, headerless: true } : csv.findHeader(rows);
+  const headerRow = found.index >= 0 ? rows[found.index] : null;
+  const width = headerRow ? Math.max(headerRow.length, 1) : rows.reduce((w, r) => Math.max(w, r.length), 0);
+  const headers = headerRow
+    ? headerRow.map((h, i) => h || `Column ${i + 1}`)
+    : Array.from({ length: width }, (_, i) => `Column ${i + 1}`);
+  const dataStart = found.index >= 0 ? found.index + 1 : 0;
+  const data = rows.slice(dataStart).map((r) => { while (r.length < width) r.push(''); return r; });
+  const dataLines = lines.slice(dataStart);
+  const { mapping, confidence } = csv.guessMapping(headerRow ? headerRow : headers.map(() => ''), data);
+  // "skipped" counts physical lines above the header (blank lines included).
+  const skipped = found.index > 0 ? Math.max(found.index, (lines[found.index] || found.index + 1) - 1) : 0;
+  return { headers, rows: data, lines: dataLines, mapping, confidence, headerless: found.headerless, skipped };
 }
 
 function rowsFromBody(body) {
@@ -278,7 +288,8 @@ app.post('/api/import/sheet', asyncRoute(async (req, res) => {
   res.json({ ...toPreview(rows), via });
 }));
 app.post('/api/import/csv', asyncRoute(async (req, res) => {
-  res.json({ ...toPreview(rowsFromBody(req.body || {})), via: req.body.via || 'csv' });
+  const body = req.body || {};
+  res.json({ ...toPreview(rowsFromBody(body), { noHeader: Boolean(body.noHeader), lines: body.lines }), via: body.via || 'csv' });
 }));
 
 // The one place that decides what each row means. Used by the dry run the
@@ -288,40 +299,58 @@ app.post('/api/import/csv', asyncRoute(async (req, res) => {
 //   existing   – already in the list (optionally enriched with blank fields)
 //   duplicate  – the same address earlier in this same file
 //   invalid    – no usable email address anywhere in the row
-function analyzeImport(candidates, rows, mapping) {
+const emailKey = (e) => (address.normalize(e) || String(e || '').trim().toLowerCase());
+function analyzeImport(candidates, rows, mapping, { lines = null, headerless = false } = {}) {
   const m = mapping || {};
   const col = (row, key) => (m[key] != null && m[key] >= 0 ? csv.cleanCell(row[m[key]]) : '');
-  const byEmail = new Map(candidates.map((c) => [c.email.toLowerCase(), c]));
+  // Every address a person is known by (the one on file plus any they booked with).
+  const byEmail = new Map();
+  for (const c of candidates) {
+    for (const e of [c.email, ...(c.altEmails || [])]) { const k = emailKey(e); if (k && !byEmail.has(k)) byEmail.set(k, c); }
+  }
+  // A shifted row may carry its address in another column — but only when the
+  // file has just one column of addresses, so a "Referred by" column can never
+  // be mistaken for the candidate's own.
+  const emailColumns = rows.length
+    ? rows[0].map((_, i) => i).filter((i) => i !== m.email && csv.scoreColumn(rows.map((r) => r[i])).email >= 0.3)
+    : [];
+  const allowShift = emailColumns.length === 0;
+  const rowNumber = (idx) => (lines && lines[idx] ? lines[idx] : idx + (headerless ? 1 : 2));
   const seen = new Set();
   const out = [];
   rows.forEach((row, idx) => {
     if (!Array.isArray(row)) return;
     let email = address.normalize(col(row, 'email'));
-    // A shifted row: the address is there, just not in the mapped column.
-    if (!email) {
+    let shifted = false;
+    if (!email && allowShift) {
       const found = row.map((v) => address.normalize(v)).filter(Boolean);
-      if (found.length === 1) email = found[0];
+      if (found.length === 1) { email = found[0]; shifted = true; }
     }
-    const firstName = col(row, 'firstName');
-    const lastName = col(row, 'lastName');
+    let firstName = col(row, 'firstName');
+    let lastName = col(row, 'lastName');
+    let name = col(row, 'name');
+    // "Doe, Jane" in a name column: keep the person, not the comma.
+    const lf = name && !firstName && !lastName ? csv.splitLastFirst(name) : null;
+    if (lf) { firstName = lf.firstName; lastName = lf.lastName; name = `${lf.firstName} ${lf.lastName}`; }
     const fields = {
-      name: col(row, 'name') || [firstName, lastName].filter(Boolean).join(' '),
+      name: name || [firstName, lastName].filter(Boolean).join(' '),
       firstName, lastName,
       role: col(row, 'role'), company: col(row, 'company'), phone: col(row, 'phone'),
       location: col(row, 'location'), notes: col(row, 'notes'),
     };
-    if (!email) { out.push({ idx, kind: 'invalid', cell: col(row, 'email') || row.find((v) => String(v || '').includes('@')) || '', fields }); return; }
-    const key = email.toLowerCase();
-    if (seen.has(key)) { out.push({ idx, kind: 'duplicate', email, fields }); return; }
+    const rowNo = rowNumber(idx);
+    if (!email) { out.push({ idx, row: rowNo, kind: 'invalid', cell: col(row, 'email') || row.find((v) => String(v || '').includes('@')) || '', fields }); return; }
+    const key = emailKey(email);
+    if (seen.has(key)) { out.push({ idx, row: rowNo, kind: 'duplicate', email, fields }); return; }
     seen.add(key);
     const existing = byEmail.get(key);
     if (existing) {
       const fill = {};
       for (const k of IMPORT_FIELDS) if (fields[k] && !String(existing[k] || '').trim()) fill[k] = fields[k];
-      out.push({ idx, kind: 'existing', email, fields, existing, fill });
+      out.push({ idx, row: rowNo, kind: 'existing', email, fields, existing, fill, shifted });
       return;
     }
-    out.push({ idx, kind: 'new', email, fields });
+    out.push({ idx, row: rowNo, kind: 'new', email, fields, shifted });
   });
   return out;
 }
@@ -335,7 +364,8 @@ function summarize(analysis) {
     updatable: analysis.filter((a) => a.kind === 'existing' && Object.keys(a.fill).length).length,
     duplicate: count('duplicate'),
     invalid: count('invalid'),
-    invalidSamples: analysis.filter((a) => a.kind === 'invalid').slice(0, 10).map((a) => ({ row: a.idx + 2, cell: String(a.cell || '').slice(0, 80), name: a.fields.name })),
+    shifted: analysis.filter((a) => a.shifted).length,
+    invalidSamples: analysis.filter((a) => a.kind === 'invalid').slice(0, 10).map((a) => ({ row: a.row, cell: String(a.cell || '').slice(0, 80), name: a.fields.name })),
     existingSamples: analysis.filter((a) => a.kind === 'existing').slice(0, 5).map((a) => ({ email: a.email, name: a.existing.name || a.fields.name })),
   };
 }
@@ -344,7 +374,8 @@ function summarize(analysis) {
 app.post('/api/import/preview', asyncRoute(async (req, res) => {
   const db = await store.load();
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-  res.json({ ok: true, ...summarize(analyzeImport(db.candidates, rows, req.body.mapping)) });
+  if (rows.length > MAX_IMPORT_ROWS) throw new Error(`Check at most ${MAX_IMPORT_ROWS.toLocaleString()} rows at a time.`);
+  res.json({ ok: true, ...summarize(analyzeImport(db.candidates, rows, req.body.mapping, { lines: req.body.lines, headerless: Boolean(req.body.headerless) })) });
 }));
 
 app.post('/api/import/commit', asyncRoute(async (req, res) => {
@@ -356,7 +387,7 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
   // Decided against the latest version of the list, retried on a concurrent
   // change, so a send running in the background can never make rows vanish.
   await store.update((db) => {
-    const analysis = analyzeImport(db.candidates, rows, mapping);
+    const analysis = analyzeImport(db.candidates, rows, mapping, { lines: req.body.lines, headerless: Boolean(req.body.headerless) });
     let added = 0, updated = 0;
     const now = new Date().toISOString();
     for (const a of analysis) {
