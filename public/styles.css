@@ -502,3 +502,10 @@ tr:hover .row-actions { opacity: 1; }
 .head-actions .follow-up-btn { margin-right: 6px; }
 .tile-actions .btn-small, .btn.small { padding: 5px 10px; font-size: 12px; }
 .due-tag { color: var(--amber); font-weight: 600; }
+.redirect-box { margin: 10px 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--navy-tint); }
+.redirect-label { font-size: 12px; font-weight: 600; color: var(--navy); margin-bottom: 6px; }
+.redirect-row { display: flex; align-items: center; gap: 8px; }
+.redirect-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.redirect-row .btn-small { padding: 6px 10px; font-size: 12px; flex: none; }
+.redirect-box .hint { margin-top: 8px; }
+.redirect-box .hint.warn-text { color: #6d4c00; }

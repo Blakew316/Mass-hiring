@@ -104,7 +104,7 @@ The repo is Netlify-ready — `netlify.toml` publishes `public/` as the site and
    - the Google OAuth redirect URI shown in Settings is `https://<your-site>.netlify.app/auth/google/callback`
    - "Enable booking alerts" registers the Calendly webhook at `https://<your-site>.netlify.app/webhooks/calendly` — no tunnel needed.
 
-Optional: set `BASE_URL` in Netlify's environment variables if you use a custom domain and want that address used instead of the `*.netlify.app` one.
+Optional: set `BASE_URL` in Netlify's environment variables if you want a specific address used regardless of the primary domain. When you add a custom domain, Netlify's `URL` changes to it, and so does the Google redirect URI — add the new one to your OAuth client (Settings → Google shows it with a Copy button).
 
 ## Configuration reference
 

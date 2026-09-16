@@ -354,7 +354,12 @@
           <input type="text" id="setGoogleClientId" class="input" placeholder="xxxxx.apps.googleusercontent.com">
           <label class="label">OAuth Client Secret</label>
           <input type="password" id="setGoogleClientSecret" class="input" placeholder="GOCSPX-…">
-          <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web). Add redirect URI: <code id="redirectUriCode"></code></div>
+          <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web).</div>
+          <div class="redirect-box">
+            <div class="redirect-label">Authorized redirect URI — this exact address must be listed on that OAuth client</div>
+            <div class="redirect-row"><code id="redirectUriCode"></code><button class="btn btn-small" id="copyRedirectBtn" type="button">Copy</button></div>
+            <div class="hint" id="redirectHint">If Google answers <em>Error 400: redirect_uri_mismatch</em>, the address above is missing there: open the client → <strong>Authorized redirect URIs</strong> → <strong>Add URI</strong> → paste → <strong>Save</strong>, wait a minute, then connect again.</div>
+          </div>
           <label class="check">
             <input type="checkbox" id="setGmailSignature" checked>
             <span>Use my Gmail signature and detect replies <span class="muted small">(asks for two extra Gmail permissions when connecting — change this before you click Connect / Reconnect)</span></span>

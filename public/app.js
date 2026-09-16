@@ -1329,6 +1329,12 @@
   });
 
   // ---------------- Settings ----------------
+  $('#copyRedirectBtn').addEventListener('click', async () => {
+    const uri = $('#redirectUriCode').textContent.trim();
+    try { await navigator.clipboard.writeText(uri); toast('Redirect URI copied — paste it under Authorized redirect URIs in Google Cloud.'); }
+    catch { const r = document.createRange(); r.selectNodeContents($('#redirectUriCode')); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); toast('Select and copy the address.'); }
+  });
+
   let settingsDirty = false;
   function setSettingsDirty(d) {
     settingsDirty = d;
@@ -1354,6 +1360,18 @@
     setIf('#setGoogleClientId', s.googleClientId);
     setIf('#setGoogleClientSecret', s.googleClientSecret);
     $('#redirectUriCode').textContent = state.google.redirectUri;
+    // The app derives this address from the site's primary domain; if the
+    // dashboard is open on another address, say so — it explains a mismatch.
+    const hint = $('#redirectHint');
+    try {
+      const appOrigin = new URL(state.google.redirectUri).origin;
+      if (appOrigin !== location.origin) {
+        hint.classList.add('warn-text');
+        hint.innerHTML = `You are viewing the dashboard at <strong>${esc(location.origin)}</strong>, but the site's primary address is <strong>${esc(appOrigin)}</strong>, so that is what Google is told. Add the address above to the OAuth client (Authorized redirect URIs → Add URI → Save) — or open the dashboard at ${esc(appOrigin)}. If Google answers <em>redirect_uri_mismatch</em>, the address above is missing there.`;
+      } else {
+        hint.classList.remove('warn-text');
+      }
+    } catch {}
 
     const badge = $('#googleBadge');
     if (state.google.connected) {
