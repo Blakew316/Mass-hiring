@@ -90,6 +90,21 @@ function stats(db) {
   };
 }
 
+// Who is due a follow-up: emailed, never answered, not followed up too
+// recently or too often. The dashboard's "Follow up with N" uses this list.
+function followUpSettings(settings) {
+  const days = Math.min(30, Math.max(1, Number(settings.followUpDays) || 3));
+  const max = Math.min(5, Math.max(0, Number(settings.maxFollowUps) || 2));
+  return { days, max };
+}
+function followUpDueIds(db) {
+  const { days, max } = followUpSettings(db.settings);
+  const cutoff = Date.now() - days * 24 * 3600 * 1000;
+  return db.candidates
+    .filter((c) => c.status === 'emailed' && c.lastEmailedAt && new Date(c.lastEmailedAt).getTime() <= cutoff && (c.followUpCount || 0) < max)
+    .map((c) => c.id);
+}
+
 // Immediate sends (small selections) go out at most this many per request.
 const MAX_PER_REQUEST = 8;
 
@@ -100,9 +115,10 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
   const sendingNow = await mailer.sendStatus(db.settings);
   res.json({
     candidates: db.candidates,
-    events: db.events.filter((e) => store.FEED_TYPES.has(e.type)).slice(0, 60),
+    events: db.events.filter((e) => store.FEED_TYPES.has(e.type)).sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 60),
     lastError: lastError ? lastError.message : '',
     template: db.template,
+    followUp: { template: db.followUp, dueIds: followUpDueIds(db), ...followUpSettings(db.settings) },
     settings: maskedSettings(db.settings),
     google: await google.status(db.settings),
     sending: sendingNow,
@@ -125,7 +141,7 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
 // ---------- Settings & template ----------
 app.post('/api/settings', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'ntfyTopic', 'smtpUser', 'smtpPass',
+  const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
     'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'lastSheetUrl', 'timeZone'];
   for (const k of allowed) {
     if (!(k in req.body) || req.body[k] === '••••••••') continue;
@@ -152,6 +168,20 @@ app.post('/api/template/reset', asyncRoute(async (_req, res) => {
   db.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: db.template.attachments };
   await store.save(db);
   res.json({ ok: true, template: db.template });
+}));
+
+app.post('/api/followup', asyncRoute(async (req, res) => {
+  const fresh = await store.update((d) => {
+    d.followUp = {
+      subject: String(req.body.subject ?? d.followUp.subject),
+      body: String(req.body.body ?? d.followUp.body),
+    };
+  });
+  res.json({ ok: true, followUp: fresh.followUp });
+}));
+app.post('/api/followup/reset', asyncRoute(async (_req, res) => {
+  const fresh = await store.update((d) => { d.followUp = structuredClone(store.DEFAULT_FOLLOW_UP); });
+  res.json({ ok: true, followUp: fresh.followUp });
 }));
 
 // ---------- Attachments (sent with every email) ----------
@@ -412,9 +442,13 @@ app.post('/api/preview', asyncRoute(async (req, res) => {
   const db = await store.load();
   const c = db.candidates.find((x) => x.id === req.body.candidateId);
   if (!c) throw new Error('Candidate not found.');
-  const template = req.body.template || db.template;
+  const followUp = Boolean(req.body.followUp);
+  const template = req.body.template || (followUp ? db.followUp : db.template);
   const signature = await google.getSignature(db.settings);
-  res.json({ ...renderEmail(template, c, db.settings, { signature }), attachments: attachments.list(db).map(publicAttachment) });
+  // A follow-up replies to the subject that person actually received; for the
+  // preview of someone not yet emailed, show what the outreach subject would be.
+  const cand = followUp && !c.lastSubject ? { ...c, lastSubject: renderEmail(db.template, c, db.settings).subject } : c;
+  res.json({ ...renderEmail(template, cand, db.settings, { signature }), attachments: followUp ? [] : attachments.list(db).map(publicAttachment), followUp });
 }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -428,7 +462,8 @@ app.post('/api/send', asyncRoute(async (req, res) => {
   const q = await queue.loadQ();   // read-only snapshot; every change below goes through queue.updateQ
   const ids = (Array.isArray(req.body.candidateIds) ? req.body.candidateIds : []).slice(0, MAX_PER_REQUEST);
   if (!ids.length) throw new Error('No candidates selected.');
-  const template = req.body.template || db.template;
+  const followUp = Boolean(req.body.followUp);
+  const template = req.body.template || (followUp ? db.followUp : db.template);
   const st = await mailer.sendStatus(db.settings);
   if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
   const { dailyLimit, perMinute } = queue.limits(db.settings, st.from);
@@ -465,6 +500,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     const c = db.candidates.find((x) => x.id === id);
     if (!c) { results.push({ id, ok: false, error: 'Not found' }); continue; }
     if (recent.has(id)) { results.push({ id, ok: true, email: c.email, skipped: 'already emailed in the last 24 hours' }); continue; }
+    if (followUp && c.status !== 'emailed') { results.push({ id, ok: true, email: c.email, skipped: `no follow-up: ${c.status === 'new' ? 'not emailed yet' : c.status}` }); continue; }
     if (q.items.some((i) => i.id === id)) { results.push({ id, ok: false, queued: true, email: c.email, error: 'Already in the sending queue.' }); continue; }
     const left = 6500 - (Date.now() - started);
     if (left < 2500) { deferAll('budget', new Date(), 'Continuing in the next batch.'); break; }
@@ -473,10 +509,11 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     try {
       const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
-      const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg, attachments: files }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
+      const thread = followUp && c.messageId ? { threadId: c.gmailThreadId || undefined, inReplyTo: c.messageId, references: c.messageId } : {};
+      const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg, ...thread, attachments: followUp ? [] : files }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
       await queue.updateQ((f) => queue.recordSent(f, c.id, c.email));
       paceLeft -= 1;
-      patches[c.id] = { lastEmailedAt: new Date().toISOString(), gmailThreadId: sent.threadId || '' };
+      patches[c.id] = { lastEmailedAt: new Date().toISOString(), gmailThreadId: sent.threadId || '', messageId: sent.messageId || '', lastSubject: msg.subject, followUp };
       results.push({ id, ok: true, email: c.email });
     } catch (err) {
       const kind = queue.classifySendError(err);
@@ -503,10 +540,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     await store.update((fresh) => {
       for (const [id, p] of Object.entries(patches)) {
         const fc = fresh.candidates.find((x) => x.id === id);
-        if (!fc) continue;
-        if (fc.status === 'new') fc.status = 'emailed';
-        fc.lastEmailedAt = p.lastEmailedAt;
-        if (p.gmailThreadId) fc.gmailThreadId = p.gmailThreadId;
+        if (fc) queue.applySentPatch(fc, p);
       }
     });
   }
@@ -521,7 +555,9 @@ app.post('/api/queue', asyncRoute(async (req, res) => {
   const st = await mailer.sendStatus(db.settings);
   if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
   let added = 0;
-  const q = await queue.updateQ((f) => { added = queue.enqueue(f, db, ids, req.body.template || null); });
+  const followUp = Boolean(req.body.followUp);
+  const template = req.body.template || (followUp ? db.followUp : null);
+  const q = await queue.updateQ((f) => { added = queue.enqueue(f, db, ids, template, { followUp }); });
   res.json({ ok: true, added, queue: queue.status(q, db.settings, st.from) });
 }));
 
@@ -656,7 +692,7 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
   });
   for (const { c, reply } of announce) {
     const preview = (reply.text || reply.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 140);
-    await store.addEvent('replied', `${c.name || c.email} replied${preview ? `: “${preview}${preview.length === 140 ? '…' : ''}”` : '.'}`, c.id);
+    await store.addEvent('replied', `${c.name || c.email} replied${preview ? `: “${preview}${preview.length === 140 ? '…' : ''}”` : '.'}`, c.id, reply.date || null);
     try {
       await notify.pushToPhone(db.settings, {
         title: `💬 ${c.name || c.email} replied`,
@@ -835,7 +871,7 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
         fresh.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
       }
     });
-    await store.addEvent('booked', `${inviteeName} booked "${eventName}" — ${when}.`, c ? c.id : null);
+    await store.addEvent('booked', `${inviteeName} booked "${eventName}" — ${when}.`, c ? c.id : null, p.created_at || null);
     try {
       await notify.pushToPhone(db.settings, {
         title: `📅 ${inviteeName} booked an interview`,
@@ -911,7 +947,7 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
             c.bookedEvent = ev.name;
             c.calendlyEventUri = ev.uri;
             c.bookedJoinUrl = ev.joinUrl || '';
-            if (isNew) announce.push({ c, ev });
+            if (isNew) announce.push({ c, ev, at: inv.createdAt || null });
           }
         } else if (c.calendlyEventUri === ev.uri && c.status === 'booked') {
           c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
@@ -929,7 +965,8 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
     await store.addEvent(
       a.canceled ? 'canceled' : 'booked',
       a.canceled ? `${who} canceled "${a.ev.name}".` : `${who} booked "${a.ev.name}" — ${formatWhen(a.ev.start, db.settings.timeZone)}.`,
-      a.c.id
+      a.c.id,
+      a.at || null
     );
   }
   res.json({ ok: true, interviews: result.interviews.length, newBookings: announce.filter((a) => !a.canceled).length });

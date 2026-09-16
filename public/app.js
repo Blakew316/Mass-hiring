@@ -223,9 +223,11 @@
       const cs = state.candidates.filter((c) => c.status === 'emailed').sort((a, b) => String(b.lastEmailedAt || '').localeCompare(String(a.lastEmailedAt || '')));
       $('#tileTitle').textContent = `Emailed · awaiting a reply (${cs.length})`;
       $('#tileSub').textContent = 'Everyone who has been emailed and has not replied or booked yet.';
+      const due = new Set(followUpDueIds());
+      if (due.size) actions.innerHTML = `<button class="btn follow-up-btn" id="tileFollowUpBtn">${icon('reply', 14)} Follow up with ${due.size}</button><span class="muted small">Replies in the same conversation to everyone who is due.</span>`;
       rows = cs.map((c) => candRow(c,
-        `Sent ${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : ''} · ${c.openedAt ? `${icon('eye', 12)} opened ${timeAgo(c.openedAt)}` : 'not opened yet'}`,
-        `${statusSelect(c)}${gmailLink(c)}`));
+        `Sent ${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : ''}${c.followUpCount ? ` · followed up ${c.followUpCount}×` : ''} · ${c.openedAt ? `${icon('eye', 12)} opened ${timeAgo(c.openedAt)}` : 'not opened yet'}${due.has(c.id) ? ' · <span class="due-tag">due a follow-up</span>' : ''}`,
+        `<button class="tile-link tile-followup" data-id="${esc(c.id)}">${icon('reply', 13)} Follow up</button>${statusSelect(c)}${gmailLink(c)}`));
     } else if (kind === 'replied') {
       const realReplies = (c) => (c.replies || []).filter((r) => !r.kind);
       const cs = state.candidates.filter((c) => c.status === 'replied').sort((a, b) => String(b.lastReplyAt || b.repliedAt || '').localeCompare(String(a.lastReplyAt || a.repliedAt || '')));
@@ -283,7 +285,12 @@
     card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTile(card.dataset.tile); } });
   });
   // Link an unmatched Calendly booking to a candidate: inline search, click to link.
+  $('#tileActions').addEventListener('click', (e) => {
+    if (e.target.closest('#tileFollowUpBtn')) { $('#tileModal').hidden = true; openCompose(followUpDueIds(), null, { followUp: true }); }
+  });
   $('#tileList').addEventListener('click', (e) => {
+    const fu = e.target.closest('.tile-followup');
+    if (fu) { $('#tileModal').hidden = true; openCompose([fu.dataset.id], null, { followUp: true }); return; }
     const btn = e.target.closest('.link-btn');
     if (!btn) return;
     const row = btn.closest('.tile-row');
@@ -395,6 +402,13 @@
     const label = n ? `Email all ${n} not contacted` : 'Everyone has been contacted';
     $$('.email-all-btn').forEach((b) => { b.textContent = label; b.disabled = n === 0; });
     $('#sendCountBadge').textContent = n ? `${n} to send` : 'nothing to send';
+    const due = followUpDueIds().length;
+    $$('.follow-up-btn').forEach((b) => {
+      b.innerHTML = `${icon('reply', 15)} ${due ? `Follow up with ${due}` : 'No follow-ups due'}`;
+      b.disabled = due === 0;
+      b.title = due ? `Reply in the same conversation to the ${due} ${due === 1 ? 'person' : 'people'} who haven't answered` : `People become due ${state.followUp ? state.followUp.days : 3} days after their last email if they haven't replied`;
+    });
+    $('#followUpDueBadge').textContent = due ? `${due} due` : 'nobody due';
   }
 
   function timeAgo(ts) {
@@ -445,6 +459,7 @@
         <td>${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
         <td><div class="row-actions">
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
+          ${c.status === 'emailed' ? `<button class="icon-btn act-followup" title="Follow up (reply in the same conversation)">${icon('reply', 16)}</button>` : ''}
           <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
         </div></td>
       </tr>`;
@@ -470,6 +485,7 @@
       return;
     }
     if (e.target.closest('.act-email')) { openCompose([id]); return; }
+    if (e.target.closest('.act-followup')) { openCompose([id], null, { followUp: true }); return; }
     if (e.target.closest('.act-delete')) {
       if (confirm(`Remove ${cand.name || cand.email} from the pipeline?`)) {
         api(`/api/candidates/${id}`, { method: 'DELETE' })
@@ -502,6 +518,10 @@
   $('#sendSelectedBtn').addEventListener('click', () => openCompose([...selected]));
   $('#candEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
   $('#dashEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
+  $$('.follow-up-btn').forEach((b) => b.addEventListener('click', () => {
+    if (b.id === 'tplFollowUpBtn' && followUpDirty) return;   // that button sends the unsaved draft (handled below)
+    openCompose(followUpDueIds(), null, { followUp: true });
+  }));
   // From the template page, send exactly what's in the editor (saved or not).
   $('#tplSendAllBtn').addEventListener('click', () =>
     openCompose(uncontactedIds(), { subject: $('#tplSubject').value, body: $('#tplBody').value }));
@@ -525,31 +545,41 @@
 
   // ---------------- Compose & send ----------------
   let cancelSend = false;
-  function openCompose(ids, override) {
+  let composeFollowUp = false;
+  function openCompose(ids, override, { followUp = false } = {}) {
     if (!state.sending.ready) {
       toast(state.sending.reason || 'Set up your work email first (Settings → Google or App Password).', true);
       show('settings');
       return;
     }
-    if (!ids.length) { toast('Nobody to email — everyone has been contacted.', true); return; }
+    if (!ids.length) {
+      toast(followUp
+        ? `Nobody is due a follow-up — people become due ${state.followUp.days} day${state.followUp.days === 1 ? '' : 's'} after their last email if they haven't replied.`
+        : 'Nobody to email — everyone has been contacted.', true);
+      return;
+    }
     composeIds = ids;
+    composeFollowUp = followUp;
     cancelSend = false;
     const cands = ids.map((id) => state.candidates.find((c) => c.id === id)).filter(Boolean);
-    $('#composeTitle').textContent = cands.length === 1
-      ? `Email ${cands[0].name || cands[0].email}`
-      : `Email ${cands.length} candidates personally`;
+    $('#composeTitle').textContent = followUp
+      ? (cands.length === 1 ? `Follow up with ${cands[0].name || cands[0].email}` : `Follow up with ${cands.length} people`)
+      : (cands.length === 1 ? `Email ${cands[0].name || cands[0].email}` : `Email ${cands.length} candidates personally`);
     $('#composeTo').innerHTML =
       cands.slice(0, 6).map((c) => `<span class="to-chip">${esc(c.name || c.email)}</span>`).join('') +
       (cands.length > 6 ? `<span class="to-more">+${cands.length - 6} more</span>` : '');
-    $('#composeSubject').value = override ? override.subject : state.template.subject;
-    $('#composeBody').value = override ? override.body : state.template.body;
-    const atts = (state.template && state.template.attachments) || [];
+    const base = followUp ? state.followUp.template : state.template;
+    $('#composeSubject').value = override ? override.subject : base.subject;
+    $('#composeBody').value = override ? override.body : base.body;
+    const atts = followUp ? [] : ((state.template && state.template.attachments) || []);
     $('#composeAttach').hidden = !atts.length;
     $('#composeAttach').innerHTML = atts.map((a) => `<span class="pv-attach">${icon('paperclip', 13)} ${esc(a.name)} <span class="muted">(${fmtSize(a.size)})</span></span>`).join('');
     const sigNote = state.google.signature ? ' Your Gmail signature is added at the bottom.' : '';
-    $('#composeHint').textContent = cands.length === 1
-      ? `Placeholders like {{firstName}} will be filled in for ${firstNameOf(cands[0]) || 'this candidate'}. Your Calendly booking link is added at the end.${sigNote}`
-      : `Each candidate gets their own personal email — {{firstName}} etc. are filled per person, and your Calendly link is added at the end.${sigNote} Sends are spaced ~1s apart.`;
+    $('#composeHint').textContent = followUp
+      ? `Sent as a reply in each person's existing conversation — the subject becomes “Re:” their original email ({{originalSubject}}), so it lands in the same thread. No attachment is added.${sigNote}`
+      : cands.length === 1
+        ? `Placeholders like {{firstName}} will be filled in for ${firstNameOf(cands[0]) || 'this candidate'}. Your Calendly booking link is added at the end.${sigNote}`
+        : `Each candidate gets their own personal email — {{firstName}} etc. are filled per person, and your Calendly link is added at the end.${sigNote} Sends are spaced ~1s apart.`;
     $('#sendProgress').hidden = true;
     $('#sendProgress').innerHTML = '';
     $('#sendBar').hidden = true;
@@ -567,9 +597,11 @@
         `Gmail allows about ${q.dailyLimit} per day and you've sent ${q.sentToday || 0} in the last 24 hours, so ${today} go out today` +
         (today < cands.length ? ` and the remaining ${cands.length - today} continue automatically tomorrow.` : '.') +
         ` You can close this tab; progress shows on the Dashboard.`;
-      $('#composeSendBtn').textContent = `Queue ${cands.length} emails`;
+      $('#composeSendBtn').textContent = followUp ? `Queue ${cands.length} follow-ups` : `Queue ${cands.length} emails`;
     } else {
-      $('#composeSendBtn').textContent = cands.length > 1 ? `Send ${cands.length} emails` : 'Send';
+      $('#composeSendBtn').textContent = followUp
+        ? (cands.length > 1 ? `Send ${cands.length} follow-ups` : 'Send follow-up')
+        : (cands.length > 1 ? `Send ${cands.length} emails` : 'Send');
     }
     $('#composeModal').hidden = false;
   }
@@ -587,10 +619,11 @@
     const cancel = $('#composeCancelBtn');
     const total = composeIds.length;
     const template = { subject: $('#composeSubject').value, body: $('#composeBody').value };
+    const followUp = composeFollowUp;
     btn.disabled = true;
     if (queueMode) {
       try {
-        const r = await api('/api/queue', { method: 'POST', body: { candidateIds: composeIds, template } });
+        const r = await api('/api/queue', { method: 'POST', body: { candidateIds: composeIds, template, followUp } });
         $('#composeModal').hidden = true;
         selected.clear();
         toast(`${r.added} emails queued — sending has started.`);
@@ -622,7 +655,7 @@
       while (pending.length && !cancelSend) {
         const chunk = pending.slice(0, BATCH);
         pending = pending.slice(BATCH);
-        const data = await api('/api/send', { method: 'POST', body: { candidateIds: chunk, template } });
+        const data = await api('/api/send', { method: 'POST', body: { candidateIds: chunk, template, followUp } });
         const deferred = data.results.filter((r) => r.retry);
         for (const r of data.results) { if (r.ok) sent++; else if (r.queued) handedOff++; else if (!r.retry) failed.push(r); }
         if (deferred.length) {
@@ -630,7 +663,7 @@
           if (deferred.some((r) => r.kind === 'daily')) {
             // Gmail's 24-hour cap: hand the remainder to the queue, which resumes by itself.
             pending = [];
-            await api('/api/queue', { method: 'POST', body: { candidateIds: rest, template } });
+            await api('/api/queue', { method: 'POST', body: { candidateIds: rest, template, followUp } });
             toast(`Gmail's daily limit is reached — the remaining ${rest.length} were queued and will send automatically.`, true);
             break;
           }
@@ -638,7 +671,7 @@
             pending = rest;                       // request ran out of time; just continue
           } else if (++retries > 6) {
             pending = [];
-            await api('/api/queue', { method: 'POST', body: { candidateIds: rest, template } });
+            await api('/api/queue', { method: 'POST', body: { candidateIds: rest, template, followUp } });
             toast(`Gmail kept throttling — the remaining ${rest.length} were queued and will send automatically.`, true);
             break;
           } else {
@@ -949,6 +982,7 @@
   }
 
   // Client-side mirror of the server's placeholder fill, for live preview.
+  const replaceVars = (text, vars) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] ?? '');
   function fillClient(text, cand) {
     const s = state.settings;
     const vars = {
@@ -960,8 +994,12 @@
       email: cand.email || '',
       calendlyUrl: s.calendlyUrl || '',
     };
-    return String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] ?? '');
+    // The subject this person received (or would receive), for {{originalSubject}} in follow-ups.
+    vars.originalSubject = cand.lastSubject || replaceVars($('#tplSubject').value || state.template.subject, vars);
+    return replaceVars(text, vars);
   }
+  // Follow-ups: who is due comes from the server (same rule the queue uses).
+  const followUpDueIds = () => (state && state.followUp && state.followUp.dueIds) || [];
 
   function renderTemplatePreview() {
     if (!state) return;
@@ -1120,9 +1158,9 @@
   ['#tplSubject', '#tplBody'].forEach((s) =>
     $(s).addEventListener('input', () => { setTemplateDirty(true); debouncedPreview(); }));
   const debouncedPreview = debounce(renderTemplatePreview, 200);
-  $('#previewCandidate').addEventListener('change', renderTemplatePreview);
+  $('#previewCandidate').addEventListener('change', () => { renderTemplatePreview(); renderFollowUpPreview(); });
 
-  $$('.token').forEach((btn) => btn.addEventListener('click', () => {
+  $$('.token:not(.fu-token)').forEach((btn) => btn.addEventListener('click', () => {
     const ta = $('#tplBody');
     const t = btn.dataset.token;
     const start = ta.selectionStart ?? ta.value.length;
@@ -1157,6 +1195,63 @@
     return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
   }
 
+  // ---------------- Follow-up email ----------------
+  let followUpDirty = false;
+  function setFollowUpDirty(d) {
+    followUpDirty = d;
+    $('#saveFollowUpBtn').textContent = d ? 'Save follow-up •' : 'Save follow-up';
+  }
+  function renderFollowUpEditor() {
+    if (!state || !state.followUp) return;
+    if (!followUpDirty) {
+      $('#fuSubject').value = state.followUp.template.subject;
+      $('#fuBody').value = state.followUp.template.body;
+    }
+    renderFollowUpPreview();
+  }
+  function renderFollowUpPreview() {
+    if (!state) return;
+    const sel = $('#previewCandidate');
+    const cand = state.candidates.find((c) => c.id === sel.value) || state.candidates.find((c) => c.status === 'emailed') || SAMPLE;
+    $('#fuPvSubject').textContent = fillClient($('#fuSubject').value, cand);
+    $('#fuPvBody').innerHTML = esc(fillClient($('#fuBody').value, cand)).split('\n').join('<br>');
+    const fu = state.followUp || { days: 3, max: 2 };
+    $('#fuHint').textContent = `Goes to people who were emailed at least ${fu.days} day${fu.days === 1 ? '' : 's'} ago and have not replied or booked, at most ${fu.max} time${fu.max === 1 ? '' : 's'} each (change this in Settings → Sending pace). The Calendly button and your signature are added like any other email.`;
+  }
+  const debouncedFollowUpPreview = debounce(renderFollowUpPreview, 200);
+  ['#fuSubject', '#fuBody'].forEach((sel) => $(sel).addEventListener('input', () => { setFollowUpDirty(true); debouncedFollowUpPreview(); }));
+  $$('.fu-token').forEach((btn) => btn.addEventListener('click', () => {
+    const ta = $('#fuBody');
+    const t = btn.dataset.fuToken;
+    const start = ta.selectionStart ?? ta.value.length;
+    ta.value = ta.value.slice(0, start) + t + ta.value.slice(ta.selectionEnd ?? start);
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = start + t.length;
+    setFollowUpDirty(true);
+    renderFollowUpPreview();
+  }));
+  $('#saveFollowUpBtn').addEventListener('click', async () => {
+    try {
+      await api('/api/followup', { method: 'POST', body: { subject: $('#fuSubject').value, body: $('#fuBody').value } });
+      setFollowUpDirty(false);
+      toast('Follow-up email saved.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+  $('#resetFollowUpBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/followup/reset', { method: 'POST' });
+      $('#fuSubject').value = r.followUp.subject;
+      $('#fuBody').value = r.followUp.body;
+      setFollowUpDirty(false);
+      renderFollowUpPreview();
+      toast('Follow-up email reset to the default.');
+    } catch (err) { oops(err); }
+  });
+  $('#tplFollowUpBtn').addEventListener('click', () => {
+    if (followUpDirty) openCompose(followUpDueIds(), { subject: $('#fuSubject').value, body: $('#fuBody').value }, { followUp: true });
+  });
+
   // ---------------- Settings ----------------
   let settingsDirty = false;
   function setSettingsDirty(d) {
@@ -1174,6 +1269,8 @@
     setIf('#setFromName', s.fromName);
     setIf('#setDailyLimit', s.dailyLimit);
     setIf('#setPerMinute', s.perMinute);
+    setIf('#setFollowUpDays', s.followUpDays);
+    setIf('#setMaxFollowUps', s.maxFollowUps);
     if (!settingsDirty) $('#setGmailSignature').checked = s.gmailSignature !== false;
     setIf('#setNtfyTopic', s.ntfyTopic);
     setIf('#setSmtpUser', s.smtpUser);
@@ -1224,6 +1321,8 @@
       fromName: $('#setFromName').value,
       dailyLimit: $('#setDailyLimit').value,
       perMinute: $('#setPerMinute').value,
+      followUpDays: $('#setFollowUpDays').value,
+      maxFollowUps: $('#setMaxFollowUps').value,
       gmailSignature: $('#setGmailSignature').checked,
       ntfyTopic: $('#setNtfyTopic').value,
       smtpUser: $('#setSmtpUser').value,
@@ -1300,6 +1399,7 @@
     }
     renderAttachments();
     renderTemplatePreview();
+    renderFollowUpEditor();
   }
 
   // Booking times (feed + phone push) are formatted server-side in the

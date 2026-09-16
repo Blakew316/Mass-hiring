@@ -60,9 +60,13 @@ Emails are sent one-by-one so each candidate receives an individual, personal me
 - The pace applies across everything (queue and immediate sends together), and progress is saved after every single email, so a Stop pressed mid-run, a new batch queued mid-run, or a server hiccup can neither lose nor duplicate a send.
 - Small sends (8 or fewer) still go out immediately from the browser, with the same retry behaviour.
 
+## Following up
+
+People who were emailed and never replied or booked become **due a follow-up** after a wait (Settings → Sending pace: *Follow up after N days*, default 3; *Follow-ups per person*, default 2). The **Follow up** button on the Dashboard, the Candidates page, the Emailed tile and the Email Template page shows how many are due and sends them the follow-up email — as a **reply in the same conversation** (the subject becomes *Re:* the email they received, with the proper In-Reply-To/References headers, so it lands in the same thread in their inbox), without the attachment. Each person can also be followed up individually from their row. The follow-up text has its own editor and preview on the Email Template page; `{{originalSubject}}` stands for the subject they got. Anyone who replies or books while a follow-up is queued is skipped.
+
 ## Opens and replies
 
-- Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email".
+- Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email". The feed is ordered by when things actually happened (a reply is dated when it was sent, a booking when it was made), even if the app only noticed later.
 - With Google connected (and the "signature and detect replies" box ticked), the app checks the Gmail threads of sent emails every minute; a reply flips the candidate to **Replied**, appears in the feed with a preview of what they said, and pushes to your phone. Reading replies uses Gmail's read permission (`gmail.readonly`); if you connected Google before this existed, click **Reconnect** once.
 - **Only people count as replies.** Delivery failures ("Address not found", "Undeliverable", mailer-daemon messages) move the candidate to **Bounced** instead, and out-of-office / automatic replies and system notifications are ignored — none of them appear in the feed, the Replied tile or your phone. Anyone the old behaviour wrongly marked as Replied is corrected automatically on the next check, and their feed line is removed.
 - Reply text that was recorded before the read permission existed is fetched and filled in automatically, a few at a time.

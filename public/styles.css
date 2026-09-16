@@ -498,3 +498,7 @@ tr:hover .row-actions { opacity: 1; }
 .map-note.map-guess { color: var(--amber); background: var(--amber-tint); }
 .notice.ok { background: var(--green-tint); color: #145a32; border-color: #cdeedb; }
 .notice .notice-action { margin-left: auto; flex: none; align-self: center; }
+.follow-up-btn:disabled { opacity: .55; }
+.head-actions .follow-up-btn { margin-right: 6px; }
+.tile-actions .btn-small, .btn.small { padding: 5px 10px; font-size: 12px; }
+.due-tag { color: var(--amber); font-weight: 600; }
