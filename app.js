@@ -67,12 +67,12 @@ app.post('/api/logout', asyncRoute(async (req, res) => {
   res.json({ ok: true });
 }));
 
-function maskedSettings(s) {
+function maskedSettings(s, fromAddress) {
   return {
     ...s,
     // Show the pace the queue will really use (a value saved before the caps
     // existed, or typed past them, is displayed already clamped).
-    ...queue.normalizePaceSettings({ dailyLimit: s.dailyLimit, perMinute: s.perMinute }),
+    ...queue.normalizePaceSettings({ dailyLimit: s.dailyLimit, perMinute: s.perMinute }, fromAddress),
     smtpPass: s.smtpPass ? '••••••••' : '',
     googleClientSecret: s.googleClientSecret ? '••••••••' : '',
     calendlySigningKey: s.calendlySigningKey ? '••••••••' : '',
@@ -96,8 +96,10 @@ function stats(db) {
 // Who is due a follow-up: emailed, never answered, not followed up too
 // recently or too often. The dashboard's "Follow up with N" uses this list.
 function followUpSettings(settings) {
-  const days = Math.min(30, Math.max(1, Number(settings.followUpDays) || 3));
-  const max = Math.min(5, Math.max(0, Number(settings.maxFollowUps) || 2));
+  // Blank means "use the default"; a deliberate 0 means no follow-ups at all.
+  const num = (v, dflt) => { const s = String(v ?? '').trim(); const n = Number(s); return s === '' || !Number.isFinite(n) ? dflt : n; };
+  const days = Math.min(30, Math.max(1, num(settings.followUpDays, 3) || 3));
+  const max = Math.min(5, Math.max(0, num(settings.maxFollowUps, 2)));
   return { days, max };
 }
 function followUpDueIds(db) {
@@ -122,7 +124,7 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     lastError: lastError ? lastError.message : '',
     template: db.template,
     followUp: { template: db.followUp, dueIds: followUpDueIds(db), ...followUpSettings(db.settings) },
-    settings: maskedSettings(db.settings),
+    settings: maskedSettings(db.settings, sendingNow.from),
     google: await google.status(db.settings),
     sending: sendingNow,
     stats: stats(db),
@@ -150,11 +152,19 @@ const NUMERIC_SETTINGS = {
   followUpDays: [1, 30],
   maxFollowUps: [0, 5],
 };
-const PACE_LABELS = { dailyLimit: 'Daily send limit', perMinute: 'Emails per minute', followUpDays: 'Follow up after (days)', maxFollowUps: 'Follow-ups per person' };
+const SETTING_LABELS = { dailyLimit: 'Daily send limit', perMinute: 'Emails per minute', followUpDays: 'Follow up after (days)', maxFollowUps: 'Follow-ups per person' };
+// Why a number was changed, in words that match the setting.
+const SETTING_REASONS = {
+  dailyLimit: 'that is the most Google allows this account in a day',
+  perMinute: 'that is the most the Gmail API allows in a minute',
+  followUpDays: 'follow-ups can wait between 1 and 30 days',
+  maxFollowUps: 'between 0 and 5 follow-ups per person',
+};
 
 app.post('/api/settings', asyncRoute(async (req, res) => {
   const db = await store.load();
   const before = { ...db.settings };
+  const sender = (await mailer.sendStatus(db.settings)).from;
   const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
     'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'lastSheetUrl', 'timeZone'];
   const adjusted = [];
@@ -166,8 +176,8 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
       const range = NUMERIC_SETTINGS[k];
       const stored = range
         ? (Number.isFinite(Number(val)) ? String(Math.min(range[1], Math.max(range[0], Math.round(Number(val))))) : '')
-        : queue.normalizePaceSettings({ [k]: val })[k];
-      if (stored !== val) adjusted.push({ key: k, label: PACE_LABELS[k] || k, from: val, to: stored });
+        : queue.normalizePaceSettings({ [k]: val }, sender)[k];
+      if (stored !== val) adjusted.push({ key: k, label: SETTING_LABELS[k] || k, from: val, to: stored, reason: SETTING_REASONS[k] || '' });
       val = stored;
     }
     db.settings[k] = val;
@@ -179,7 +189,7 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
   if (db.settings.dailyLimit !== before.dailyLimit) kinds.push('daily');
   if (['smtpUser', 'smtpPass', 'googleClientId', 'googleClientSecret'].some((k) => db.settings[k] !== before[k])) kinds.push('not-ready');
   if (kinds.length) await queue.updateQ((f) => queue.clearPause(f, kinds) || false);
-  res.json({ ok: true, settings: maskedSettings(db.settings), adjusted });
+  res.json({ ok: true, settings: maskedSettings(db.settings, sender), adjusted });
 }));
 
 app.post('/api/template', asyncRoute(async (req, res) => {

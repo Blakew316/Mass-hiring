@@ -375,8 +375,11 @@
         if (q.dailyMax && q.dailyLimit < q.dailyMax) parts.push(`Gmail allows up to ${q.dailyMax.toLocaleString()} a day: raise the limit in Settings → Sending pace to send more today`);
       } else if (q.pausedUntil) {
         parts.push(`${q.pending} still to send`);
-        parts.push(q.note || (q.pauseKind === 'not-ready' ? 'Email is not set up — sending is paused' : 'Paused'));
-        parts.push(`resumes at ${clock(q.pausedUntil)}`);
+        const why = q.note || (q.pauseKind === 'not-ready' ? 'Email is not set up — sending is paused.' : 'Sending is paused.');
+        parts.push(why);
+        // Don't repeat a time the message already gives, and don't promise a
+        // resume time for a pause only reconnecting email can end.
+        if (q.pauseKind !== 'not-ready' && !/\buntil\b/i.test(why)) parts.push(`it resumes at ${clock(q.pausedUntil)}`);
         parts.push(`${q.sentToday} sent in the last 24h (limit ${q.dailyLimit})`);
       } else {
         const today = Math.min(q.pending, remainingToday);
@@ -1386,6 +1389,10 @@
     setIf('#setFromName', s.fromName);
     setIf('#setDailyLimit', s.dailyLimit);
     setIf('#setPerMinute', s.perMinute);
+    // The daily ceiling depends on the account that is actually sending.
+    const dailyMax = (state.queue && state.queue.dailyMax) || 2000;
+    $('#setDailyLimit').max = String(dailyMax);
+    $('#dailyLimitHint').textContent = `Up to ${dailyMax.toLocaleString()} (${dailyMax > 500 ? 'Google Workspace' : 'free Gmail'}). When it is reached the queue pauses and resumes by itself as the 24-hour window frees up.`;
     setIf('#setFollowUpDays', s.followUpDays);
     setIf('#setMaxFollowUps', s.maxFollowUps);
     if (!settingsDirty) $('#setGmailSignature').checked = s.gmailSignature !== false;
@@ -1470,7 +1477,7 @@
   function adjustedNote(r) {
     const list = (r && r.adjusted) || [];
     if (!list.length) return '';
-    return list.map((a) => `${a.label} set to ${a.to} (you entered ${a.from}) — that is the most Gmail allows`).join('; ') + '.';
+    return list.map((a) => `${a.label} set to ${a.to} (you entered ${a.from})${a.reason ? ` — ${a.reason}` : ''}`).join('; ') + '.';
   }
 
   $('#saveSettingsBtn').addEventListener('click', () =>
