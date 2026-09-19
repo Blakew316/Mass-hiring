@@ -168,6 +168,7 @@
       ['Set up sending from your work email', state.sending.ready, 'settings'],
       ['Add your Calendly booking link', Boolean(st.calendlyUrl), 'settings'],
       ['Turn on phone notifications for bookings', Boolean(st.ntfyTopic), 'settings'],
+      ['Add your Apollo key to find new candidates', Boolean(state.apollo && state.apollo.configured), 'import'],
       ['Personalize your default email template', true, 'template'],
     ];
     const allDone = items.every(([, d]) => d);
@@ -1152,11 +1153,48 @@
       const el = $(sel);
       if (el && !el.value && document.activeElement !== el) el.value = v;
     }
-    $('#apolloSearchBtn').disabled = apolloBusy;
+    $('#apolloSearchBtn').disabled = apolloBusy || !a.configured;
+    // The key can be pasted here instead of hunting for it in Settings.
+    $('#apolloKeyRow').hidden = Boolean(a.configured);
+    $('#apolloKeyHint').hidden = Boolean(a.configured);
     if (!a.configured && !$('#apolloResult').textContent) {
-      $('#apolloResult').innerHTML = 'Paste an Apollo API key in <a href="#settings" data-goto="settings">Settings</a> to use this.';
+      $('#apolloResult').innerHTML = 'Paste your Apollo API key above to switch this on. It is the same key as in <button class="btn link" type="button" data-apollo-settings>Settings → Apollo</button>.';
     }
   }
+
+  // Save the key straight from the Import page.
+  $('#apolloKeySaveBtn').addEventListener('click', async () => {
+    const el = $('#apolloKeyInline');
+    const key = el.value.trim();
+    if (!key) { el.focus(); return toast('Paste the key from Apollo first.', true); }
+    const btn = $('#apolloKeySaveBtn');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+      await api('/api/settings', { method: 'POST', body: { apolloApiKey: key } });
+      el.value = '';
+      await refresh();
+      $('#apolloResult').textContent = 'Key saved. Press Search to see how many people match — searching costs nothing.';
+      toast('Apollo key saved.');
+    } catch (err) {
+      oops(err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Save key';
+    }
+  });
+
+  // "Settings → Apollo" anywhere takes you to the field itself.
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-apollo-settings]')) return;
+    show('settings');
+    const field = $('#setApolloApiKey');
+    if (!field) return;
+    $('#apolloSettingsCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    field.focus();
+    field.classList.add('flash');
+    setTimeout(() => field.classList.remove('flash'), 2200);
+  });
 
   $('#apolloSearchBtn').addEventListener('click', async () => {
     if (apolloBusy) return;

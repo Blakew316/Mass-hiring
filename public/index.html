@@ -222,6 +222,11 @@
           <div><label class="label">…and at most (months)</label><input type="number" id="apolloMaxMonths" class="input" min="0" max="240" placeholder="30"></div>
         </div>
         <div class="hint">People one to two and a half years into a job answer recruiting mail most often. Anyone already on your list is skipped, and nobody from your own company is ever added.</div>
+        <div class="field-row" id="apolloKeyRow" hidden>
+          <input type="password" id="apolloKeyInline" class="input" placeholder="paste your Apollo API key here">
+          <button class="btn" id="apolloKeySaveBtn">Save key</button>
+        </div>
+        <div class="hint" id="apolloKeyHint" hidden>Get the key from <a href="https://app.apollo.io/#/settings/integrations/api" target="_blank" rel="noopener">Apollo → Settings → Integrations → API</a>: press <strong>Connect</strong>, then copy the key it shows. It is saved with your other settings, masked afterwards, and never sent to the browser again. API access needs a paid Apollo plan; if yours does not have it, the key is refused and this card says so.</div>
         <div class="card-actions">
           <button class="btn" id="apolloSearchBtn">Search (free)</button>
           <button class="btn btn-primary" id="apolloImportBtn" disabled>Add candidates</button>
@@ -429,9 +434,9 @@
           <p class="muted small">People who were emailed and never replied become due for a follow-up after the wait; the <strong>Follow up</strong> buttons show how many are due.</p>
         </div>
 
-        <div class="card">
+        <div class="card" id="apolloSettingsCard">
           <div class="card-head"><h2>Apollo (candidate search)</h2></div>
-          <p class="muted">Lets the Import page pull new candidates from Apollo. Create a key in Apollo under Settings → Integrations → API, then paste it here.</p>
+          <p class="muted">Lets the Import page pull new candidates from Apollo. Get a key from <a href="https://app.apollo.io/#/settings/integrations/api" target="_blank" rel="noopener">Apollo → Settings → Integrations → API</a> (press <strong>Connect</strong>, then copy it) and paste it here, then press <strong>Save settings</strong> at the top of this page.</p>
           <label class="label">Apollo API key</label>
           <input type="password" id="setApolloApiKey" class="input" placeholder="paste your Apollo API key">
           <div class="hint">Searching costs nothing. Revealing an email costs one Apollo credit, and the Import page always shows how many a batch will use before you confirm.</div>
