@@ -464,8 +464,13 @@ const APOLLO_IDS_PER_REQUEST = 10;
 
 app.post('/api/apollo/search', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const found = await apollo.search(db.settings, req.body || {}, { page: req.body && req.body.page });
-  res.json({ ok: true, ...found, maxPerPull: apollo.MAX_PER_PULL, perRequest: APOLLO_IDS_PER_REQUEST });
+  try {
+    const found = await apollo.search(db.settings, req.body || {}, { page: req.body && req.body.page });
+    res.json({ ok: true, ...found, maxPerPull: apollo.MAX_PER_PULL, perRequest: APOLLO_IDS_PER_REQUEST });
+  } catch (err) {
+    if (!err.planUpgrade) throw err;
+    res.status(400).json({ error: err.message, planUpgrade: true });
+  }
 }));
 
 app.post('/api/apollo/import', asyncRoute(async (req, res) => {

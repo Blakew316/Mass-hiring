@@ -27,6 +27,8 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // ---------------- API ----------------
+  // Errors carry whatever extra fields the server sent, so a caller can tell
+  // "your plan blocks this" apart from "that went wrong".
   async function api(path, opts = {}) {
     const res = await fetch(path, {
       headers: { 'Content-Type': 'application/json' },
@@ -42,7 +44,14 @@
       $('#setupScreen').hidden = false;
       throw new Error('Set APP_PASSWORD first.');
     }
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (!res.ok) {
+      // Keep whatever else the server said on the error, so a caller can tell
+      // a blocked plan apart from something having gone wrong.
+      const err = new Error(data.error || `Request failed (${res.status})`);
+      err.status = res.status;
+      for (const [k, v] of Object.entries(data)) if (k !== 'error' && k !== 'message') err[k] = v;
+      throw err;
+    }
     return data;
   }
 
@@ -1223,7 +1232,14 @@
         ? `${total.toLocaleString()} people match. ${take} ready to add, at one Apollo credit each. Anyone already in your list is skipped and nobody from your own company is added.`
         : `${total.toLocaleString()} people match, but every one of them has already been pulled in this browser. Change the titles, locations or months in role for new people.`;
     } catch (err) {
-      $('#apolloResult').textContent = '';
+      // Keep the reason on the card: a plan problem is not fixed by pressing
+      // Search again, and a toast disappears before it can be read.
+      $('#apolloResult').textContent = err.message || String(err);
+      if (err.planUpgrade) {
+        $('#apolloStatus').textContent = 'plan does not allow it';
+        $('#apolloStatus').className = 'badge tint-amber';
+        $('#apolloResult').innerHTML = `${esc(err.message)} <a href="https://www.apollo.io/pricing" target="_blank" rel="noopener">See Apollo's plans</a>.`;
+      }
       oops(err);
     } finally {
       apolloBusy = false;

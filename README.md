@@ -55,6 +55,7 @@ Emails are sent one-by-one so each candidate receives an individual, personal me
 
 **Import → Find candidates with Apollo** searches Apollo's database and adds the people it finds straight to the list, with their current role, employer, location and **previous roles** — no spreadsheet in between. Paste an Apollo API key in Settings first (Apollo → Settings → Integrations → API).
 
+- The key has to come from an Apollo account whose plan includes API access: trial and free plans answer `not included in your plan`, and the card says so rather than blaming the key.
 - Searching is **free** and only reports how many people match, with a sample. Revealing an email costs **one Apollo credit**, so the second button says how many credits the batch will use and asks before spending them.
 - The defaults look for account executives, outside sales reps and business development reps at payments and merchant-services companies in the United States, one to two and a half years into their current job — the window in which people answer recruiting mail most often.
 - Anyone already in the list is skipped (their blank details are filled in instead), nobody from your own email domain or company is ever added, and ids already pulled in this browser are not paid for twice.
