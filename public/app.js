@@ -693,11 +693,13 @@
         for (const r of data.results) { if (r.ok) sent++; else if (r.queued) handedOff++; else if (!r.retry) failed.push(r); }
         if (deferred.length) {
           const rest = [...deferred.map((r) => r.id), ...pending];
-          if (deferred.some((r) => r.kind === 'daily')) {
-            // Gmail's 24-hour cap: hand the remainder to the queue, which resumes by itself.
+          const daily = deferred.find((r) => r.kind === 'daily');
+          if (daily) {
+            // A 24-hour cap (yours or Gmail's): hand the remainder to the queue,
+            // which resumes by itself — waiting here would take hours.
             pending = [];
             await api('/api/queue', { method: 'POST', body: { candidateIds: rest, template, followUp } });
-            toast(`Gmail's daily limit is reached — the remaining ${rest.length} were queued and will send automatically.`, true);
+            toast(`${daily.error || 'The daily sending limit is reached.'} The remaining ${rest.length} were queued and send automatically.`, true);
             break;
           }
           if (deferred.every((r) => r.kind === 'budget')) {

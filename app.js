@@ -535,9 +535,12 @@ app.post('/api/send', asyncRoute(async (req, res) => {
       results.push({ id, ok: false, retry: true, kind, retryAt: retryAt.toISOString(), email: rc ? rc.email : '', error });
     }
   };
-  // Respect an active Gmail pause, the daily cap and the shared per-minute pace before touching Gmail.
+  // Respect an active pause, the daily cap and the shared per-minute pace before touching Gmail.
   if (q.pausedUntil && new Date(q.pausedUntil).getTime() > Date.now()) {
-    deferAll('rate', new Date(q.pausedUntil), q.note || 'Gmail asked us to slow down.');
+    // A daily pause lasts hours, so the browser must hand the emails to the
+    // queue at once instead of waiting it out as if it were a throttle.
+    const daily = q.pauseKind === 'daily' || q.pauseKind === 'gmail-daily';
+    deferAll(daily ? 'daily' : 'rate', new Date(q.pausedUntil), q.note || (daily ? 'The daily sending limit is reached.' : 'Gmail asked us to slow down.'));
     return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
   }
   if (queue.sentToday(q) >= dailyLimit) {
@@ -581,8 +584,10 @@ app.post('/api/send', asyncRoute(async (req, res) => {
       if (kind === 'rate' || kind === 'daily') {
         const hinted = queue.retryAfterFrom(err.message);
         const retryAt = new Date(Math.max(hinted ? hinted.getTime() : 0, Date.now() + (kind === 'daily' ? 3600 : 60) * 1000));
-        const note = kind === 'daily' ? 'Gmail reports the daily sending limit is reached.' : 'Gmail asked us to slow down.';
-        await queue.updateQ((f) => { f.pausedUntil = retryAt.toISOString(); f.pauseKind = kind; f.note = note; });
+        const note = kind === 'daily'
+          ? 'Gmail itself reports the account has reached its daily sending limit — sending resumes automatically once Google allows it again.'
+          : 'Gmail asked us to slow down — sending resumes automatically in a few minutes.';
+        await queue.updateQ((f) => { f.pausedUntil = retryAt.toISOString(); f.pauseKind = kind === 'daily' ? 'gmail-daily' : 'rate'; f.note = note; });
         deferAll(kind, retryAt, err.message);
         break;
       }
