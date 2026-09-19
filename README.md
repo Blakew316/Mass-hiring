@@ -51,6 +51,21 @@ The shipped flyer is a 1,224px-wide copy of the print original — sharp on any 
 
 Emails are sent one-by-one so each candidate receives an individual, personal message — never a CC/BCC blast. **Email all not-contacted candidates** (on the Email Template page, the Dashboard, or the Candidates page) queues everyone still marked *Not contacted*; a scheduled job on the server then sends them automatically at the pace set in Settings (default 30 a minute, at most 60), so you can close the tab. The Dashboard shows progress and a Stop button.
 
+## Finding new candidates (Apollo)
+
+**Import → Find candidates with Apollo** searches Apollo's database and adds the people it finds straight to the list, with their current role, employer, location and **previous roles** — no spreadsheet in between. Paste an Apollo API key in Settings first (Apollo → Settings → Integrations → API).
+
+- Searching is **free** and only reports how many people match, with a sample. Revealing an email costs **one Apollo credit**, so the second button says how many credits the batch will use and asks before spending them.
+- The defaults look for account executives, outside sales reps and business development reps at payments and merchant-services companies in the United States, one to two and a half years into their current job — the window in which people answer recruiting mail most often.
+- Anyone already in the list is skipped (their blank details are filled in instead), nobody from your own email domain or company is ever added, and ids already pulled in this browser are not paid for twice.
+- Each request reveals at most ten addresses, so a batch of fifty is ten small requests with a progress count, and a failure halfway through still keeps everyone already added.
+
+## Filtering by role
+
+The Candidates page has a **role menu** next to the status chips, listing every role people in your list currently hold with a count each, most common first. Picking one narrows the table, and it combines with the status chips and the search box. People with no role on file get their own entry.
+
+Each row shows what that person did **before** their current job, the search box matches those past roles too, and the **Emailed** tile lists everyone's role, employer and previous roles next to whether they opened the email — so you can see which kind of background actually opens and replies.
+
 ### Gmail sending limits (why the queue paces itself)
 
 - Google Workspace allows roughly **2,000 messages per account per rolling 24 hours** (500 on free Gmail). That is Google's ceiling, so the *Daily send limit* in Settings (default 1,800) cannot be set above it. When the limit is reached the queue pauses **until the oldest send in the window is 24 hours old** — the dashboard shows that exact time and says the pause is your daily limit, not a Gmail throttle. Raising the limit in Settings lifts the pause immediately. A list larger than the daily limit therefore always spans more than one day; nothing can send 2,900 emails from one Gmail account in a day.

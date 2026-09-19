@@ -134,6 +134,7 @@
 
       <div class="toolbar">
         <div class="search-wrap"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…"></div>
+        <select id="roleFilter" class="input role-filter" title="Filter by the role someone currently holds"><option value="">All roles</option></select>
         <div class="filter-chips" id="filterChips">
           <button class="chip active" data-filter="all">All</button>
           <button class="chip" data-filter="new">Not contacted</button>
@@ -150,7 +151,7 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="checkAll"></th>
-              <th>Name</th><th>Email</th><th>Role</th><th>Company</th><th>Status</th><th>Last emailed</th><th></th>
+              <th>Name</th><th>Email</th><th>Role &amp; history</th><th>Company</th><th>Status</th><th>Last emailed</th><th></th>
             </tr>
           </thead>
           <tbody id="candidateRows"></tbody>
@@ -205,6 +206,28 @@
       </div>
 
       <div class="notice" id="importResult" hidden></div>
+
+      <div class="card" id="apolloCard">
+        <div class="card-head">
+          <h2>Find candidates with Apollo</h2>
+          <span class="badge tint-blue" id="apolloStatus">not set up</span>
+        </div>
+        <p class="muted">Searches Apollo's database and adds the people it finds straight to your list, with their current role, employer, location and previous roles. Searching is free; each email address Apollo reveals costs one of your Apollo credits.</p>
+        <div class="grid-2">
+          <div><label class="label">Job titles</label><input type="text" id="apolloTitles" class="input" placeholder="account executive, outside sales representative"></div>
+          <div><label class="label">Locations</label><input type="text" id="apolloLocations" class="input" placeholder="United States"></div>
+          <div><label class="label">Industry keywords</label><input type="text" id="apolloKeywords" class="input" placeholder="merchant services, payment processing"></div>
+          <div><label class="label">How many to add</label><input type="number" id="apolloCount" class="input" min="1" max="200" placeholder="50"></div>
+          <div><label class="label">In current job at least (months)</label><input type="number" id="apolloMinMonths" class="input" min="0" max="240" placeholder="12"></div>
+          <div><label class="label">…and at most (months)</label><input type="number" id="apolloMaxMonths" class="input" min="0" max="240" placeholder="30"></div>
+        </div>
+        <div class="hint">People one to two and a half years into a job answer recruiting mail most often. Anyone already on your list is skipped, and nobody from your own company is ever added.</div>
+        <div class="card-actions">
+          <button class="btn" id="apolloSearchBtn">Search (free)</button>
+          <button class="btn btn-primary" id="apolloImportBtn" disabled>Add candidates</button>
+        </div>
+        <div class="hint" id="apolloResult"></div>
+      </div>
 
       <div class="card" id="mappingCard" hidden>
         <div class="card-head">
@@ -404,6 +427,14 @@
             <div><label class="label">Follow-ups per person (max)</label><input type="number" id="setMaxFollowUps" class="input" min="0" max="5" placeholder="2"></div>
           </div>
           <p class="muted small">People who were emailed and never replied become due for a follow-up after the wait; the <strong>Follow up</strong> buttons show how many are due.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Apollo (candidate search)</h2></div>
+          <p class="muted">Lets the Import page pull new candidates from Apollo. Create a key in Apollo under Settings → Integrations → API, then paste it here.</p>
+          <label class="label">Apollo API key</label>
+          <input type="password" id="setApolloApiKey" class="input" placeholder="paste your Apollo API key">
+          <div class="hint">Searching costs nothing. Revealing an email costs one Apollo credit, and the Import page always shows how many a batch will use before you confirm.</div>
         </div>
 
         <div class="card">

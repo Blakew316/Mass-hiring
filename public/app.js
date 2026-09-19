@@ -9,6 +9,7 @@
   let selected = new Set();    // selected candidate ids
   let filter = 'all';
   let search = '';
+  let roleFilter = '';          // exact current role someone holds, '' = every role
   let pendingImport = null;    // {headers, rows, mapping, source}
   let composeIds = [];
 
@@ -226,7 +227,7 @@
       const due = new Set(followUpDueIds());
       if (due.size) actions.innerHTML = `<button class="btn follow-up-btn" id="tileFollowUpBtn">${icon('reply', 14)} Follow up with ${due.size}</button><span class="muted small">Replies in the same conversation to everyone who is due.</span>`;
       rows = cs.map((c) => candRow(c,
-        `Sent ${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : ''}${c.followUpCount ? ` · followed up ${c.followUpCount}×` : ''} · ${c.openedAt ? `${icon('eye', 12)} opened ${timeAgo(c.openedAt)}` : 'not opened yet'}${due.has(c.id) ? ' · <span class="due-tag">due a follow-up</span>' : ''}`,
+        `Sent ${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : ''}${c.followUpCount ? ` · followed up ${c.followUpCount}×` : ''} · ${c.openedAt ? `${icon('eye', 12)} opened ${timeAgo(c.openedAt)}` : 'not opened yet'}${c.pastRoles ? ` · previously ${String(c.pastRoles).split('|').map((x) => x.trim()).filter(Boolean).slice(0, 2).join('; ')}` : ''}${due.has(c.id) ? ' · <span class="due-tag">due a follow-up</span>' : ''}`,
         `<button class="tile-link tile-followup" data-id="${esc(c.id)}">${icon('reply', 13)} Follow up</button>${statusSelect(c)}${gmailLink(c)}`));
     } else if (kind === 'replied') {
       const realReplies = (c) => (c.replies || []).filter((r) => !r.kind);
@@ -453,14 +454,42 @@
   }
 
   // ---------------- Candidates ----------------
+  // A role written a dozen slightly different ways is still one role to a
+  // person reading the list, so compare them loosely.
+  const roleKey = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
   function visibleCandidates() {
     const q = search.toLowerCase();
     return state.candidates.filter((c) => {
       if (filter !== 'all' && c.status !== filter) return false;
+      if (roleFilter === '__none' && roleKey(c.role)) return false;
+      if (roleFilter && roleFilter !== '__none' && roleKey(c.role) !== roleFilter) return false;
       if (!q) return true;
-      return [c.name, c.firstName, c.lastName, c.email, c.role, c.company]
+      return [c.name, c.firstName, c.lastName, c.email, c.role, c.company, c.pastRoles]
         .some((f) => String(f || '').toLowerCase().includes(q));
     });
+  }
+
+  // Every role people currently hold, most common first, with how many hold it.
+  function renderRoleFilter() {
+    const sel = $('#roleFilter');
+    if (!sel) return;
+    const counts = new Map();
+    for (const c of state.candidates) {
+      const key = roleKey(c.role);
+      if (!key) continue;
+      const entry = counts.get(key) || { label: String(c.role).trim(), n: 0 };
+      entry.n += 1;
+      counts.set(key, entry);
+    }
+    const roles = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].label.localeCompare(b[1].label));
+    const missing = state.candidates.filter((c) => !roleKey(c.role)).length;
+    if (roleFilter && !counts.has(roleFilter)) roleFilter = '';     // that role is gone from the list
+    sel.innerHTML = `<option value="">All roles (${state.candidates.length})</option>`
+      + roles.map(([key, r]) => `<option value="${esc(key)}">${esc(r.label)} (${r.n})</option>`).join('')
+      + (missing ? `<option value="__none">No role on file (${missing})</option>` : '');
+    sel.value = roleFilter;
+    sel.title = roles.length ? `Filter by the role someone currently holds (${roles.length} in your list)` : 'Roles appear here once your candidates have one on file';
   }
 
   function initials(c) {
@@ -484,7 +513,7 @@
           ${(c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
         </div></td>
         <td>${esc(c.email)}</td>
-        <td>${esc(c.role) || '<span class="muted">—</span>'}</td>
+        <td>${esc(c.role) || '<span class="muted">—</span>'}${c.pastRoles ? `<div class="cand-sub" title="${esc(c.pastRoles)}">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}</td>
         <td>${esc(c.company) || '<span class="muted">—</span>'}</td>
         <td><select class="status-select ${st.cls}" title="Change status">
           ${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${v.label}</option>`).join('')}
@@ -541,6 +570,7 @@
     renderCandidates();
   });
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; renderCandidates(); });
+  $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; selected.clear(); renderCandidates(); });
   $('#filterChips').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
@@ -1068,6 +1098,151 @@
     }
   });
 
+  // ---------------- Apollo: add candidates without a file ----------------
+  // Searching is free and only counts matches. Revealing addresses costs one
+  // Apollo credit each, so nothing is revealed until the second button, the
+  // batch size is what the user typed, and the result says what was spent.
+  const APOLLO_DEFAULTS = {
+    titles: 'account executive, outside sales representative, business development representative',
+    locations: 'United States',
+    keywords: 'merchant services, payment processing',
+    count: '50',
+    minMonths: '12',
+    maxMonths: '30',
+  };
+  let apolloIds = [];        // ids from the last search that have not been added yet
+  let apolloBusy = false;
+
+  // Ids already paid for in this browser, so a repeat search does not spend
+  // credits revealing the same people twice.
+  function apolloSeen() {
+    try { return new Set(JSON.parse(localStorage.getItem('apolloSeen') || '[]')); } catch { return new Set(); }
+  }
+  function rememberApollo(ids) {
+    try {
+      const all = [...apolloSeen(), ...ids].slice(-5000);
+      localStorage.setItem('apolloSeen', JSON.stringify(all));
+    } catch {}
+  }
+
+  function apolloCriteria() {
+    const val = (sel, dflt) => (($(sel) && $(sel).value.trim()) || dflt);
+    return {
+      titles: val('#apolloTitles', APOLLO_DEFAULTS.titles),
+      locations: val('#apolloLocations', APOLLO_DEFAULTS.locations),
+      keywords: val('#apolloKeywords', APOLLO_DEFAULTS.keywords),
+      minMonthsInRole: val('#apolloMinMonths', APOLLO_DEFAULTS.minMonths),
+      maxMonthsInRole: val('#apolloMaxMonths', APOLLO_DEFAULTS.maxMonths),
+    };
+  }
+  const apolloWanted = () => {
+    const max = (state.apollo && state.apollo.maxPerPull) || 200;
+    return Math.min(max, Math.max(1, Number($('#apolloCount').value) || Number(APOLLO_DEFAULTS.count)));
+  };
+
+  function renderApollo() {
+    const a = state.apollo || {};
+    const badge = $('#apolloStatus');
+    if (!badge) return;
+    badge.textContent = a.configured ? 'ready' : 'API key needed';
+    badge.className = `badge ${a.configured ? 'tint-mint' : 'tint-amber'}`;
+    for (const [sel, v] of [['#apolloTitles', APOLLO_DEFAULTS.titles], ['#apolloLocations', APOLLO_DEFAULTS.locations],
+      ['#apolloKeywords', APOLLO_DEFAULTS.keywords], ['#apolloCount', APOLLO_DEFAULTS.count],
+      ['#apolloMinMonths', APOLLO_DEFAULTS.minMonths], ['#apolloMaxMonths', APOLLO_DEFAULTS.maxMonths]]) {
+      const el = $(sel);
+      if (el && !el.value && document.activeElement !== el) el.value = v;
+    }
+    $('#apolloSearchBtn').disabled = apolloBusy;
+    if (!a.configured && !$('#apolloResult').textContent) {
+      $('#apolloResult').innerHTML = 'Paste an Apollo API key in <a href="#settings" data-goto="settings">Settings</a> to use this.';
+    }
+  }
+
+  $('#apolloSearchBtn').addEventListener('click', async () => {
+    if (apolloBusy) return;
+    apolloBusy = true;
+    $('#apolloSearchBtn').disabled = true;
+    $('#apolloImportBtn').disabled = true;
+    $('#apolloResult').textContent = 'Searching Apollo…';
+    try {
+      const want = apolloWanted();
+      const seen = apolloSeen();
+      const body = apolloCriteria();
+      let total = 0;
+      let fresh = [];
+      // One page is 100 people; fetch a few more only if a bigger batch was asked for.
+      for (let page = 1; page <= 3; page++) {
+        const r = await api('/api/apollo/search', { method: 'POST', body: { ...body, page } });
+        total = r.total || 0;
+        fresh = fresh.concat((r.ids || []).filter((id) => !seen.has(id) && !fresh.includes(id)));
+        if (fresh.length >= want || page >= (r.pages || 1)) break;
+      }
+      apolloIds = fresh;
+      const take = Math.min(want, apolloIds.length);
+      $('#apolloImportBtn').disabled = take === 0;
+      $('#apolloImportBtn').textContent = take ? `Add ${take} candidates (about ${take} credits)` : 'Nothing new to add';
+      $('#apolloResult').textContent = take
+        ? `${total.toLocaleString()} people match. ${take} ready to add, at one Apollo credit each. Anyone already in your list is skipped and nobody from your own company is added.`
+        : `${total.toLocaleString()} people match, but every one of them has already been pulled in this browser. Change the titles, locations or months in role for new people.`;
+    } catch (err) {
+      $('#apolloResult').textContent = '';
+      oops(err);
+    } finally {
+      apolloBusy = false;
+      $('#apolloSearchBtn').disabled = false;
+    }
+  });
+
+  $('#apolloImportBtn').addEventListener('click', async () => {
+    if (apolloBusy || !apolloIds.length) return;
+    const take = Math.min(apolloWanted(), apolloIds.length);
+    if (!confirm(`Reveal ${take} email addresses? This uses about ${take} of your Apollo credits and adds those people to your candidate list.`)) return;
+    const batchSize = (state.apollo && state.apollo.batch) || 10;
+    const ids = apolloIds.slice(0, take);
+    const btn = $('#apolloImportBtn');
+    const label = btn.textContent;
+    apolloBusy = true;
+    btn.disabled = true;
+    $('#apolloSearchBtn').disabled = true;
+    const t = { added: 0, updated: 0, credits: 0, known: 0, own: 0, noEmail: 0 };
+    let done = 0;
+    try {
+      for (let i = 0; i < ids.length; i += batchSize) {
+        const slice = ids.slice(i, i + batchSize);
+        const r = await api('/api/apollo/import', { method: 'POST', body: { ids: slice } });
+        t.added += r.added || 0;
+        t.updated += r.updated || 0;
+        t.credits += r.credits || 0;
+        t.known += r.alreadyKnown || 0;
+        t.own += r.skippedOwnCompany || 0;
+        t.noEmail += r.skippedNoEmail || 0;
+        rememberApollo(slice);
+        done += slice.length;
+        btn.textContent = `Adding… ${done} / ${ids.length}`;
+        $('#apolloResult').textContent = `${t.added} added so far · ${t.credits} credits used.`;
+      }
+      apolloIds = apolloIds.slice(done);
+      await refresh();
+      const bits = [`${t.added} candidate${t.added === 1 ? '' : 's'} added`];
+      if (t.known) bits.push(`${t.known} already in your list${t.updated ? ` (${t.updated} filled in with new details)` : ''}`);
+      if (t.own) bits.push(`${t.own} skipped as your own colleagues`);
+      if (t.noEmail) bits.push(`${t.noEmail} had no usable address`);
+      bits.push(`${t.credits} Apollo credits used`);
+      $('#apolloResult').textContent = `${bits.join(' · ')}.`;
+      toast(`${t.added} candidate${t.added === 1 ? '' : 's'} added from Apollo.`);
+    } catch (err) {
+      apolloIds = apolloIds.slice(done);
+      $('#apolloResult').textContent = `Stopped after ${t.added} added and ${t.credits} credits used — ${err.message}`;
+      oops(err);
+      if (done) await refresh().catch(() => {});
+    } finally {
+      apolloBusy = false;
+      $('#apolloSearchBtn').disabled = false;
+      btn.disabled = apolloIds.length === 0;
+      btn.textContent = apolloIds.length ? label : 'Add candidates';
+    }
+  });
+
   function showImportResult(t, note) {
     const el = $('#importResult');
     const good = t.added > 0 || t.updated > 0;
@@ -1396,6 +1571,7 @@
     setIf('#setFollowUpDays', s.followUpDays);
     setIf('#setMaxFollowUps', s.maxFollowUps);
     if (!settingsDirty) $('#setGmailSignature').checked = s.gmailSignature !== false;
+    setIf('#setApolloApiKey', s.apolloApiKey);
     setIf('#setNtfyTopic', s.ntfyTopic);
     setIf('#setSmtpUser', s.smtpUser);
     setIf('#setSmtpPass', s.smtpPass);
@@ -1460,6 +1636,7 @@
       followUpDays: $('#setFollowUpDays').value,
       maxFollowUps: $('#setMaxFollowUps').value,
       gmailSignature: $('#setGmailSignature').checked,
+      apolloApiKey: $('#setApolloApiKey').value,
       ntfyTopic: $('#setNtfyTopic').value,
       smtpUser: $('#setSmtpUser').value,
       smtpPass: $('#setSmtpPass').value,
@@ -1537,7 +1714,9 @@
   function renderAll() {
     renderNotices();
     renderDashboard();
+    renderRoleFilter();
     renderCandidates();
+    renderApollo();
     renderSettings();
     // Only prime the template editor when there are no unsaved edits.
     if (!templateDirty) {

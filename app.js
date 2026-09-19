@@ -14,6 +14,7 @@ const notify = require('./lib/notify');
 const calendly = require('./lib/calendly');
 const tracking = require('./lib/tracking');
 const queue = require('./lib/queue');
+const apollo = require('./lib/apollo');
 const attachments = require('./lib/attachments');
 const address = require('./lib/email-address');
 const crypto = require('crypto');
@@ -77,6 +78,7 @@ function maskedSettings(s, fromAddress) {
     googleClientSecret: s.googleClientSecret ? '••••••••' : '',
     calendlySigningKey: s.calendlySigningKey ? '••••••••' : '',
     calendlyToken: s.calendlyToken ? '••••••••' : '',
+    apolloApiKey: s.apolloApiKey ? '••••••••' : '',
   };
 }
 
@@ -134,6 +136,7 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     queue: queue.status(await queue.loadQ(), db.settings, sendingNow.from),
     maxImmediate: MAX_PER_REQUEST,
     interviews: db.interviews || [],
+    apollo: { configured: Boolean(db.settings.apolloApiKey), maxPerPull: apollo.MAX_PER_PULL, batch: apollo.ENRICH_BATCH },
     calendly: {
       syncEnabled: Boolean(db.settings.calendlyToken),
       webhook: Boolean(db.settings.calendlySigningKey),
@@ -166,7 +169,7 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
   const before = { ...db.settings };
   const sender = (await mailer.sendStatus(db.settings)).from;
   const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
-    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'lastSheetUrl', 'timeZone'];
+    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone'];
   const adjusted = [];
   for (const k of allowed) {
     if (!(k in req.body) || req.body[k] === '••••••••') continue;
@@ -282,7 +285,7 @@ app.get('/api/template/attachments/:id/preview', asyncRoute(async (req, res) => 
 
 // ---------- Import (Google Sheet / CSV / spreadsheet / paste) ----------
 const MAX_IMPORT_ROWS = 50000;
-const IMPORT_FIELDS = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes'];
+const IMPORT_FIELDS = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'pastRoles'];
 
 // Rows → { headers, rows, lines, mapping, confidence, headerless, skipped }.
 // The header row is searched for (title lines above it are skipped); when
@@ -376,7 +379,7 @@ function analyzeImport(candidates, rows, mapping, { lines = null, headerless = f
       name: name || [firstName, lastName].filter(Boolean).join(' '),
       firstName, lastName,
       role: col(row, 'role'), company: col(row, 'company'), phone: col(row, 'phone'),
-      location: col(row, 'location'), notes: col(row, 'notes'),
+      location: col(row, 'location'), notes: col(row, 'notes'), pastRoles: col(row, 'pastRoles'),
     };
     const rowNo = rowNumber(idx);
     if (!email) { out.push({ idx, row: rowNo, kind: 'invalid', cell: col(row, 'email') || row.find((v) => String(v || '').includes('@')) || '', fields }); return; }
@@ -449,6 +452,67 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
       }
     }
     result = { ok: true, added, updated, ...summarize(analysis) };
+  });
+  res.json(result);
+}));
+
+// ---------- Apollo (adds candidates without a spreadsheet) ----------
+// Searching is free and only reports how many people match; revealing an
+// email costs one Apollo credit, so the dashboard asks for that separately
+// and in small slices, and every answer says what was actually spent.
+const APOLLO_IDS_PER_REQUEST = 10;
+
+app.post('/api/apollo/search', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const found = await apollo.search(db.settings, req.body || {}, { page: req.body && req.body.page });
+  res.json({ ok: true, ...found, maxPerPull: apollo.MAX_PER_PULL, perRequest: APOLLO_IDS_PER_REQUEST });
+}));
+
+app.post('/api/apollo/import', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const ids = (Array.isArray(req.body && req.body.ids) ? req.body.ids : []).slice(0, APOLLO_IDS_PER_REQUEST);
+  if (!ids.length) throw new Error('No Apollo records were selected.');
+  const sending = await mailer.sendStatus(db.settings);
+  const ownDomain = String(sending.from || db.settings.smtpUser || '').split('@')[1] || '';
+  const { matches, credits } = await apollo.enrich(db.settings, ids);
+  const { rows, skipped } = apollo.toRows(matches, { ownDomain, ownCompany: String((req.body && req.body.ownCompany) || '') });
+  const fields = ['email', 'name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'pastRoles', 'notes'];
+  const mapping = Object.fromEntries(fields.map((f, i) => [f, i]));
+  const table = rows.map((r) => fields.map((f) => r[f] || ''));
+  let result = null;
+  await store.update((fresh) => {
+    const analysis = analyzeImport(fresh.candidates, table, mapping, { headerless: true });
+    let added = 0;
+    let updated = 0;
+    const now = new Date().toISOString();
+    for (const a of analysis) {
+      if (a.kind === 'new') {
+        fresh.candidates.push({
+          id: store.rid(),
+          ...a.fields,
+          email: a.email,
+          status: 'new',
+          source: 'apollo',
+          addedAt: now,
+          lastEmailedAt: null,
+          bookedAt: null,
+        });
+        added += 1;
+      } else if (a.kind === 'existing' && Object.keys(a.fill).length) {
+        Object.assign(a.existing, a.fill);
+        updated += 1;
+      }
+    }
+    result = {
+      ok: true,
+      added,
+      updated,
+      credits,
+      alreadyKnown: analysis.filter((a) => a.kind === 'existing').length,
+      skippedOwnCompany: skipped.ownCompany,
+      skippedNoEmail: skipped.noEmail,
+      sample: analysis.filter((a) => a.kind === 'new').slice(0, 3).map((a) => ({ name: a.fields.name, role: a.fields.role, company: a.fields.company })),
+    };
   });
   res.json(result);
 }));
