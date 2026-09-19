@@ -70,6 +70,9 @@ app.post('/api/logout', asyncRoute(async (req, res) => {
 function maskedSettings(s) {
   return {
     ...s,
+    // Show the pace the queue will really use (a value saved before the caps
+    // existed, or typed past them, is displayed already clamped).
+    ...queue.normalizePaceSettings({ dailyLimit: s.dailyLimit, perMinute: s.perMinute }),
     smtpPass: s.smtpPass ? '••••••••' : '',
     googleClientSecret: s.googleClientSecret ? '••••••••' : '',
     calendlySigningKey: s.calendlySigningKey ? '••••••••' : '',
@@ -139,17 +142,44 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
 }));
 
 // ---------- Settings & template ----------
+// Numeric settings are stored within the range the app honours, and the
+// caller is told what was adjusted, so a typed 100/min never silently becomes
+// a different number on the dashboard.
+const NUMERIC_SETTINGS = {
+  ...Object.fromEntries(['dailyLimit', 'perMinute'].map((k) => [k, null])),   // ranges live in lib/queue.js
+  followUpDays: [1, 30],
+  maxFollowUps: [0, 5],
+};
+const PACE_LABELS = { dailyLimit: 'Daily send limit', perMinute: 'Emails per minute', followUpDays: 'Follow up after (days)', maxFollowUps: 'Follow-ups per person' };
+
 app.post('/api/settings', asyncRoute(async (req, res) => {
   const db = await store.load();
+  const before = { ...db.settings };
   const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
     'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'lastSheetUrl', 'timeZone'];
+  const adjusted = [];
   for (const k of allowed) {
     if (!(k in req.body) || req.body[k] === '••••••••') continue;
     const v = req.body[k];
-    db.settings[k] = typeof v === 'boolean' ? v : String(v ?? '').trim();
+    let val = typeof v === 'boolean' ? v : String(v ?? '').trim();
+    if (k in NUMERIC_SETTINGS && val !== '') {
+      const range = NUMERIC_SETTINGS[k];
+      const stored = range
+        ? (Number.isFinite(Number(val)) ? String(Math.min(range[1], Math.max(range[0], Math.round(Number(val))))) : '')
+        : queue.normalizePaceSettings({ [k]: val })[k];
+      if (stored !== val) adjusted.push({ key: k, label: PACE_LABELS[k] || k, from: val, to: stored });
+      val = stored;
+    }
+    db.settings[k] = val;
   }
   await store.save(db);
-  res.json({ ok: true, settings: maskedSettings(db.settings) });
+  // A raised daily limit lifts the daily-limit pause at once instead of waiting
+  // it out; new mail credentials lift the "not set up" pause.
+  const kinds = [];
+  if (db.settings.dailyLimit !== before.dailyLimit) kinds.push('daily');
+  if (['smtpUser', 'smtpPass', 'googleClientId', 'googleClientSecret'].some((k) => db.settings[k] !== before[k])) kinds.push('not-ready');
+  if (kinds.length) await queue.updateQ((f) => queue.clearPause(f, kinds) || false);
+  res.json({ ok: true, settings: maskedSettings(db.settings), adjusted });
 }));
 
 app.post('/api/template', asyncRoute(async (req, res) => {
@@ -511,7 +541,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
   }
   if (queue.sentToday(q) >= dailyLimit) {
-    deferAll('daily', new Date(Date.now() + 3600 * 1000), `Daily limit of ${dailyLimit} reached.`);
+    deferAll('daily', queue.dailyResumeAt(q, dailyLimit) || new Date(Date.now() + 3600 * 1000), `Daily limit of ${dailyLimit} reached — it frees up as the 24-hour window moves on.`);
     return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
   }
   let paceLeft = perMinute - queue.sentInLastMinute(q);
@@ -552,7 +582,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
         const hinted = queue.retryAfterFrom(err.message);
         const retryAt = new Date(Math.max(hinted ? hinted.getTime() : 0, Date.now() + (kind === 'daily' ? 3600 : 60) * 1000));
         const note = kind === 'daily' ? 'Gmail reports the daily sending limit is reached.' : 'Gmail asked us to slow down.';
-        await queue.updateQ((f) => { f.pausedUntil = retryAt.toISOString(); f.note = note; });
+        await queue.updateQ((f) => { f.pausedUntil = retryAt.toISOString(); f.pauseKind = kind; f.note = note; });
         deferAll(kind, retryAt, err.message);
         break;
       }
@@ -769,6 +799,7 @@ app.get('/auth/google/callback', asyncRoute(async (req, res) => {
   } catch (err) {
     return res.redirect('/#settings?error=' + encodeURIComponent(`${err.message} — check the OAuth Client ID and Secret, save, and try again.`));
   }
+  try { await queue.updateQ((f) => queue.clearPause(f, 'not-ready') || false); } catch {}
   res.redirect('/#settings?connected=1');
 }));
 

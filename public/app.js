@@ -361,10 +361,40 @@
     $('#sendingFill').style.width = `${pct}%`;
     $('#sendingBadge').textContent = q.active ? `${q.sent} of ${total} sent` : `finished · ${q.sent} sent`;
     const parts = [];
-    if (q.active) parts.push(`${q.pending} still to send at ~${q.perMinute}/min`);
-    parts.push(`${q.sentToday} sent in the last 24h (limit ${q.dailyLimit})`);
-    if (q.pausedUntil) parts.push(`paused until ${new Date(q.pausedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
-    if (q.note) parts.push(q.note);
+    const clock = (iso) => {
+      const d = new Date(iso);
+      const sameDay = d.toDateString() === new Date().toDateString();
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + (sameDay ? '' : ` ${d.toLocaleDateString([], { weekday: 'short' })}`);
+    };
+    const remainingToday = Number.isFinite(q.remainingToday) ? q.remainingToday : Math.max(0, (q.dailyLimit || 0) - (q.sentToday || 0));
+    if (q.active) {
+      if (q.pausedUntil && q.pauseKind === 'daily') {
+        // Not a Gmail throttle — the Daily send limit from Settings. Say when it frees up and how to send more today.
+        parts.push(`${q.pending} still to send`);
+        parts.push(`daily limit of ${q.dailyLimit} reached (${q.sentToday} sent in the last 24h) — sending resumes automatically at ${clock(q.pausedUntil)} as the 24-hour window frees up`);
+        if (q.dailyMax && q.dailyLimit < q.dailyMax) parts.push(`Gmail allows up to ${q.dailyMax.toLocaleString()} a day: raise the limit in Settings → Sending pace to send more today`);
+      } else if (q.pausedUntil) {
+        parts.push(`${q.pending} still to send`);
+        parts.push(q.note || (q.pauseKind === 'not-ready' ? 'Email is not set up — sending is paused' : 'Paused'));
+        parts.push(`resumes at ${clock(q.pausedUntil)}`);
+        parts.push(`${q.sentToday} sent in the last 24h (limit ${q.dailyLimit})`);
+      } else {
+        const today = Math.min(q.pending, remainingToday);
+        const minutes = Math.max(1, Math.ceil(today / (q.perMinute || 1)));
+        const eta = minutes >= 90 ? `about ${Math.round(minutes / 60)} h` : `about ${minutes} min`;
+        parts.push(`${q.pending} still to send at up to ${q.perMinute}/min${today ? ` (${eta} for ${today === q.pending ? 'all of them' : `the ${today} that fit today`})` : ''}`);
+        if (today < q.pending) {
+          const from = q.windowFreesAt || q.resumeAt;
+          parts.push(`the other ${q.pending - today} continue automatically once the 24-hour window frees up${from ? ` (from ${clock(from)})` : ''}`
+            + (q.dailyMax && q.dailyLimit < q.dailyMax ? ` — Gmail allows up to ${q.dailyMax.toLocaleString()} a day, so raising the Daily send limit in Settings sends more today` : ' — Gmail allows no more than that per day'));
+        }
+        parts.push(`${q.sentToday} sent in the last 24h (limit ${q.dailyLimit})`);
+        if (q.note) parts.push(q.note);
+      }
+    } else {
+      parts.push(`${q.sentToday} sent in the last 24h (limit ${q.dailyLimit})`);
+      if (q.note) parts.push(q.note);
+    }
     if (q.failed) parts.push(`${q.failed} failed — ${q.failures.map((f) => `${f.email}: ${f.error}`).slice(-3).join(' · ')}`);
     $('#sendingMeta').textContent = parts.join(' · ');
     $('#retryFailedBtn').hidden = !q.failed;
@@ -591,11 +621,14 @@
       const q = state.queue || {};
       const room = Math.max(0, (q.dailyLimit || 0) - (q.sentToday || 0));
       const today = Math.min(cands.length, room);
-      const perHour = (q.perMinute || 6) * 60;
+      const perMin = q.perMinute || 30;
+      const minutes = Math.max(1, Math.ceil(today / perMin));
+      const eta = minutes >= 90 ? `about ${Math.round(minutes / 60)} hours` : `about ${minutes} minute${minutes === 1 ? '' : 's'}`;
       $('#composeHint').textContent =
-        `${cands.length} emails will be sent automatically in the background at about ${q.perMinute || 6} per minute (${perHour}/hour), each personalized. ` +
-        `Gmail allows about ${q.dailyLimit} per day and you've sent ${q.sentToday || 0} in the last 24 hours, so ${today} go out today` +
-        (today < cands.length ? ` and the remaining ${cands.length - today} continue automatically tomorrow.` : '.') +
+        `${cands.length} emails will be sent automatically in the background at up to ${perMin} per minute, each personalized. ` +
+        `Your daily send limit is ${q.dailyLimit} (Google allows up to ${(q.dailyMax || 2000).toLocaleString()} a day) and you've sent ${q.sentToday || 0} in the last 24 hours, so ${today} go out today` +
+        (today ? ` (${eta})` : '') +
+        (today < cands.length ? ` and the remaining ${cands.length - today} continue automatically as the 24-hour window frees up.` : '.') +
         ` You can close this tab; progress shows on the Dashboard.`;
       $('#composeSendBtn').textContent = followUp ? `Queue ${cands.length} follow-ups` : `Queue ${cands.length} emails`;
     } else {
@@ -1425,13 +1458,24 @@
       googleClientSecret: $('#setGoogleClientSecret').value,
       ...extra,
     };
-    await api('/api/settings', { method: 'POST', body });
+    const r = await api('/api/settings', { method: 'POST', body });
     setSettingsDirty(false);
     await refresh();
+    return r;
+  }
+
+  // What the server actually stored when a number was outside what Gmail allows.
+  function adjustedNote(r) {
+    const list = (r && r.adjusted) || [];
+    if (!list.length) return '';
+    return list.map((a) => `${a.label} set to ${a.to} (you entered ${a.from}) — that is the most Gmail allows`).join('; ') + '.';
   }
 
   $('#saveSettingsBtn').addEventListener('click', () =>
-    saveSettings().then(() => toast('Settings saved.')).catch(oops));
+    saveSettings().then((r) => {
+      const note = adjustedNote(r);
+      toast(note ? `Settings saved. ${note}` : 'Settings saved.');
+    }).catch(oops));
 
   // Persist any typed credentials before leaving for Google's consent page.
   $('#googleConnectBtn').addEventListener('click', async (e) => {

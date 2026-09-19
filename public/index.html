@@ -396,10 +396,10 @@
 
         <div class="card">
           <div class="card-head"><h2>Sending pace</h2></div>
-          <p class="muted">Large sends go out automatically in the background at this pace. Google Workspace allows about 2,000 messages per account per rolling 24 hours (500 on free Gmail); the defaults leave headroom for your normal email.</p>
+          <p class="muted">Large sends go out automatically in the background at this pace. Google Workspace allows about 2,000 messages per account per rolling 24 hours (500 on free Gmail) and the Gmail API accepts about 60 sends a minute — those are Google's ceilings, so higher numbers are capped to them. The defaults leave headroom for your normal email.</p>
           <div class="grid-2">
-            <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"></div>
-            <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="12" placeholder="6"></div>
+            <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"><div class="hint" id="dailyLimitHint">Up to 2,000 (Google Workspace). When it is reached the queue pauses and resumes by itself as the 24-hour window frees up.</div></div>
+            <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="60" placeholder="30"><div class="hint" id="perMinuteHint">Up to 60 (Gmail's API quota). Several emails are sent in parallel each minute to keep this pace.</div></div>
             <div><label class="label">Follow up after (days)</label><input type="number" id="setFollowUpDays" class="input" min="1" max="30" placeholder="3"></div>
             <div><label class="label">Follow-ups per person (max)</label><input type="number" id="setMaxFollowUps" class="input" min="0" max="5" placeholder="2"></div>
           </div>
