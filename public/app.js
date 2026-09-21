@@ -22,6 +22,17 @@
     bounced:  { label: 'Bounced',       cls: 'tint-amber' },
   };
   const AVATAR_TINTS = ['tint-blue', 'tint-green', 'tint-mint', 'tint-navy'];
+  // Where someone stands in the TEXT funnel, which runs alongside the email one.
+  // "Delivered" and "Read" are receipts from iMessage itself — email has no
+  // equivalent, so these are the one place texting tells you more than email.
+  const TEXT_STATUS = {
+    sent:           { label: 'Sent',          cls: 'is-sent' },
+    delivered:      { label: 'Delivered',     cls: 'is-delivered' },
+    read:           { label: 'Read',          cls: 'is-read' },
+    replied:        { label: 'Replied',       cls: 'is-replied' },
+    failed:         { label: 'Failed',        cls: 'is-failed' },
+    'not-imessage': { label: 'No iMessage',   cls: 'is-none' },
+  };
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -120,6 +131,7 @@
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
     if (view === 'template') renderTemplatePreview();
+    if (view === 'texting') { renderTexting(); loadRelayToken(); }
   }
   $$('.nav-item').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
   document.addEventListener('click', (e) => {
@@ -160,6 +172,7 @@
     const icons = {
       opened: ['eye', 'tint-blue'], replied: ['bubble', 'tint-mint'],
       booked: ['calendar', 'tint-green'], canceled: ['xcircle', 'tint-red'],
+      'text-read': ['eye', 'tint-mint'], 'text-replied': ['bubble', 'tint-green'],
     };
     const list = state.events.filter((ev) => icons[ev.type]).slice(0, 15);
     $('#activityList').innerHTML = list.length
@@ -523,6 +536,7 @@
           ${(c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
         </div></td>
         <td>${esc(c.email)}</td>
+        <td>${textCell(c)}</td>
         <td>${esc(c.role) || '<span class="muted">—</span>'}${c.pastRoles ? `<div class="cand-sub" title="${esc(c.pastRoles)}">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}</td>
         <td>${esc(c.company) || '<span class="muted">—</span>'}</td>
         <td><select class="status-select ${st.cls}" title="Change status">
@@ -1503,7 +1517,7 @@
   const debouncedPreview = debounce(renderTemplatePreview, 200);
   $('#previewCandidate').addEventListener('change', () => { renderTemplatePreview(); renderFollowUpPreview(); });
 
-  $$('.token:not(.fu-token)').forEach((btn) => btn.addEventListener('click', () => {
+  $$('.token:not(.fu-token):not(.tx-token)').forEach((btn) => btn.addEventListener('click', () => {
     const ta = $('#tplBody');
     const t = btn.dataset.token;
     const start = ta.selectionStart ?? ta.value.length;
@@ -1608,6 +1622,276 @@
     $('#saveSettingsBtn').textContent = d ? 'Save settings •' : 'Save settings';
   }
   $$('#view-settings input').forEach((el) => el.addEventListener('input', () => setSettingsDirty(true)));
+
+  // ---------------- Texting ----------------
+  // A parallel channel to email: the queue lives on the server, but the
+  // sending is done by the relay on the Mac Studio, so most of this page is
+  // about whether that Mac is there and what it has managed to do.
+  let textTemplateDirty = false;
+  let relayTokenRevealed = '';
+
+  // The same rule the server applies in lib/phone.js, so the count on the
+  // button is the number that will actually be queued — a "Text 40 people"
+  // that turns into 31 is exactly the kind of thing that stops being trusted.
+  function textPhoneOf(c) {
+    let raw = String((c && c.phone) || '').trim();
+    if (!raw) return '';
+    raw = raw.replace(/\b(?:ext|x|extension)\.?\s*\d+\s*$/i, '');
+    const plus = raw.trimStart().startsWith('+');
+    const digits = raw.replace(/\D/g, '');
+    if (!digits) return '';
+    const nanp = (ten) => {
+      if (!/^\d{10}$/.test(ten)) return false;
+      const area = ten.slice(0, 3);
+      const exch = ten.slice(3, 6);
+      if (!/^[2-9]/.test(area) || !/^[2-9]/.test(exch)) return false;
+      if (area[1] === '1' && area[2] === '1') return false;
+      if (exch[1] === '1' && exch[2] === '1') return false;
+      if (area === '555') return false;
+      if (exch === '555' && /^01\d\d$/.test(ten.slice(6))) return false;
+      return true;
+    };
+    if (digits.length === 11 && digits[0] === '1') return nanp(digits.slice(1)) ? `+${digits}` : '';
+    if (!plus) return digits.length === 10 && nanp(digits) ? `+1${digits}` : '';
+    return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : '';
+  }
+  const prettyPhone = (e164) => (/^\+1\d{10}$/.test(e164)
+    ? `(${e164.slice(2, 5)}) ${e164.slice(5, 8)}-${e164.slice(8)}`
+    : e164);
+  const textableIds = () => state.candidates
+    .filter((c) => textPhoneOf(c) && !c.lastTextedAt && c.status !== 'declined' && c.status !== 'booked')
+    .map((c) => c.id);
+
+  function textCell(c) {
+    const phone = textPhoneOf(c);
+    const raw = String((c && c.phone) || '').trim();
+    // A number we cannot dial is worth saying so, not hiding behind a dash.
+    if (!phone) {
+      return raw
+        ? `<span class="text-pip is-none" title="${esc(raw)} is not a number we can text"><i class="dot"></i>bad number</span>`
+        : '<span class="muted">—</span>';
+    }
+    const st = TEXT_STATUS[c.textStatus];
+    if (!st) return `<span class="text-pip"><i class="dot"></i>${esc(prettyPhone(phone))}</span>`;
+    const when = c.textRepliedAt || c.textReadAt || c.textDeliveredAt || c.lastTextedAt;
+    return `<span class="text-pip ${st.cls}" title="${esc(prettyPhone(phone))}${when ? ` · ${new Date(when).toLocaleString()}` : ''}">
+      <i class="dot"></i>${st.label}</span>`;
+  }
+
+  function renderTexting() {
+    const t = state.texting || {};
+    const q = t.queue || {};
+    const by = (s) => state.candidates.filter((c) => c.textStatus === s).length;
+    // Someone who replied was necessarily delivered and read, so the funnel
+    // counts everyone who reached at least that step rather than exactly it.
+    const atLeast = (...kinds) => state.candidates.filter((c) => kinds.includes(c.textStatus)).length;
+    $('#txWithPhone').textContent = t.withPhone || 0;
+    $('#txSent').textContent = atLeast('sent', 'delivered', 'read', 'replied');
+    $('#txDelivered').textContent = atLeast('delivered', 'read', 'replied');
+    $('#txRead').textContent = atLeast('read', 'replied');
+    $('#txReplied').textContent = by('replied');
+
+    const n = textableIds().length;
+    $('#navTextCount').textContent = n ? String(n) : '';
+    const btn = $('#textSendAllBtn');
+    btn.textContent = n ? `Text ${n} with a number` : 'Nobody left to text';
+    btn.disabled = n === 0;
+
+    // Is the Mac actually there?
+    const r = q.relay || {};
+    const chip = $('#relayChip');
+    if (r.online) {
+      chip.className = 'badge tint-green';
+      chip.innerHTML = `<i class="relay-dot on"></i>${esc(r.host || 'Mac')} online${r.bluebubbles === false ? ' · BlueBubbles not answering' : ''}`;
+    } else if (r.lastSeenAt) {
+      chip.className = 'badge tint-amber';
+      chip.innerHTML = `<i class="relay-dot off"></i>last seen ${timeAgo(r.lastSeenAt)}`;
+    } else {
+      chip.className = 'badge tint-navy';
+      chip.innerHTML = `<i class="relay-dot off"></i>not set up yet`;
+    }
+    $('#relayTokenHint').textContent = t.tokenSet
+      ? 'A separate secret from your dashboard password. Generating a new one stops the old Mac until you update its config.'
+      : 'Generate a token, then paste it into ~/.wp-relay/config.json on the Mac Studio.';
+
+    if (!textTemplateDirty && t.template) $('#txBody').value = t.template.body || '';
+    for (const [id, val] of [['txDailyLimit', q.dailyLimit], ['txGapMin', q.minGap], ['txGapMax', q.maxGap], ['txStartHour', q.startHour], ['txEndHour', q.endHour]]) {
+      const el = $(`#${id}`);
+      if (el && document.activeElement !== el) el.value = val ?? '';
+    }
+    const sun = $('#txSunday');
+    if (sun && document.activeElement !== sun) sun.checked = Boolean(q.sunday);
+    $('#txOptOutHint').textContent = q.optOut
+      ? `${q.optOut} number${q.optOut === 1 ? '' : 's'} asked to stop and will never be texted again.`
+      : 'Anyone who replies STOP is blocked automatically and permanently.';
+
+    renderTextPreview();
+    renderTextSendingCard();
+  }
+
+  function renderTextPreview() {
+    const body = $('#txBody').value || '';
+    const who = state.candidates.find((c) => textPhoneOf(c)) || { name: 'Sam Rivera', role: 'Account Executive', company: 'Acme Payments' };
+    const first = (who.firstName || (who.name || '').split(' ')[0] || 'there');
+    const filled = body
+      .replace(/\{\{\s*firstName\s*\}\}/g, first)
+      .replace(/\{\{\s*fullName\s*\}\}/g, who.name || first)
+      .replace(/\{\{\s*role\s*\}\}/g, who.role || 'professional')
+      .replace(/\{\{\s*company\s*\}\}/g, who.company || '');
+    const withLink = state.settings.calendlyUrl && !filled.includes(state.settings.calendlyUrl)
+      ? `${filled.trim()}\n\n${state.settings.calendlyUrl}` : filled.trim();
+    $('#txPreview').textContent = withLink;
+    const chars = withLink.length;
+    const chip = $('#txChars');
+    chip.textContent = `${chars} characters`;
+    chip.className = `badge ${chars > 480 ? 'tint-amber' : 'tint-blue'}`;
+    $('#txPreviewHint').textContent = chars > 480
+      ? 'Long messages read as a broadcast. Under about 300 characters gets far more replies.'
+      : `Shown as ${esc(who.name || 'a candidate')} would see it, with your booking link added automatically.`;
+  }
+
+  function renderTextSendingCard() {
+    const q = (state.texting && state.texting.queue) || {};
+    const card = $('#textSendingCard');
+    const visible = q.active || q.failed > 0;
+    card.hidden = !visible;
+    $('#textStopBtn').hidden = !q.active;
+    if (!visible) return;
+    const total = q.total || (q.pending + q.sent);
+    $('#textSendingFill').style.width = `${total ? Math.round((q.sent / total) * 100) : 100}%`;
+    $('#textSendingBadge').textContent = q.active ? `${q.sent} of ${total} sent` : `finished · ${q.sent} sent`;
+    const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const parts = [];
+    const r = q.relay || {};
+    if (q.pending && !r.online) {
+      parts.push(`${q.pending} waiting — the Mac relay is offline, so nothing can send until it is back`);
+    } else if (q.active) {
+      const avg = Math.round(((q.minGap || 45) + (q.maxGap || 150)) / 2);
+      const doable = Math.min(q.pending, q.remainingToday);
+      parts.push(`${q.pending} still to send, about one every ${avg}s`);
+      if (doable > 0) parts.push(`roughly ${Math.max(1, Math.round((doable * avg) / 60))} min for the ${doable === q.pending ? 'lot' : `${doable} that fit today`}`);
+      if (q.pausedUntil && q.pauseKind === 'daily') parts.push(`daily cap of ${q.dailyLimit} reached — resumes ${clock(q.pausedUntil)}`);
+      else if (doable < q.pending) parts.push(`the other ${q.pending - doable} go tomorrow (the cap is ${q.dailyLimit}/day, and Apple bans accounts that go much past ${q.dailyMax})`);
+      if (q.leased) parts.push(`${q.leased} out with the Mac right now`);
+    }
+    parts.push(`${q.sentToday} sent in the last 24h (cap ${q.dailyLimit})`);
+    parts.push(`quiet outside ${q.startHour}:00–${q.endHour}:00 where each person lives`);
+    if (q.failed) parts.push(`${q.failed} failed — ${(q.failures || []).map((f) => `${f.phone}: ${f.error}`).slice(-2).join(' · ')}`);
+    $('#textSendingMeta').textContent = parts.join(' · ');
+    $('#textRetryBtn').hidden = !q.failed;
+    $('#textRetryBtn').textContent = `Retry ${q.failed} failed`;
+  }
+
+  async function loadRelayToken() {
+    try {
+      const r = await api('/api/texts/relay-token');
+      relayTokenRevealed = r.token || '';
+      $('#relayTokenInput').value = relayTokenRevealed ? '••••••••••••••••••••' : '';
+      $('#relayTokenShow').disabled = !relayTokenRevealed;
+      if (r.envOverride) {
+        $('#relayTokenHint').textContent = 'A RELAY_TOKEN environment variable is set on the server and takes precedence over this one.';
+      }
+    } catch {}
+  }
+
+  $('#relayTokenShow').addEventListener('click', () => {
+    const input = $('#relayTokenInput');
+    const hidden = input.value.startsWith('•');
+    input.value = hidden ? relayTokenRevealed : '••••••••••••••••••••';
+    $('#relayTokenShow').textContent = hidden ? 'Hide' : 'Show';
+    if (hidden) { input.select(); document.execCommand?.('copy'); toast('Token copied — paste it into config.json on the Mac.'); }
+  });
+
+  $('#relayTokenGen').addEventListener('click', async () => {
+    if (relayTokenRevealed && !confirm('Generate a new token? The Mac will stop sending until you paste the new one into its config.')) return;
+    try {
+      const r = await api('/api/texts/relay-token', { method: 'POST' });
+      relayTokenRevealed = r.token;
+      $('#relayTokenInput').value = r.token;
+      $('#relayTokenShow').textContent = 'Hide';
+      $('#relayTokenShow').disabled = false;
+      toast('Token generated. Copy it into ~/.wp-relay/config.json on the Mac Studio.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  $('#txBody').addEventListener('input', () => { textTemplateDirty = true; renderTextPreview(); });
+  $$('.tx-token').forEach((b) => b.addEventListener('click', () => {
+    const el = $('#txBody');
+    const at = el.selectionStart ?? el.value.length;
+    el.value = el.value.slice(0, at) + b.dataset.txToken + el.value.slice(el.selectionEnd ?? at);
+    el.focus();
+    el.selectionStart = el.selectionEnd = at + b.dataset.txToken.length;
+    textTemplateDirty = true;
+    renderTextPreview();
+  }));
+
+  $('#txSave').addEventListener('click', async () => {
+    try {
+      await api('/api/texts/template', { method: 'POST', body: { body: $('#txBody').value } });
+      textTemplateDirty = false;
+      toast('Message saved.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  $('#txReset').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/texts/template/reset', { method: 'POST' });
+      $('#txBody').value = r.textTemplate.body;
+      textTemplateDirty = false;
+      renderTextPreview();
+      toast('Message reset.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  $('#txSavePace').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/settings', {
+        method: 'POST',
+        body: {
+          textDailyLimit: $('#txDailyLimit').value, textMinGap: $('#txGapMin').value, textMaxGap: $('#txGapMax').value,
+          textStartHour: $('#txStartHour').value, textEndHour: $('#txEndHour').value, textSunday: $('#txSunday').checked,
+        },
+      });
+      // Say so when a number was changed, rather than quietly showing a different one.
+      const changed = (r.adjusted || []).filter((a) => a.key.startsWith('text'));
+      toast(changed.length
+        ? `Saved. ${changed.map((a) => `${a.label} set to ${a.to} — ${a.reason}`).join('; ')}`
+        : 'Texting pace saved.');
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  $('#textSendAllBtn').addEventListener('click', async () => {
+    const ids = textableIds();
+    const q = (state.texting && state.texting.queue) || {};
+    if (!q.relay || !q.relay.online) {
+      if (!confirm('The Mac relay is offline, so nothing will send until it is back. Queue these texts anyway?')) return;
+    } else if (!confirm(`Text ${ids.length} ${ids.length === 1 ? 'person' : 'people'}? They go out one at a time, only during daytime hours where each person lives.`)) {
+      return;
+    }
+    try {
+      const r = await api('/api/texts/queue', { method: 'POST', body: { ids } });
+      const skip = r.skipped || {};
+      const notes = [];
+      if (skip.noPhone) notes.push(`${skip.noPhone} had no usable number`);
+      if (skip.optedOut) notes.push(`${skip.optedOut} asked to stop`);
+      if (skip.alreadyTexted) notes.push(`${skip.alreadyTexted} were texted already`);
+      toast(`${r.added} queued${notes.length ? ` · ${notes.join(', ')}` : ''}.`);
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  $('#textStopBtn').addEventListener('click', async () => {
+    if (!confirm('Stop texting? Anything not yet sent is dropped from the queue.')) return;
+    try { await api('/api/texts/queue', { method: 'DELETE' }); toast('Texting stopped.'); await refresh(); } catch (err) { oops(err); }
+  });
+
+  $('#textRetryBtn').addEventListener('click', async () => {
+    try { const r = await api('/api/texts/queue/retry-failed', { method: 'POST' }); toast(`${r.requeued} re-queued.`); await refresh(); } catch (err) { oops(err); }
+  });
 
   function renderSettings() {
     const s = state.settings;
@@ -1771,6 +2055,7 @@
     renderRoleFilter();
     renderCandidates();
     renderApollo();
+    renderTexting();
     renderSettings();
     // Only prime the template editor when there are no unsaved edits.
     if (!templateDirty) {

@@ -1,0 +1,10 @@
+{
+  "crmUrl": "https://wpioutreach.com",
+  "relayToken": "paste the token from the dashboard: Texting → Mac relay → Generate token",
+  "bluebubblesUrl": "http://localhost:1234",
+  "bluebubblesPassword": "the password you set in the BlueBubbles server app",
+  "pollMs": 5000,
+  "receiptsMs": 20000,
+  "helloMs": 30000,
+  "dryRun": false
+}

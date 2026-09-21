@@ -34,6 +34,9 @@
       <button class="nav-item" data-view="template">
         <span class="nav-ico" data-icon="doc" data-size="17"></span> Email Template
       </button>
+      <button class="nav-item" data-view="texting">
+        <span class="nav-ico" data-icon="bubble" data-size="17"></span> Texting <span class="nav-count" id="navTextCount"></span>
+      </button>
       <button class="nav-item" data-view="settings">
         <span class="nav-ico" data-icon="gear" data-size="17"></span> Settings
       </button>
@@ -151,7 +154,7 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="checkAll"></th>
-              <th>Name</th><th>Email</th><th>Role &amp; history</th><th>Company</th><th>Status</th><th>Last emailed</th><th></th>
+              <th>Name</th><th>Email</th><th>Text</th><th>Role &amp; history</th><th>Company</th><th>Status</th><th>Last emailed</th><th></th>
             </tr>
           </thead>
           <tbody id="candidateRows"></tbody>
@@ -355,6 +358,125 @@
         <p class="muted">Sends this email to everyone who hasn’t been contacted yet — each person gets their own message with their name filled in, your booking button and your signature. It goes out in small batches, so keep this tab open until the progress bar finishes.</p>
         <div class="card-actions">
           <button class="btn btn-primary email-all-btn" id="tplSendAllBtn">Email all not-contacted candidates</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Texting ===== -->
+    <section class="view" id="view-texting">
+      <header class="page-head">
+        <div>
+          <h1>Texting</h1>
+          <p class="page-sub">iMessage sent from your Mac Studio, tracked the same way as email — with delivery and read receipts email can’t give you.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="textStopBtn" hidden>Stop texting</button>
+          <button class="btn btn-primary" id="textSendAllBtn">Text everyone with a number</button>
+        </div>
+      </header>
+
+      <div class="stat-grid text-stats">
+        <div class="stat"><div class="stat-label">Have a number</div><div class="stat-value" id="txWithPhone">0</div></div>
+        <div class="stat"><div class="stat-label">Texted</div><div class="stat-value" id="txSent">0</div></div>
+        <div class="stat"><div class="stat-label">Delivered</div><div class="stat-value" id="txDelivered">0</div></div>
+        <div class="stat"><div class="stat-label">Read</div><div class="stat-value" id="txRead">0</div></div>
+        <div class="stat"><div class="stat-label">Replied</div><div class="stat-value" id="txReplied">0</div></div>
+      </div>
+
+      <div class="card sending-card" id="textSendingCard" hidden>
+        <div class="card-head">
+          <h2>Texting in progress</h2>
+          <span class="badge tint-blue" id="textSendingBadge"></span>
+        </div>
+        <div class="progress"><div class="progress-fill" id="textSendingFill"></div></div>
+        <p class="muted small" id="textSendingMeta"></p>
+        <div class="card-actions">
+          <button class="btn" id="textRetryBtn" hidden>Retry failed</button>
+        </div>
+      </div>
+
+      <div class="two-col template-cols">
+        <div class="card">
+          <div class="card-head">
+            <h2>Mac relay</h2>
+            <span class="badge" id="relayChip">checking…</span>
+          </div>
+          <p class="muted">Apple has no server-side iMessage API, so the sending is done by a small service on your Mac Studio. It calls out to this dashboard — nothing has to reach <em>into</em> your Mac, so there are no ports to open.</p>
+          <div class="relay-steps">
+            <ol class="steps">
+              <li>Install the <strong>BlueBubbles Server</strong> app on the Mac Studio and set a password in it.</li>
+              <li>Generate a relay token below and copy it.</li>
+              <li>On the Mac: <code>cd Mass-hiring/relay &amp;&amp; ./install.sh</code>, paste the token into the config it creates, then run it again.</li>
+            </ol>
+            <p class="muted small">Step-by-step instructions, including the Full Disk Access step that turns on read receipts, are in <code>relay/README.md</code>.</p>
+          </div>
+          <label class="label">Relay token</label>
+          <div class="field-row">
+            <input type="text" id="relayTokenInput" class="input" readonly placeholder="No token yet — generate one">
+            <button class="btn" id="relayTokenShow">Show</button>
+            <button class="btn" id="relayTokenGen">Generate</button>
+          </div>
+          <div class="hint" id="relayTokenHint">A separate secret from your dashboard password. It unlocks the relay routes and nothing else.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Pace &amp; hours</h2></div>
+          <p class="muted">Apple disables iMessage on accounts that blast strangers, so this is capped well below where that starts. Texts also only go out during daytime hours <strong>where the person lives</strong>, which is both politer and what the TCPA requires.</p>
+          <div class="field-grid">
+            <div>
+              <label class="label" for="txDailyLimit">Texts per day</label>
+              <input type="number" id="txDailyLimit" class="input" min="1" max="100" placeholder="60">
+              <div class="hint">Up to 100. Above that, Apple bans accounts.</div>
+            </div>
+            <div>
+              <label class="label" for="txGapMin">Shortest gap (seconds)</label>
+              <input type="number" id="txGapMin" class="input" min="20" max="1800" placeholder="45">
+              <div class="hint">The wait is randomised between the two.</div>
+            </div>
+            <div>
+              <label class="label" for="txGapMax">Longest gap (seconds)</label>
+              <input type="number" id="txGapMax" class="input" min="20" max="1800" placeholder="150">
+              <div class="hint">A fixed interval is the clearest bot signal there is.</div>
+            </div>
+            <div>
+              <label class="label" for="txStartHour">Start at (their time)</label>
+              <input type="number" id="txStartHour" class="input" min="0" max="23" placeholder="9">
+            </div>
+            <div>
+              <label class="label" for="txEndHour">Stop at (their time)</label>
+              <input type="number" id="txEndHour" class="input" min="1" max="24" placeholder="19">
+            </div>
+          </div>
+          <label class="check-row"><input type="checkbox" id="txSunday"> Text on Sundays too</label>
+          <div class="card-actions">
+            <button class="btn btn-primary" id="txSavePace">Save pace</button>
+          </div>
+          <div class="hint" id="txOptOutHint"></div>
+        </div>
+      </div>
+
+      <div class="two-col template-cols">
+        <div class="card">
+          <div class="card-head"><h2>Message</h2></div>
+          <textarea id="txBody" class="input textarea" rows="7" placeholder="Hi {{firstName}}…"></textarea>
+          <div class="token-row">
+            <span class="muted small">Insert:</span>
+            <button class="token tx-token" data-tx-token="{{firstName}}">first name</button>
+            <button class="token tx-token" data-tx-token="{{role}}">role</button>
+            <button class="token tx-token" data-tx-token="{{company}}">company</button>
+          </div>
+          <div class="card-actions">
+            <button class="btn" id="txReset">Reset to default</button>
+            <button class="btn btn-primary" id="txSave">Save message</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Preview</h2>
+            <span class="badge" id="txChars"></span>
+          </div>
+          <div class="imessage-preview"><div class="imessage-bubble" id="txPreview"></div></div>
+          <div class="hint" id="txPreviewHint"></div>
         </div>
       </div>
     </section>
