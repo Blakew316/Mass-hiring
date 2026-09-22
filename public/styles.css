@@ -615,3 +615,8 @@ button.text-pip.is-none:hover { border-color: var(--amber); background: var(--am
 .selection-bar .sel-note { color: var(--ink-soft); font-size: 12.5px; }
 .selection-bar .btn-link { margin-left: auto; }
 .selection-bar .btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* Working the list down in texting order. */
+.col-rank { width: 44px; text-align: right; color: var(--ink-soft); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.cand-sub.why-text { color: var(--blue-deep); }
+tr.row-muted { opacity: .55; }

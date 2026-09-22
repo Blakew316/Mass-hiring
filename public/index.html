@@ -137,6 +137,10 @@
       <div class="toolbar">
         <div class="search-wrap"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…"></div>
         <select id="roleFilter" class="input role-filter" title="Filter by the role someone currently holds"><option value="">All roles</option></select>
+        <select id="sortBy" class="input role-filter" title="How the list is ordered">
+          <option value="default">Order added</option>
+          <option value="texting">Best to text first</option>
+        </select>
         <div class="filter-chips" id="filterChips">
           <button class="chip active" data-filter="all">All</button>
           <button class="chip" data-filter="new">Not contacted</button>
@@ -162,6 +166,7 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="checkAll"></th>
+              <th class="col-rank" id="rankHead" hidden>#</th>
               <th>Name</th><th>Email</th><th>Text</th><th>Role &amp; history</th><th>Company</th><th>Status</th><th>Last emailed</th><th></th>
             </tr>
           </thead>

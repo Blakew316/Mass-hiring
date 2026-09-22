@@ -19,6 +19,7 @@ const attachments = require('./lib/attachments');
 const address = require('./lib/email-address');
 const textQueue = require('./lib/text-queue');
 const phone = require('./lib/phone');
+const priority = require('./lib/priority');
 const crypto = require('crypto');
 const { renderEmail, renderText } = require('./lib/template');
 
@@ -90,6 +91,23 @@ function maskedSettings(s, fromAddress) {
   };
 }
 
+// The text queue's running order, and the reason each person is where they are.
+function textPriority(db, q) {
+  const ranked = priority.rank(db.candidates, {
+    maxFollowUps: followUpSettings(db.settings).max,
+    optOut: (q && q.optOut) || [],
+  });
+  const order = {};
+  ranked.forEach((r, i) => { order[r.id] = { rank: i + 1, score: r.score, reason: r.reason, fit: r.fit }; });
+  const blocked = {};
+  for (const c of db.candidates) {
+    if (order[c.id]) continue;
+    const why = priority.blockedReason(c, { optOut: new Set(((q && q.optOut) || [])) });
+    if (why && why !== 'no phone number') blocked[c.id] = why;
+  }
+  return { order, blocked, textable: ranked.length };
+}
+
 function stats(db) {
   const by = (st) => db.candidates.filter((c) => c.status === st).length;
   return {
@@ -148,6 +166,10 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     texting: {
       template: db.textTemplate,
       withPhone: db.candidates.filter((c) => phone.normalize(c.phone)).length,
+      // id -> { rank, score, reason } for everyone worth texting, plus why
+      // anyone else is not. Sent as a small map rather than on each candidate
+      // so the candidate list stays the same shape it has always been.
+      priority: textPriority(db, await textQueue.loadQ()),
       queue: textQueue.status(await textQueue.loadQ(), db.settings, await storage.getJson('relay').catch(() => null)),
       tokenSet: Boolean(db.settings.relayToken || (process.env.RELAY_TOKEN || '').trim()),
     },
@@ -801,6 +823,25 @@ app.post('/api/relay/hello', asyncRoute(async (req, res) => {
   res.json({ ok: true, pollMs: 5000, helloMs: 30000, limits: { startHour: l.startHour, endHour: l.endHour, dailyLimit: l.dailyLimit } });
 }));
 
+// The numbers this system has texted, so a relay knows which conversations on
+// its Mac belong to the CRM. Without it, moving between two Macs silently loses
+// replies: iMessage syncs the conversation to both, but a relay that did not
+// send the original has no record of the number and ignores everything from it.
+//
+// Deliberately only ever numbers already texted — never the candidate list.
+app.post('/api/relay/handles', asyncRoute(async (_req, res) => {
+  const q = await textQueue.loadQ();
+  const db = await store.load();
+  const handles = new Set();
+  for (const e of q.sentLog || []) if (e && e.phone) handles.add(e.phone);
+  for (const c of db.candidates) {
+    if (!c.lastTextedAt) continue;
+    const p = phone.normalize(c.phone);
+    if (p) handles.add(p);
+  }
+  res.json({ handles: [...handles] });
+}));
+
 app.post('/api/relay/claim', asyncRoute(async (req, res) => {
   const db = await store.load();
   let out = { job: null, reason: 'empty' };
@@ -944,9 +985,29 @@ app.post('/api/texts/preview', asyncRoute(async (req, res) => {
 
 app.post('/api/texts/queue', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const ids = Array.isArray(req.body && req.body.ids) && req.body.ids.length
-    ? req.body.ids
-    : db.candidates.filter((c) => phone.normalize(c.phone) && !c.lastTextedAt && c.status !== 'declined' && c.status !== 'booked').map((c) => c.id);
+  const q0 = await textQueue.loadQ();
+  const ranked = priority.rank(db.candidates, { maxFollowUps: followUpSettings(db.settings).max, optOut: q0.optOut });
+  const order = new Map(ranked.map((r, i) => [r.id, i]));
+  // Best first, always. Only 60-100 texts a day exist, so the order the queue
+  // drains in IS the strategy: whoever is at the front is who the cap gets
+  // spent on. A selection is ranked too — ticking thirty boxes should still
+  // reach the best of them first.
+  const asked = Array.isArray(req.body && req.body.ids) && req.body.ids.length ? req.body.ids : null;
+  const ids = (asked ? asked.filter((id) => order.has(id)) : ranked.map((r) => r.id))
+    .sort((a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9));
+  // Ranking drops people the queue would have rejected anyway, so their reason
+  // has to be collected here or it is lost — picking someone and being told
+  // "nothing to send" with no reason is worse than not offering it at all.
+  const reasons = {};
+  if (asked) {
+    const blockedSet = new Set(q0.optOut);
+    for (const id of asked) {
+      if (order.has(id)) continue;
+      const c = db.candidates.find((x) => x.id === id);
+      const why = c ? priority.blockedReason(c, { optOut: blockedSet }) : 'no longer in the list';
+      if (why) reasons[why] = (reasons[why] || 0) + 1;
+    }
+  }
   // A one-off message for this send only, exactly as the email side allows —
   // texting one person usually means saying something other than the template.
   const custom = req.body && req.body.template && String(req.body.template.body || '').trim();
@@ -962,7 +1023,7 @@ app.post('/api/texts/queue', asyncRoute(async (req, res) => {
     if (!result.added && !result.promoted) return false;
   });
   const q = await textQueue.loadQ();
-  res.json({ ...result, queue: textQueue.status(q, db.settings, await relayState()) });
+  res.json({ ...result, reasons, queue: textQueue.status(q, db.settings, await relayState()) });
 }));
 
 app.delete('/api/texts/queue', asyncRoute(async (_req, res) => {

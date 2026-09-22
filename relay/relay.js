@@ -110,6 +110,7 @@ class Crm {
     return json || {};
   }
   hello(payload) { return this.call('/hello', payload); }
+  handles() { return this.call('/handles', {}); }
   claim() { return this.call('/claim', {}); }
   report(payload) { return this.call('/report', payload); }
   events(events) { return this.call('/events', { events }); }
@@ -334,6 +335,18 @@ async function main() {
     if (!bbOk && !cfg.dryRun) return;      // nothing to send through yet
     await flushPending();
     await sendOnce();
+  });
+
+  // Numbers texted from ANOTHER Mac on the same Apple ID. iMessage syncs those
+  // conversations here, but this relay never sent them so it has no record —
+  // and would drop the replies. Asking the CRM keeps two machines in step.
+  every(5 * 60 * 1000, 'handles', async () => {
+    const { handles = [] } = await crm.handles();
+    let added = 0;
+    for (const h of handles) {
+      if (typeof h === 'string' && h.startsWith('+') && !state.known(st, h)) { state.remember(st, h); added += 1; }
+    }
+    if (added) { state.save(st); log(`picked up ${added} conversation(s) started from another Mac`); }
   });
 
   every(cfg.receiptsMs, 'receipts', scanReceipts);

@@ -118,6 +118,33 @@ have to make that trade.
 
 ---
 
+## Running it on a laptop instead
+
+Nothing here is specific to a Mac Studio. Any Mac signed into the same Apple ID
+can be the sender — including a MacBook you carry to the office, which avoids
+leaving a desktop machine automatically logged in at home while you are out.
+
+Install it the same way on that Mac:
+
+```bash
+git clone https://github.com/Blakew316/Mass-hiring.git
+cd Mass-hiring/relay && ./install.sh <relay-token>
+```
+
+Use the **same relay token**; it identifies the account, not the machine. Grant
+the same two permissions, and then `wprelay on` / `wprelay off` as usual.
+
+**Only run one at a time.** Nothing breaks if both are on — the server hands each
+message to whichever Mac asks first, so nobody is texted twice — but it is
+easier to reason about with one sender. `wprelay off` on the other machine.
+
+Replies follow you between machines. iMessage syncs every conversation to both
+Macs, but a relay only watches numbers it sent to itself, so a laptop would
+ignore replies to texts the Studio sent. Each relay asks the CRM every few
+minutes which numbers this system has texted and adopts them, so whichever Mac
+is running picks up the whole thread. Only numbers already texted are ever
+shared — the candidate list never leaves the server.
+
 ## Everyday use
 
 ```bash

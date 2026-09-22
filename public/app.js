@@ -10,6 +10,7 @@
   let filter = 'all';
   let search = '';
   let roleFilter = '';          // exact current role someone holds, '' = every role
+  let sortBy = 'default';       // 'texting' = the order to work down at 60/day
   let pendingImport = null;    // {headers, rows, mapping, source}
   let composeIds = [];
 
@@ -521,19 +522,41 @@
     return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
   }
 
+  const textPriorityOf = (id) => ((state.texting && state.texting.priority && state.texting.priority.order) || {})[id] || null;
+  const textBlockedOf = (id) => ((state.texting && state.texting.priority && state.texting.priority.blocked) || {})[id] || '';
+
   function renderCandidates() {
-    const rows = visibleCandidates();
+    let rows = visibleCandidates();
+    const ranking = sortBy === 'texting';
+    if (ranking) {
+      // Ranked people first in their own order, then everyone who cannot be
+      // texted — they are still listed, because "why is this person not here"
+      // is the first question the order raises.
+      rows = [...rows].sort((a, b) => {
+        const pa = textPriorityOf(a.id); const pb = textPriorityOf(b.id);
+        if (pa && pb) return pa.rank - pb.rank;
+        if (pa) return -1;
+        if (pb) return 1;
+        return 0;
+      });
+    }
+    $('#rankHead').hidden = !ranking;
     const tbody = $('#candidateRows');
     $('#candidatesEmpty').style.display = state.candidates.length ? 'none' : 'block';
     tbody.innerHTML = rows.map((c, i) => {
       const st = STATUS[c.status] || STATUS.new;
       const displayName = c.name || `${c.firstName} ${c.lastName}`.trim() || '—';
-      return `<tr data-id="${c.id}">
+      const pri = ranking ? textPriorityOf(c.id) : null;
+      const blockedWhy = ranking ? textBlockedOf(c.id) : '';
+      return `<tr data-id="${c.id}"${ranking && !pri ? ' class="row-muted"' : ''}>
+        ${ranking ? `<td class="col-rank">${pri ? pri.rank : '<span class="muted">—</span>'}</td>` : ''}
         <td class="col-check"><input type="checkbox" class="row-check" ${selected.has(c.id) ? 'checked' : ''}></td>
         <td><div class="name-cell">
           <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
           <div><div class="cand-name">${esc(displayName)}</div>
-          ${(c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
+          ${pri ? `<div class="cand-sub why-text">${esc(pri.reason)}</div>`
+            : blockedWhy ? `<div class="cand-sub muted">not texting: ${esc(blockedWhy)}</div>`
+            : (c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
         </div></td>
         <td>${esc(c.email)}</td>
         <td>${textCell(c)}</td>
@@ -619,6 +642,7 @@
   });
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; renderCandidates(); });
   $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; selected.clear(); renderCandidates(); });
+  $('#sortBy').addEventListener('change', (e) => { sortBy = e.target.value; renderCandidates(); });
   $('#filterChips').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
@@ -1793,6 +1817,8 @@
       const r = await api('/api/texts/queue', { method: 'POST', body: { ids: textComposeIds, template: { body }, ignoreQuietHours: sendNow } });
       const skip = r.skipped || {};
       const notes = [];
+      // Reasons the ranking filtered them out, in the words it used.
+      for (const [why, n] of Object.entries(r.reasons || {})) notes.push(`${n} ${why}`);
       if (skip.queued) notes.push(`${skip.queued} ${skip.queued === 1 ? 'is' : 'are'} already waiting in the queue`);
       if (skip.alreadyTexted) notes.push(`${skip.alreadyTexted} ${skip.alreadyTexted === 1 ? 'was' : 'were'} texted in the last 24h`);
       if (skip.optedOut) notes.push(`${skip.optedOut} asked to stop`);
