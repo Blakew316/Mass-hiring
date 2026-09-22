@@ -144,8 +144,11 @@
   --shadow-modal: 0 24px 64px -16px rgba(0, 0, 0, 0.80);
 }
 
-/* The wordmark is dark navy. Same artwork, lifted off the black. */
-:root[data-theme="dark"] .brand-logo { content: url("/assets/logo-dark.png"); }
+/* The wordmark is dark navy. Same artwork, lifted off the black. Both places
+   it appears: the sidebar, and the sign-in and setup screens — which are the
+   first thing anyone sees, and were showing navy-on-near-black. */
+:root[data-theme="dark"] .brand-logo,
+:root[data-theme="dark"] .login-logo { content: url("/assets/logo-dark.png"); }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -257,11 +260,11 @@ button, input, select, textarea { font-family: var(--font); }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 .two-col .card { margin-bottom: 0; }
 .two-col { margin-bottom: 20px; }
-@media (max-width: 980px) { .two-col { grid-template-columns: 1fr; } }
+@media (max-width: 980px) { .two-col { grid-template-columns: 1fr; }}
 
 /* ---------------- Stats ---------------- */
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
-@media (max-width: 980px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 980px) { .stat-grid { grid-template-columns: repeat(2, 1fr); }}
 .stat-card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 16px 18px;
@@ -417,10 +420,7 @@ button, input, select, textarea { font-family: var(--font); }
 
 @keyframes fieldFlash { 0%, 100% { box-shadow: 0 0 0 0 rgba(16, 136, 232, 0); } 30%, 70% { box-shadow: 0 0 0 4px rgba(16, 136, 232, 0.35); } }
 .input.flash { animation: fieldFlash 1.1s ease-in-out 2; border-color: var(--blue); }
-.toolbar { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .search { max-width: 260px; }
-.toolbar > .search-wrap { min-width: 220px; }
-.filter-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   padding: 6px 13px; border-radius: 99px; border: 1px solid var(--line);
   background: var(--card); color: var(--navy-soft);
@@ -429,9 +429,6 @@ button, input, select, textarea { font-family: var(--font); }
 }
 .chip:hover { border-color: var(--blue); color: var(--blue-deep); }
 .chip.active { background: var(--blue-tint); border-color: transparent; color: var(--blue-deep); font-weight: 650; }
-
-/* ---------------- Table ---------------- */
-.table-card { padding: 6px 0 0; overflow: hidden; }
 .table { width: 100%; border-collapse: collapse; }
 .table th {
   text-align: left; font-size: 11px; font-weight: 650; text-transform: uppercase;
@@ -453,8 +450,6 @@ button, input, select, textarea { font-family: var(--font); }
   margin-right: 10px; vertical-align: middle;
 }
 .name-cell { display: flex; align-items: center; }
-
-.status-pill { font-size: 11.5px; font-weight: 650; padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
 .status-select {
   -webkit-appearance: none; appearance: none;
   border: none; outline: none; cursor: pointer;
@@ -528,7 +523,7 @@ tr:hover .row-actions { opacity: 1; }
 
 /* Six short fields: three across on a wide card is two rows, not three. */
 #apolloCard .grid-2 { grid-template-columns: repeat(3, 1fr); gap: 10px 14px; margin-top: 4px; }
-@media (max-width: 1180px) { #apolloCard .grid-2 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1180px) { #apolloCard .grid-2 { grid-template-columns: repeat(2, 1fr); }}
 #view-import .paste-details summary { font-size: 12.5px; }
 #view-import .paste-details .textarea { font-size: 12.5px; }
 .mapping-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin: 14px 0; }
@@ -586,7 +581,7 @@ tr:hover .row-actions { opacity: 1; }
    browser balances the two and nothing is left hanging. */
 .settings-grid { display: block; column-count: 2; column-gap: 14px; }
 .settings-grid .card { break-inside: avoid; margin: 0 0 14px; }
-@media (max-width: 980px) { .settings-grid { column-count: 1; } }
+@media (max-width: 980px) { .settings-grid { column-count: 1; }}
 
 /* ---------------- Modal ---------------- */
 .modal-backdrop[hidden] { display: none; }
@@ -614,11 +609,7 @@ tr:hover .row-actions { opacity: 1; }
 .compose-to .to-more { color: var(--muted); font-size: 12px; padding: 3px 4px; }
 .progress { height: 8px; background: var(--navy-tint); border-radius: 99px; overflow: hidden; margin-top: 16px; }
 .progress-fill { height: 100%; width: 0; background: var(--blue); border-radius: 99px; transition: width 0.3s ease; }
-/* Nothing but a title and the button that does the thing, so it is one row —
-   a card with a head and an empty body underneath was all gap. */
-.send-card { margin-top: 0; }
-.send-card .card-head { margin-bottom: 0; }
-.send-row { display: flex; align-items: center; gap: 10px; }
+/* Nothing but a title and the button that does the thing{ margin-top: 0; }
 .sending-card .progress { margin-top: 4px; }
 .sending-meta { margin-top: 10px; font-size: 12.5px; }
 .email-all-btn:disabled { opacity: 0.45; }
@@ -682,8 +673,7 @@ tr:hover .row-actions { opacity: 1; }
      Email, and now the switch and the bell. Let the row wrap rather than run
      off the right edge, which put the bell out of reach. */
   .page-head { flex-wrap: wrap; row-gap: 10px; }
-  .head-actions { flex-wrap: wrap; row-gap: 8px; flex-shrink: 1; }
-}
+  .head-actions { flex-wrap: wrap; row-gap: 8px; flex-shrink: 1; }}
 
 /* Link an unmatched interview to a candidate (Interviews tile) */
 .link-btn { background: none; border: none; padding: 0; cursor: pointer; font: inherit; }
@@ -744,23 +734,7 @@ tr:hover .row-actions { opacity: 1; }
 /* ---------- Texting ---------- */
 /* The texting funnel: five numbers, not four, and they were bare divs inside a
    four-column grid — the fifth wrapped onto its own line with no card around
-   any of them. Five columns, card chrome, and a tone per step of the funnel. */
-.text-stats { grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
-@media (max-width: 1180px) { .text-stats { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 720px)  { .text-stats { grid-template-columns: repeat(2, 1fr); } }
-.text-stats .stat {
-  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-  box-shadow: var(--shadow); padding: 12px 14px;
-  border-left: 3px solid var(--step, var(--navy));
-}
-.text-stats .stat-label { font-size: 10.5px; letter-spacing: .05em; }
-.text-stats .stat-value { font-size: 24px; margin-top: 3px; color: var(--step, var(--navy)); }
-.text-stats .stat:nth-child(1) { --step: var(--navy); }
-.text-stats .stat:nth-child(2) { --step: var(--blue); }
-.text-stats .stat:nth-child(3) { --step: var(--blue-deep); }
-.text-stats .stat:nth-child(4) { --step: var(--amber); }
-.text-stats .stat:nth-child(5) { --step: var(--green); }
-
+   any of them. Five columns, card chrome{ grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
 
 .field-grid {
   display: grid;
@@ -882,25 +856,9 @@ tr.row-muted { opacity: .55; }
 .search-wrap.wide { width: 100%; max-width: none; margin-bottom: 22px; }
 .search-wrap.wide .search { width: 100%; }
 
-.segment-block { margin-bottom: 26px; }
-.segment-title {
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0 0 12px;
-}
-.segment-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
-  gap: 14px;
-}
-
 /* Each tile is a button, so it has to look like one. The page background is
    nearly white, so a white panel with a hairline border disappears into it —
-   these get a coloured edge, real elevation and a visible lift on hover. */
-.segment {
+   these get a coloured edge{
   /* Overridden by the tone class; here so a tile without one still renders. */
   --seg: var(--navy-soft);
   --seg-tint: var(--navy-tint);
@@ -919,8 +877,7 @@ tr.row-muted { opacity: .55; }
   overflow: hidden;
   transition: border-color .16s, box-shadow .16s, transform .12s;
 }
-/* The colour of the group, as a bar down the leading edge. */
-.segment::before {
+/* The colour of the group{
   content: '';
   position: absolute;
   inset: 0 auto 0 0;
@@ -928,51 +885,8 @@ tr.row-muted { opacity: .55; }
   background: var(--seg);
   opacity: .9;
 }
-.segment:hover {
-  border-color: var(--seg);
-  box-shadow: 0 2px 6px rgba(20, 27, 77, .06), 0 12px 26px -14px var(--seg);
-  transform: translateY(-2px);
-}
-.segment:focus-visible { outline: 2px solid var(--seg); outline-offset: 2px; }
-.segment:active { transform: translateY(0); box-shadow: var(--shadow); }
 
-.segment-ico {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px; height: 28px;
-  border-radius: 9px;
-  background: var(--seg-tint);
-  color: var(--seg);
-  margin-bottom: 9px;
-}
-.segment-ico svg { display: block; }
-.segment-n {
-  font-size: 25px;
-  font-weight: 700;
-  color: var(--ink);
-  line-height: 1.1;
-  letter-spacing: -.01em;
-  font-variant-numeric: tabular-nums;
-}
-.segment-label { font-size: 13.5px; font-weight: 600; color: var(--ink); margin-top: 3px; }
-
-/* The per-group colour, set once and used by the edge, the icon and the hover. */
-.segment.tone-navy  { --seg: var(--navy-soft); --seg-tint: var(--navy-tint); }
-.segment.tone-blue  { --seg: var(--blue);      --seg-tint: var(--blue-tint); }
-.segment.tone-green { --seg: var(--green-ink); --seg-tint: var(--green-tint); }
-.segment.tone-mint  { --seg: var(--mint-ink);  --seg-tint: var(--mint-tint); }
-.segment.tone-amber { --seg: var(--amber);     --seg-tint: var(--amber-tint); }
-.segment.tone-red   { --seg: var(--red);       --seg-tint: var(--red-tint); }
-
-/* Section headings earn a little more presence than plain grey caps. */
-.segment-title::after {
-  content: '';
-  display: block;
-  height: 1px;
-  background: var(--line);
-  margin-top: 8px;
-}
+/* The per-group colour, set once and used by the edge{ --seg: var(--navy-soft); --seg-tint: var(--navy-tint); }
 
 /* The filters currently in force, each one removable. */
 .active-filters[hidden] { display: none !important; }
@@ -989,9 +903,6 @@ tr.row-muted { opacity: .55; }
 }
 .filter-tag:hover { border-color: var(--red); color: var(--red); }
 .filter-tag span { opacity: .6; margin-left: 2px; }
-
-#candList .toolbar { flex-wrap: wrap; row-gap: 10px; }
-#candList .toolbar + .toolbar { margin-top: -6px; }
 
 /* ---------- Dashboard: two channels ---------- */
 .stat-split { font-size: 11.5px; color: var(--ink-soft); margin-top: 3px; }
@@ -1042,8 +953,7 @@ tr.row-muted { opacity: .55; }
 
 @media (max-width: 1100px) {
   .activity-strip { grid-template-columns: 1fr; }
-  .activity-strip .today-grid { grid-template-columns: repeat(2, 1fr); }
-}
+  .activity-strip .today-grid { grid-template-columns: repeat(2, 1fr); }}
 
 /* ---------------- Messages ---------------- */
 /* A conversation view shaped like the app these messages actually arrive in:
@@ -1065,7 +975,7 @@ tr.row-muted { opacity: .55; }
   overflow: hidden;
   background: var(--card);
 }
-@media (max-width: 900px) { .messenger { grid-template-columns: 1fr; height: auto; } }
+@media (max-width: 900px) { .messenger { grid-template-columns: 1fr; height: auto; }}
 
 .conv-col { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--surface-sunk); }
 .conv-tabs { display: flex; gap: 4px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
@@ -1182,8 +1092,7 @@ tr.row-muted { opacity: .55; }
 .theme-switch[aria-checked="false"] .theme-moon { opacity: 0; transform: rotate(-70deg) scale(.55); }
 .theme-switch[aria-checked="true"]  .theme-sun  { opacity: 0; transform: rotate(70deg) scale(.55); }
 @media (prefers-reduced-motion: reduce) {
-  .theme-knob, .theme-ico { transition: none; }
-}
+  .theme-knob, .theme-ico { transition: none; }}
 
 /* ---------------- The replies bell ---------------- */
 .bell {
@@ -1206,7 +1115,7 @@ tr.row-muted { opacity: .55; }
   82% { transform: rotate(2deg); }
 }
 .bell.ring .ico { animation: bellRing .85s ease-in-out; transform-origin: 50% 16%; }
-@media (prefers-reduced-motion: reduce) { .bell.ring .ico { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .bell.ring .ico { animation: none; }}
 /* content-box turned a "17px" badge into a 29px one — min-width, then padding,
    then border, each added on top — and it sat over two fifths of the bell.
    border-box means the number below is the size it actually renders at, and

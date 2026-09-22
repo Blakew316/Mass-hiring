@@ -180,8 +180,13 @@
     const s = state.stats;
     const all = state.candidates;
     const textCount = (fn) => all.filter(fn).length;
+    // "Sent" is everyone we tried to text, which has to include the numbers that
+    // turned out to have no iMessage account — we sent to them, it failed. Left
+    // out of the total, "No iMessage" was a percentage of something it was not
+    // part of, and could read over 100%; and "Delivered 100%" quietly hid every
+    // failure.
     const t = {
-      sent: textCount((c) => ['sent', 'delivered', 'read', 'replied'].includes(c.textStatus)),
+      sent: textCount((c) => ['sent', 'delivered', 'read', 'replied', 'not-imessage'].includes(c.textStatus)),
       delivered: textCount((c) => ['delivered', 'read', 'replied'].includes(c.textStatus)),
       read: textCount((c) => ['read', 'replied'].includes(c.textStatus)),
       replied: textCount((c) => c.textStatus === 'replied'),
@@ -193,7 +198,11 @@
     // somebody who opened and then replied has status "replied", so they landed
     // in Opened but not in Sent, and the funnel read 200%.
     const e = {
-      sent: textCount((c) => Boolean(c.lastEmailedAt) || c.emailBounced || c.status === 'bounced'),
+      // status is included as well as the timestamp: an older or imported record
+      // can carry the stage without the date, and leaving those out would make
+      // Sent smaller than the rows beneath it.
+      sent: textCount((c) => Boolean(c.lastEmailedAt) || c.emailBounced
+        || c.status === 'bounced' || c.status === 'emailed'),
       opened: textCount((c) => Boolean(c.openedAt)),
       replied: textCount((c) => c.emailReplies > 0 || Boolean(c.lastReplyAt)),
       // Scoped to people who were emailed: a booking that came from a text
@@ -203,14 +212,28 @@
     };
     const contacted = textCount((c) => Boolean(c.lastEmailedAt) || Boolean(c.lastTextedAt));
 
+    // Everyone who ever answered, on either channel. The status-only count
+    // dropped anyone who replied and then booked, while the split beside it
+    // still counted them — so the smaller half could exceed the whole.
+    const repliedEither = textCount((c) => c.emailReplies > 0 || Boolean(c.lastReplyAt)
+      || c.textStatus === 'replied' || Boolean(c.textRepliedAt) || c.status === 'replied');
+
     $('#statTotal').textContent = s.total;
     $('#statEmailed').textContent = contacted;
-    $('#statReplied').textContent = s.replied;
+    $('#statReplied').textContent = repliedEither;
     // Both tiles used to be email-only, which made texting invisible on the
     // page people actually look at.
     $('#statContactedSplit').textContent = `${e.sent.toLocaleString()} emailed · ${t.sent.toLocaleString()} texted`;
     $('#statRepliedSplit').textContent = `${t.replied.toLocaleString()} by text`;
-    $('#statBooked').textContent = state.calendly && state.calendly.syncEnabled ? upcomingInterviews().length : s.booked;
+    // The tile and the pipeline both say "Booked" and mean different things:
+    // this one is what is still to come, the pipeline is everyone who ever
+    // booked. With no Calendly sync there is no "upcoming" to know, so it
+    // falls back to the total — and says so either way.
+    const upcoming = state.calendly && state.calendly.syncEnabled;
+    $('#statBooked').textContent = upcoming ? upcomingInterviews().length : s.booked;
+    $('#statBookedSplit').textContent = upcoming
+      ? (s.booked ? `${s.booked.toLocaleString()} booked in all` : 'still to come')
+      : '';
     renderSendingCard();
 
     // Pipeline bars

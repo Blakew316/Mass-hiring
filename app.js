@@ -969,6 +969,9 @@ app.post('/api/relay/report', asyncRoute(async (req, res) => {
 // acted on; anything else is silently dropped.
 app.post('/api/relay/events', asyncRoute(async (req, res) => {
   const raw = Array.isArray(req.body && req.body.events) ? req.body.events.slice(0, 200) : [];
+  // The relay skips this call when it has nothing, but a retry or a future
+  // version might not: an empty batch should never read the whole record.
+  if (!raw.length) return res.json({ applied: 0, unknown: 0, optOut: 0, tooOld: 0, neverTexted: 0 });
   const db = await store.load();
   const index = byPhone(db);
   const seen = { applied: 0, unknown: 0, optOut: 0, tooOld: 0, neverTexted: 0, replies: [] };
@@ -1356,17 +1359,23 @@ app.post('/api/texts/relay-token', asyncRoute(async (_req, res) => {
   res.json({ ok: true, token, baseUrl: google.baseUrl(), envOverride: Boolean((process.env.RELAY_TOKEN || '').trim()) });
 }));
 
+// This runs in the recipient's mail client, once per open, so it is the most
+// frequently hit route in the app. A first open used to read the whole record
+// three times and write it twice — once to look the token up, again to set the
+// timestamp, and a third time to add the feed line. The timestamp and the feed
+// line are now one write, and a repeat open still costs a single read.
 app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
   const db = await store.load();
   const id = tracking.verify(db.settings, req.params.token);
   const c = id && db.candidates.find((x) => x.id === id);
   if (c && !c.openedAt) {
-    let first = false;
     await store.update((fresh) => {
       const fc = fresh.candidates.find((x) => x.id === id);
-      if (fc && !fc.openedAt) { fc.openedAt = new Date().toISOString(); first = true; }
+      // Re-checked against the fresh copy: two opens can land together.
+      if (!fc || fc.openedAt) return;
+      fc.openedAt = new Date().toISOString();
+      store.pushEvent(fresh, 'opened', `${fc.name || fc.email} opened your email.`, fc.id);
     });
-    if (first) await store.addEvent('opened', `${c.name || c.email} opened your email.`, c.id);
   }
   res.set({
     'Content-Type': 'image/gif',
