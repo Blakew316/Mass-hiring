@@ -64,7 +64,21 @@ function loadConfig() {
   const missing = needed.filter((k) => !cfg[k]);
   if (missing.length) {
     console.error(`${CONFIG_PATH} is missing: ${missing.join(', ')}`);
-    process.exit(1);
+    process.exit(2);
+  }
+  // The config ships with instructions in the token field. Saying "you have
+  // not pasted the token yet" is worth a great deal more than watching the
+  // CRM reject the sentence "paste the token from the dashboard".
+  if (/paste|token from the dashboard|<.*>/i.test(cfg.relayToken) || cfg.relayToken.length < 24) {
+    console.error(`The relay token in ${CONFIG_PATH} is still the placeholder.`);
+    console.error('');
+    console.error('Generate one at your dashboard → Texting → Mac relay → Generate, then either');
+    console.error('re-run the installer with it:');
+    console.error('');
+    console.error('    ./install.sh <paste-the-token-here>');
+    console.error('');
+    console.error('or edit the file by hand and put it in the "relayToken" field.');
+    process.exit(2);
   }
   return cfg;
 }
@@ -114,6 +128,21 @@ async function main() {
 
   let lastError = '';
   let stopping = false;
+  // Something only a person can fix — a rejected token, a config mistake.
+  // Exiting non-zero here would just have launchd start us again ten seconds
+  // later, forever, burying the one line that says what to do. Exiting ZERO
+  // is what stops that: the service is set to restart on a crash, not on a
+  // clean exit (see the KeepAlive dict in the plist).
+  const giveUp = (why) => {
+    if (stopping) return;
+    stopping = true;
+    log('');
+    log(`STOPPED: ${why}`);
+    log('Fix that, then start the relay again:');
+    log(`  launchctl kickstart -k gui/${process.getuid()}/com.wholesalepayments.wprelay`);
+    state.save(st);
+    process.exit(0);
+  };
   const stop = (sig) => { if (stopping) return; stopping = true; log(`${sig} — shutting down`); state.save(st); process.exit(0); };
   process.on('SIGINT', () => stop('SIGINT'));
   process.on('SIGTERM', () => stop('SIGTERM'));
@@ -191,6 +220,8 @@ async function main() {
     return 'sent';
   }
 
+  let chatDbWarned = false;
+
   // Receipts and replies. Only for numbers this relay has texted — everything
   // else on this Mac is none of the CRM's business.
   async function scanReceipts() {
@@ -204,8 +235,12 @@ async function main() {
 
     if (receipts.available()) {
       let rows = [];
-      try { rows = await receipts.since(st.lastRowId, 500); }
-      catch (err) { log(`could not read chat.db (${err.message}) — receipts are off until that is fixed`); }
+      try { rows = await receipts.since(st.lastRowId, 500); chatDbWarned = false; }
+      catch (err) {
+        // Once, not every twenty seconds — this is a permission that will not
+        // change until someone changes it.
+        if (!chatDbWarned) { chatDbWarned = true; log(err.message); log('(Sending still works. Receipts and replies resume as soon as that is granted.)'); }
+      }
       for (const r of rows) {
         if (r.rowid > st.lastRowId) st.lastRowId = r.rowid;
         const handle = normalizePhone(r.handle);
@@ -257,7 +292,7 @@ async function main() {
       running = true;
       try { await fn(); lastError = ''; }
       catch (err) {
-        if (err && err.fatal) { log(`FATAL: ${err.message}`); process.exit(1); }
+        if (err && err.fatal) return giveUp(err.message);
         if (err.message !== lastError) log(`${name}: ${err.message}`);
         lastError = err.message;
       }
@@ -272,7 +307,7 @@ async function main() {
   try { await bb.ping(); bbOk = true; log(`${backendName} answered — ready`); }
   catch (err) { log(`${backendName} is not answering: ${err.message}`); }
 
-  await flushPending().catch((err) => { if (err.fatal) { log(`FATAL: ${err.message}`); process.exit(1); } });
+  await flushPending().catch((err) => { if (err.fatal) giveUp(err.message); });
 
   every(cfg.helloMs, 'hello', async () => {
     try { await bb.ping(); bbOk = true; } catch { bbOk = false; }

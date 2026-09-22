@@ -19,7 +19,18 @@ const CHAT_DB = process.env.WP_RELAY_CHATDB || path.join(os.homedir(), 'Library'
 
 const run = (args, timeoutMs) => new Promise((resolve, reject) => {
   execFile(SQLITE, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-    if (err) { err.message = `${err.message}${stderr ? ` — ${String(stderr).trim()}` : ''}`; return reject(err); }
+    if (err) {
+      // execFile puts the entire command — including the whole SQL statement —
+      // into err.message. Logged every twenty seconds that buries everything
+      // else, so only sqlite's own complaint is kept.
+      const detail = String(stderr || '').replace(/^Error:\s*/i, '').trim();
+      const e = new Error(detail || err.message.split('\n')[0]);
+      if (/authorization denied|unable to open database/i.test(detail)) {
+        e.message = 'macOS is blocking access to the Messages database. Grant Full Disk Access to whatever runs the relay (System Settings → Privacy & Security → Full Disk Access → + → your node binary), then restart it.';
+        e.permission = true;
+      }
+      return reject(e);
+    }
     resolve(String(stdout || ''));
   });
 });
