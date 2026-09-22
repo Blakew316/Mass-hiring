@@ -80,6 +80,7 @@ function maskedSettings(s, fromAddress) {
     smtpPass: s.smtpPass ? '••••••••' : '',
     googleClientSecret: s.googleClientSecret ? '••••••••' : '',
     calendlySigningKey: s.calendlySigningKey ? '••••••••' : '',
+    calendlySigningKeys: undefined,
     calendlyToken: s.calendlyToken ? '••••••••' : '',
     apolloApiKey: s.apolloApiKey ? '••••••••' : '',
     relayToken: s.relayToken ? '••••••••' : '',
@@ -214,7 +215,7 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     },
     calendly: {
       syncEnabled: Boolean(db.settings.calendlyToken),
-      webhook: Boolean(db.settings.calendlySigningKey),
+      webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
       lastSyncAt: db.calendlyLastSyncAt || null,
       error: db.calendlySyncError || '',
     },
@@ -252,7 +253,7 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
   const before = { ...db.settings };
   const sender = (await mailer.sendStatus(db.settings)).from;
   const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
-    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone',
+    'googleClientId', 'googleClientSecret', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone',
     ...TEXT_NUMERIC, 'textSunday'];
   const adjusted = [];
   for (const k of allowed) {
@@ -1493,7 +1494,7 @@ app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
     throw new Error('Calendly needs a public URL to reach this app. Deploy it (or tunnel with ngrok) and enter that URL.');
   }
   const result = await calendly.registerWebhook(token, publicUrl);
-  if (result.signingKey) db.settings.calendlySigningKey = result.signingKey;
+  if (result.signingKey) store.addCalendlyKey(db.settings, result.signingKey);
   db.settings.calendlyToken = token;
   if (!db.settings.calendlyUrl && result.schedulingUrl) db.settings.calendlyUrl = result.schedulingUrl;
   await store.save(db);
@@ -1566,14 +1567,23 @@ app.post('/api/interviews/link', asyncRoute(async (req, res) => {
 
 app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const signingKey = db.settings.calendlySigningKey || process.env.CALENDLY_SIGNING_KEY || '';
-  if (!signingKey) {
+  // Every key this app has ever issued, newest first, plus the environment
+  // override. A subscription that outlived a cleanup still verifies.
+  const keys = [
+    ...(db.settings.calendlySigningKeys || []),
+    db.settings.calendlySigningKey,
+    process.env.CALENDLY_SIGNING_KEY,
+  ].filter(Boolean);
+  const header = req.get('Calendly-Webhook-Signature');
+  if (!keys.length) {
     return res.status(401).json({ error: 'Calendly webhook is not registered (no signing key). Use "Enable booking alerts" in Settings.' });
   }
-  if (!calendly.verifySignature(signingKey, req.get('Calendly-Webhook-Signature'), req.rawBody)) {
-    // Surface a key mismatch in the activity feed (throttled so a flood of
-    // bogus calls can't spam it).
-    if (Date.now() - lastSignatureWarning > 10 * 60 * 1000) {
+  if (!calendly.verifySignature(keys, header, req.rawBody)) {
+    // This path is public and unauthenticated, so crawlers find it. Only a
+    // call that actually carries a Calendly signature can be a key problem;
+    // anything else is noise and must not be reported as a broken booking
+    // setup, which is what made this warning keep coming back.
+    if (calendly.parseSignature(header) && Date.now() - lastSignatureWarning > 10 * 60 * 1000) {
       lastSignatureWarning = Date.now();
       await store.addEvent('error', CALENDLY_SIGNATURE_WARNING);
     }
