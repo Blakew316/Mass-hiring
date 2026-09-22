@@ -28,6 +28,18 @@
     chevron: '<polyline points="9 18 15 12 9 6"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
     sheet: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/>',
+    /* The industries a candidate can come from. Same 24pt grid as the rest. */
+    card: '<rect x="2" y="5" width="20" height="14" rx="2.5"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/>',
+    shield: '<path d="M12 2l8 3.5v6c0 5-3.4 9.3-8 10.5-4.6-1.2-8-5.5-8-10.5v-6z"/>',
+    bug: '<rect x="8" y="7" width="8" height="12" rx="4"/><line x1="12" y1="10" x2="12" y2="16"/><path d="M9 6.5l-1-2"/><path d="M15 6.5l1-2"/><line x1="8" y1="11" x2="4" y2="9"/><line x1="16" y1="11" x2="20" y2="9"/><line x1="8" y1="15" x2="4" y2="17"/><line x1="16" y1="15" x2="20" y2="17"/>',
+    car: '<path d="M5 17h14"/><path d="M4 17v-4l2-5.2A2 2 0 0 1 7.9 6.5h8.2a2 2 0 0 1 1.9 1.3L20 13v4"/><circle cx="7.5" cy="17" r="1.6"/><circle cx="16.5" cy="17" r="1.6"/><line x1="4" y1="12.5" x2="20" y2="12.5"/>',
+    home: '<path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.7V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.7"/><path d="M9.5 21v-6h5v6"/>',
+    wifi: '<path d="M2 8.8a16 16 0 0 1 20 0"/><path d="M5.5 12.3a11 11 0 0 1 13 0"/><path d="M9 15.8a6 6 0 0 1 6 0"/><line x1="12" y1="19.5" x2="12.01" y2="19.5"/>',
+    umbrella: '<path d="M12 12v7a2.5 2.5 0 0 0 5 0"/><path d="M2.5 12a9.5 9.5 0 0 1 19 0z"/>',
+    store: '<path d="M3.5 9.5L5 4h14l1.5 5.5a3 3 0 0 1-5.7 1.4 3 3 0 0 1-5.6 0 3 3 0 0 1-5.7-1.4z"/><path d="M5 11v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/>',
+    briefcase: '<rect x="2.5" y="7" width="19" height="13" rx="2.5"/><path d="M8.5 7V5.5a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2V7"/><line x1="2.5" y1="12.5" x2="21.5" y2="12.5"/>',
+    key: '<circle cx="7.5" cy="12" r="4"/><line x1="11.5" y1="12" x2="21" y2="12"/><line x1="18" y1="12" x2="18" y2="15.5"/><line x1="21" y1="12" x2="21" y2="16.5"/>',
   };
   function icon(name, size = 16, cls = '') {
     const body = P[name] || P.circle;

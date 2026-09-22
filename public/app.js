@@ -687,11 +687,15 @@
     const all = state.candidates;
     const pri = (state.texting && state.texting.priority) || { order: {} };
     const ranked = Object.keys(pri.order || {}).length;
-    const card = (label, n, sub, patch) => ({ label, n, sub, patch });
+    const card = (label, n, sub, patch, ico = 'users', tone = 'navy') => ({ label, n, sub, patch, ico, tone });
 
+    // Each tile carries an icon and a colour so the groups are distinguishable
+    // at a glance and read as something to press, rather than as white panels
+    // on a white page.
     const cards = (el, items) => {
       $(el).innerHTML = items.filter((i) => i.n > 0).map((i) => `
-        <button class="segment" data-seg='${esc(JSON.stringify(i.patch))}' data-label="${esc(i.label)}">
+        <button class="segment tone-${i.tone}" data-seg='${esc(JSON.stringify(i.patch))}' data-label="${esc(i.label)}">
+          <span class="segment-ico">${icon(i.ico, 16)}</span>
           <span class="segment-n">${i.n.toLocaleString()}</span>
           <span class="segment-label">${esc(i.label)}</span>
           ${i.sub ? `<span class="segment-sub">${esc(i.sub)}</span>` : ''}
@@ -701,40 +705,56 @@
     const count = (fn) => all.filter(fn).length;
 
     cards('#segStart', [
-      card('Everyone', all.length, 'the whole list, unfiltered', {}),
-      card('Best to text next', Math.min(ranked, 50), 'the top of the order', { rank: '50', sort: 'texting' }),
-      card('Replied to you', count((c) => c.status === 'replied'), 'waiting on you', { status: 'replied' }),
-      card('Interviews booked', count((c) => c.status === 'booked'), '', { status: 'booked' }),
-      card('Ready to text', ranked, 'have a number and are eligible', { texted: 'ready', sort: 'texting' }),
-      card('Never contacted', count((c) => c.status === 'new'), '', { status: 'new' }),
-      card('Missing a phone number', count((c) => !textPhoneOf(c)), 'cannot be texted yet', { texted: 'nonumber' }),
+      card('Everyone', all.length, 'the whole list, unfiltered', {}, 'users', 'navy'),
+      card('Best to text next', Math.min(ranked, 50), 'the top of the order', { rank: '50', sort: 'texting' }, 'send', 'blue'),
+      card('Replied to you', count((c) => c.status === 'replied'), 'waiting on you', { status: 'replied' }, 'reply', 'mint'),
+      card('Interviews booked', count((c) => c.status === 'booked'), '', { status: 'booked' }, 'calendar', 'green'),
+      card('Ready to text', ranked, 'have a number and are eligible', { texted: 'ready', sort: 'texting' }, 'bubble', 'blue'),
+      card('Never contacted', count((c) => c.status === 'new'), '', { status: 'new' }, 'circle', 'navy'),
+      card('Missing a phone number', count((c) => !textPhoneOf(c)), 'cannot be texted yet', { texted: 'nonumber' }, 'alert', 'amber'),
     ]);
 
     const byIndustry = {};
     for (const c of all) { const k = c.industry || 'other'; byIndustry[k] = (byIndustry[k] || 0) + 1; }
+    // A fixed colour per industry, so the same pool looks the same every visit.
+    // Each industry gets its own colour and its own icon, so the row reads as
+    // a set of places people come from rather than a row of identical boxes.
+    const INDUSTRY_TONE = {
+      payments: 'blue', solar: 'amber', security: 'navy', pest: 'green', timeshare: 'mint',
+      auto: 'blue', home: 'amber', telecom: 'navy', insurance: 'green', smb: 'mint', b2b: 'navy', weak: 'navy', other: 'navy',
+    };
+    const INDUSTRY_ICO = {
+      payments: 'card', solar: 'sun', security: 'shield', pest: 'bug', timeshare: 'key',
+      auto: 'car', home: 'home', telecom: 'wifi', insurance: 'umbrella', smb: 'store',
+      b2b: 'briefcase', weak: 'users', other: 'grid',
+    };
     cards('#segIndustry', Object.entries(byIndustry)
       .sort((a, b) => b[1] - a[1])
-      .map(([code, n]) => card(industryLabel(code), n, '', { industry: code })));
+      .map(([code, n]) => card(industryLabel(code), n, '', { industry: code }, INDUSTRY_ICO[code] || 'grid', INDUSTRY_TONE[code] || 'navy')));
 
+    // Stage tiles borrow the colours the status badges already use everywhere
+    // else, so a stage means the same colour wherever it appears.
+    const STAGE_TONE = { new: 'navy', emailed: 'blue', replied: 'mint', booked: 'green', declined: 'red', bounced: 'amber' };
+    const STAGE_ICO = { new: 'circle', emailed: 'mail', replied: 'reply', booked: 'calendar', declined: 'xcircle', bounced: 'alert' };
     cards('#segStage', Object.entries(STATUS)
-      .map(([k, v]) => card(v.label, count((c) => c.status === k), '', { status: k })));
+      .map(([k, v]) => card(v.label, count((c) => c.status === k), '', { status: k }, STAGE_ICO[k] || 'circle', STAGE_TONE[k] || 'navy')));
 
     cards('#segAdded', [
-      card('Today', count((c) => daysSince(c.addedAt) <= 1), '', { added: '1', sort: 'newest' }),
-      card('This week', count((c) => daysSince(c.addedAt) <= 7), '', { added: '7', sort: 'newest' }),
-      card('This month', count((c) => daysSince(c.addedAt) <= 30), '', { added: '30', sort: 'newest' }),
-      card('Last 90 days', count((c) => daysSince(c.addedAt) <= 90), '', { added: '90', sort: 'newest' }),
-      card('Older than 90 days', count((c) => daysSince(c.addedAt) > 90), '', { added: 'old' }),
+      card('Today', count((c) => daysSince(c.addedAt) <= 1), '', { added: '1', sort: 'newest' }, 'calendar', 'green'),
+      card('This week', count((c) => daysSince(c.addedAt) <= 7), '', { added: '7', sort: 'newest' }, 'calendar', 'mint'),
+      card('This month', count((c) => daysSince(c.addedAt) <= 30), '', { added: '30', sort: 'newest' }, 'calendar', 'blue'),
+      card('Last 90 days', count((c) => daysSince(c.addedAt) <= 90), '', { added: '90', sort: 'newest' }, 'calendar', 'navy'),
+      card('Older than 90 days', count((c) => daysSince(c.addedAt) > 90), '', { added: 'old' }, 'calendar', 'navy'),
     ]);
 
     cards('#segTexting', [
-      card('Texted today', count((c) => daysSince(c.lastTextedAt) <= 1), '', { texted: '1' }),
-      card('Texted this week', count((c) => daysSince(c.lastTextedAt) <= 7), '', { texted: '7' }),
-      card('Texted at some point', count((c) => Boolean(c.lastTextedAt)), '', { texted: 'any' }),
-      card('Replied to a text', count((c) => c.textStatus === 'replied'), '', { texted: 'any' }),
-      card('Read your text', count((c) => c.textStatus === 'read'), 'but has not replied', { texted: 'any' }),
-      card('No iMessage account', count((c) => c.textStatus === 'not-imessage'), 'unreachable this way', { texted: 'any' }),
-      card('Never texted', count((c) => !c.lastTextedAt && textPhoneOf(c)), 'and has a number', { texted: 'never' }),
+      card('Texted today', count((c) => daysSince(c.lastTextedAt) <= 1), '', { texted: '1' }, 'send', 'blue'),
+      card('Texted this week', count((c) => daysSince(c.lastTextedAt) <= 7), '', { texted: '7' }, 'send', 'blue'),
+      card('Texted at some point', count((c) => Boolean(c.lastTextedAt)), '', { texted: 'any' }, 'bubble', 'navy'),
+      card('Replied to a text', count((c) => c.textStatus === 'replied'), '', { texted: 'any' }, 'reply', 'green'),
+      card('Read your text', count((c) => c.textStatus === 'read'), 'but has not replied', { texted: 'any' }, 'eye', 'mint'),
+      card('No iMessage account', count((c) => c.textStatus === 'not-imessage'), 'unreachable this way', { texted: 'any' }, 'xcircle', 'amber'),
+      card('Never texted', count((c) => !c.lastTextedAt && textPhoneOf(c)), 'and has a number', { texted: 'never' }, 'circle', 'navy'),
     ]);
 
     // The industry menu in the focused view mirrors what actually exists.

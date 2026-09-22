@@ -275,7 +275,7 @@
     </section>
 
     <!-- ===== Import ===== -->
-    <section class="view" id="view-import">
+    <section class="view dense" id="view-import">
       <header class="page-head">
         <div>
           <h1>Import</h1>
@@ -286,10 +286,10 @@
       <div class="two-col">
         <div class="card">
           <div class="card-head">
-            <h2>Google Sheet</h2>
+            <h2><span class="card-ico tone-green" data-icon="sheet" data-size="15"></span>Google Sheet</h2>
             <span class="badge tint-green">recommended</span>
           </div>
-          <p class="muted">Paste the link to your sheet. First row should be headers (e.g. Name, Email, Role…). Private sheets work once Google is connected in Settings; otherwise share the sheet as “Anyone with the link”.</p>
+          <p class="muted">Paste the link to your sheet — first row should be headers (Name, Email, Role…). Private sheets work once Google is connected in Settings; otherwise share the sheet as “Anyone with the link”.</p>
           <div class="field-row">
             <input type="text" id="sheetUrl" class="input" placeholder="https://docs.google.com/spreadsheets/d/…">
             <button class="btn btn-primary" id="fetchSheetBtn"><span data-icon="sheet" data-size="15"></span> Fetch</button>
@@ -298,11 +298,11 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>Upload a file</h2></div>
+          <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="upload" data-size="15"></span>Upload a file</h2></div>
           <p class="muted">CSV, TSV, TXT or Excel (.xlsx) — from Excel, Numbers, Google Sheets or any CRM export. Columns are recognised automatically, even without a header row.</p>
           <label class="dropzone" id="dropzone">
             <input type="file" id="csvFile" accept=".csv,.tsv,.txt,.xlsx,text/csv,text/tab-separated-values,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
-            <span class="drop-ico" data-icon="upload" data-size="24"></span>
+            <span class="drop-ico" data-icon="upload" data-size="18"></span>
             <span><strong>Choose a file</strong> or drag it here</span>
           </label>
           <details class="paste-details">
@@ -318,17 +318,17 @@
 
       <div class="card" id="apolloCard">
         <div class="card-head">
-          <h2>Find candidates with Apollo</h2>
+          <h2><span class="card-ico tone-navy" data-icon="search" data-size="15"></span>Find candidates with Apollo</h2>
           <span class="badge tint-blue" id="apolloStatus">not set up</span>
         </div>
-        <p class="muted">Searches Apollo's database and adds the people it finds straight to your list, with their current role, employer, location and previous roles. Searching is free; each email address Apollo reveals costs one of your Apollo credits.</p>
+        <p class="muted">Searches Apollo's database and adds who it finds straight to your list, with their role, employer, location and previous jobs. Searching is free; each email address Apollo reveals costs one credit.</p>
         <div class="grid-2">
           <div><label class="label">Job titles</label><input type="text" id="apolloTitles" class="input" placeholder="account executive, outside sales representative"></div>
           <div><label class="label">Locations</label><input type="text" id="apolloLocations" class="input" placeholder="United States"></div>
           <div><label class="label">Industry keywords</label><input type="text" id="apolloKeywords" class="input" placeholder="merchant services, payment processing"></div>
           <div><label class="label">How many to add</label><input type="number" id="apolloCount" class="input" min="1" max="200" placeholder="50"></div>
-          <div><label class="label">In current job at least (months)</label><input type="number" id="apolloMinMonths" class="input" min="0" max="240" placeholder="12"></div>
-          <div><label class="label">…and at most (months)</label><input type="number" id="apolloMaxMonths" class="input" min="0" max="240" placeholder="30"></div>
+          <div><label class="label">Min months in job</label><input type="number" id="apolloMinMonths" class="input" min="0" max="240" placeholder="12"></div>
+          <div><label class="label">Max months in job</label><input type="number" id="apolloMaxMonths" class="input" min="0" max="240" placeholder="30"></div>
         </div>
         <div class="hint">People one to two and a half years into a job answer recruiting mail most often. Anyone already on your list is skipped, and nobody from your own company is ever added.</div>
         <div class="field-row" id="apolloKeyRow" hidden>
@@ -363,7 +363,7 @@
     </section>
 
     <!-- ===== Template ===== -->
-    <section class="view" id="view-template">
+    <section class="view dense" id="view-template">
       <header class="page-head">
         <div>
           <h1>Email template</h1>
@@ -377,11 +377,11 @@
 
       <div class="two-col template-cols">
         <div class="card">
-          <div class="card-head"><h2>Edit</h2></div>
+          <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="doc" data-size="15"></span>Edit</h2></div>
           <label class="label">Subject</label>
           <input type="text" id="tplSubject" class="input">
           <label class="label">Body</label>
-          <textarea id="tplBody" class="input textarea" rows="14"></textarea>
+          <textarea id="tplBody" class="input textarea" rows="11"></textarea>
           <div class="token-row">
             <span class="muted small">Insert:</span>
             <button class="token" data-token="{{firstName}}">first name</button>
@@ -402,7 +402,7 @@
         </div>
         <div class="card">
           <div class="card-head">
-            <h2>Live preview</h2>
+            <h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Live preview</h2>
             <select id="previewCandidate" class="input select slim"></select>
           </div>
           <div class="email-preview">
@@ -422,14 +422,14 @@
       <div class="two-col template-cols">
         <div class="card">
           <div class="card-head">
-            <h2>Follow-up email</h2>
+            <h2><span class="card-ico tone-green" data-icon="reply" data-size="15"></span>Follow-up email</h2>
             <span class="badge tint-mint" id="followUpDueBadge"></span>
           </div>
-          <p class="muted">A second note to people who were emailed but never replied or booked. It is sent as a <strong>reply in the same conversation</strong> (the subject becomes <em>Re:</em> the original), without the attachment, after the wait you set in Settings.</p>
+          <p class="muted">A second note to people who were emailed but never replied or booked. It goes out as a <strong>reply in the same conversation</strong> (subject becomes <em>Re:</em> the original), without the attachment, after the wait set in Settings.</p>
           <label class="label">Subject</label>
           <input type="text" id="fuSubject" class="input">
           <label class="label">Body</label>
-          <textarea id="fuBody" class="input textarea" rows="8"></textarea>
+          <textarea id="fuBody" class="input textarea" rows="7"></textarea>
           <div class="token-row">
             <span class="muted small">Insert:</span>
             <button class="token fu-token" data-fu-token="{{firstName}}">first name</button>
@@ -442,7 +442,7 @@
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>Follow-up preview</h2></div>
+          <div class="card-head"><h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Follow-up preview</h2></div>
           <div class="email-preview">
             <div class="email-meta">
               <div><span class="muted">Subject:</span> <strong id="fuPvSubject"></strong></div>
@@ -458,10 +458,10 @@
 
       <div class="card send-card">
         <div class="card-head">
-          <h2>Send</h2>
+          <h2><span class="card-ico tone-green" data-icon="send" data-size="15"></span>Send</h2>
           <span class="badge tint-blue" id="sendCountBadge"></span>
         </div>
-        <p class="muted">Sends this email to everyone who hasn’t been contacted yet — each person gets their own message with their name filled in, your booking button and your signature. It goes out in small batches, so keep this tab open until the progress bar finishes.</p>
+        <p class="muted">Sends this email to everyone not contacted yet — each person gets their own copy with their name filled in, your booking button and your signature. It goes out in small batches, so keep this tab open until the progress bar finishes.</p>
         <div class="card-actions">
           <button class="btn btn-primary email-all-btn" id="tplSendAllBtn">Email all not-contacted candidates</button>
         </div>
@@ -469,7 +469,7 @@
     </section>
 
     <!-- ===== Texting ===== -->
-    <section class="view" id="view-texting">
+    <section class="view dense" id="view-texting">
       <header class="page-head">
         <div>
           <h1>Texting</h1>
@@ -491,7 +491,7 @@
 
       <div class="card sending-card" id="textSendingCard" hidden>
         <div class="card-head">
-          <h2>Texting in progress</h2>
+          <h2><span class="card-ico tone-blue" data-icon="send" data-size="15"></span>Texting in progress</h2>
           <span class="badge tint-blue" id="textSendingBadge"></span>
         </div>
         <div class="progress"><div class="progress-fill" id="textSendingFill"></div></div>
@@ -504,18 +504,19 @@
       <div class="two-col template-cols">
         <div class="card">
           <div class="card-head">
-            <h2>Mac relay</h2>
+            <h2><span class="card-ico tone-blue" data-icon="bubble" data-size="15"></span>Mac relay</h2>
             <span class="badge" id="relayChip">checking…</span>
           </div>
-          <p class="muted">Apple has no server-side iMessage API, so the sending is done by a small service on your Mac Studio that drives Messages directly — nothing extra to install. It calls out to this dashboard, so nothing has to reach <em>into</em> your Mac and there are no ports to open.</p>
-          <div class="relay-steps">
+          <p class="muted">Apple has no server-side iMessage API, so a small service on your Mac Studio drives Messages directly. It calls out to this dashboard, so nothing has to reach <em>into</em> your Mac and there are no ports to open.</p>
+          <details class="relay-steps">
+            <summary>Setting it up on the Mac — three steps</summary>
             <ol class="steps">
               <li>Generate a relay token below and copy it.</li>
               <li>On the Mac: <code>cd Mass-hiring/relay &amp;&amp; ./install.sh</code>, paste the token into the config it creates, then run it again.</li>
               <li>Grant the two macOS permissions it asks for: <strong>Automation</strong>, so it can tell Messages to send, and <strong>Full Disk Access</strong>, so it can read delivery receipts, read receipts and replies.</li>
             </ol>
             <p class="muted small">Without Automation nothing sends; without Full Disk Access texts go out but nothing comes back. Full instructions are in <code>relay/README.md</code>.</p>
-          </div>
+          </details>
           <label class="label">Relay token</label>
           <div class="field-row">
             <input type="text" id="relayTokenInput" class="input" readonly placeholder="No token yet — generate one">
@@ -526,8 +527,8 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>Pace &amp; hours</h2></div>
-          <p class="muted">Apple disables iMessage on accounts that blast strangers, so this is capped well below where that starts. Texts also only go out during daytime hours <strong>where the person lives</strong>, which is both politer and what the TCPA requires.</p>
+          <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="calendar" data-size="15"></span>Pace &amp; hours</h2></div>
+          <p class="muted">Apple disables iMessage on accounts that blast strangers, so this is capped well below where that starts. Texts only go out during daytime hours <strong>where the person lives</strong> — politer, and what the TCPA requires.</p>
           <div class="field-grid">
             <div>
               <label class="label" for="txDailyLimit">Texts per day</label>
@@ -563,8 +564,8 @@
 
       <div class="two-col template-cols">
         <div class="card">
-          <div class="card-head"><h2>Message</h2></div>
-          <textarea id="txBody" class="input textarea" rows="7" placeholder="Hi {{firstName}}…"></textarea>
+          <div class="card-head"><h2><span class="card-ico tone-green" data-icon="doc" data-size="15"></span>Message</h2></div>
+          <textarea id="txBody" class="input textarea" rows="6" placeholder="Hi {{firstName}}…"></textarea>
           <div class="token-row">
             <span class="muted small">Insert:</span>
             <button class="token tx-token" data-tx-token="{{firstName}}">first name</button>
@@ -578,7 +579,7 @@
         </div>
         <div class="card">
           <div class="card-head">
-            <h2>Preview</h2>
+            <h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Preview</h2>
             <span class="badge" id="txChars"></span>
           </div>
           <div class="imessage-preview"><div class="imessage-bubble" id="txPreview"></div></div>
@@ -588,7 +589,7 @@
     </section>
 
     <!-- ===== Settings ===== -->
-    <section class="view" id="view-settings">
+    <section class="view dense" id="view-settings">
       <header class="page-head">
         <div>
           <h1>Settings</h1>
@@ -600,10 +601,10 @@
       <div class="settings-grid">
         <div class="card">
           <div class="card-head">
-            <h2>Google — Sheets & Gmail</h2>
+            <h2><span class="card-ico tone-green" data-icon="mail" data-size="15"></span>Google — Sheets &amp; Gmail</h2>
             <span class="badge" id="googleBadge">not connected</span>
           </div>
-          <p class="muted">Connect your work Google account to import <strong>private</strong> sheets, send email through the official Gmail API, and have your <strong>existing Gmail signature</strong> added to every outreach email automatically.</p>
+          <p class="muted">Connect your work Google account to import <strong>private</strong> sheets, send through the official Gmail API, and have your <strong>existing Gmail signature</strong> added to every email automatically.</p>
           <label class="label">From name <span class="muted small">(what recipients see instead of the address)</span></label>
           <input type="text" id="setFromName" class="input" placeholder="e.g. Blake Woodruff">
           <label class="label">OAuth Client ID</label>
@@ -628,10 +629,10 @@
 
         <div class="card">
           <div class="card-head">
-            <h2>Gmail App Password</h2>
+            <h2><span class="card-ico tone-blue" data-icon="lock" data-size="15"></span>Gmail App Password</h2>
             <span class="badge tint-blue">easy alternative</span>
           </div>
-          <p class="muted">No Google Cloud setup needed: create an App Password at myaccount.google.com/apppasswords and emails send from your work Gmail over SMTP. Note: Gmail does not attach your signature to SMTP sends — connect Google (left) if you want it included.</p>
+          <p class="muted">No Google Cloud setup needed: create an App Password at myaccount.google.com/apppasswords and email sends from your work Gmail over SMTP. Gmail does not attach your signature to SMTP sends — connect Google (left) if you want it included.</p>
           <label class="label">Work email</label>
           <input type="email" id="setSmtpUser" class="input" placeholder="you@company.com">
           <label class="label">App password</label>
@@ -639,7 +640,7 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>Calendly</h2></div>
+          <div class="card-head"><h2><span class="card-ico tone-navy" data-icon="calendar" data-size="15"></span>Calendly</h2></div>
           <label class="label">Your Calendly booking link (added to every email)</label>
           <input type="text" id="setCalendlyUrl" class="input" placeholder="https://calendly.com/you/interview">
           <label class="label">Personal Access Token <span class="muted small">(kept securely — registers the booking webhook and syncs your scheduled interviews)</span></label>
@@ -651,8 +652,8 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>Sending pace</h2></div>
-          <p class="muted">Large sends go out automatically in the background at this pace. Google Workspace allows about 2,000 messages per account per rolling 24 hours (500 on free Gmail) and the Gmail API accepts about 60 sends a minute — those are Google's ceilings, so higher numbers are capped to them. The defaults leave headroom for your normal email.</p>
+          <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
+          <p class="muted">Large sends go out in the background at this pace. Google allows about 2,000 messages per account per rolling 24 hours (500 on free Gmail) and about 60 sends a minute — those are Google's ceilings, so higher numbers are capped to them. The defaults leave headroom for your normal email.</p>
           <div class="grid-2">
             <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"><div class="hint" id="dailyLimitHint">Up to 2,000 (Google Workspace). When it is reached the queue pauses and resumes by itself as the 24-hour window frees up.</div></div>
             <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="60" placeholder="30"><div class="hint" id="perMinuteHint">Up to 60 (Gmail's API quota). Several emails are sent in parallel each minute to keep this pace.</div></div>
@@ -663,15 +664,15 @@
         </div>
 
         <div class="card" id="apolloSettingsCard">
-          <div class="card-head"><h2>Apollo (candidate search)</h2></div>
-          <p class="muted">Lets the Import page pull new candidates from Apollo. Get a key from <a href="https://app.apollo.io/#/settings/integrations/api" target="_blank" rel="noopener">Apollo → Settings → Integrations → API</a> (press <strong>Connect</strong>, then copy it) and paste it here, then press <strong>Save settings</strong> at the top of this page.</p>
+          <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="search" data-size="15"></span>Apollo (candidate search)</h2></div>
+          <p class="muted">Lets the Import page pull new candidates from Apollo. Get a key from <a href="https://app.apollo.io/#/settings/integrations/api" target="_blank" rel="noopener">Apollo → Settings → Integrations → API</a> (press <strong>Connect</strong>, then copy it), paste it here and press <strong>Save settings</strong> above.</p>
           <label class="label">Apollo API key</label>
           <input type="password" id="setApolloApiKey" class="input" placeholder="paste your Apollo API key">
           <div class="hint">Searching costs nothing. Revealing an email costs one Apollo credit, and the Import page always shows how many a batch will use before you confirm.</div>
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>Phone notifications</h2></div>
+          <div class="card-head"><h2><span class="card-ico tone-green" data-icon="alert" data-size="15"></span>Phone notifications</h2></div>
           <p class="muted">Install the free <strong>ntfy</strong> app (App Store / Play Store), subscribe to a topic of your choosing, and enter the same topic here.</p>
           <label class="label">ntfy topic</label>
           <div class="field-row">
