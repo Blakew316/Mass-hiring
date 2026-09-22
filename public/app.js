@@ -1737,6 +1737,7 @@
       `<span class="to-chip">${esc(c.name || 'Unnamed')} <span class="muted">${esc(prettyPhone(textPhoneOf(c)))}</span></span>`).join('')
       + (people.length > 12 ? `<span class="to-chip muted">+${people.length - 12} more</span>` : '');
     $('#textComposeBody').value = (state.texting && state.texting.template && state.texting.template.body) || '';
+    $('#textComposeNow').checked = false;   // never sticky between sends
     $('#textComposeModal').hidden = false;
     renderTextComposePreview();
     setTimeout(() => $('#textComposeBody').focus(), 40);
@@ -1756,15 +1757,19 @@
 
     const q = (state.texting && state.texting.queue) || {};
     const n = textComposeIds.length;
+    const nowMode = $('#textComposeNow').checked;
     const bits = [`${full.length} characters`];
     if (!q.relay || !q.relay.online) bits.push('the Mac relay is offline, so these will wait until it is back');
+    else if (nowMode) bits.push('goes out within a few seconds, whatever the hour where they are');
     else if (n > 1) bits.push(`sent one at a time, roughly every ${Math.round(((q.minGap || 45) + (q.maxGap || 150)) / 2)}s`);
-    if (q.startHour !== undefined) bits.push(`only between ${q.startHour}:00 and ${q.endHour}:00 where each person lives`);
+    if (!nowMode && q.startHour !== undefined) bits.push(`only between ${q.startHour}:00 and ${q.endHour}:00 where each person lives`);
     if (q.remainingToday !== undefined && n > q.remainingToday) bits.push(`only ${q.remainingToday} fit under today's cap — the rest go tomorrow`);
     $('#textComposeHint').textContent = bits.join(' · ');
+    $('#textComposeHint').className = nowMode ? 'hint bad' : 'hint';
   }
 
   $('#textComposeBody').addEventListener('input', renderTextComposePreview);
+  $('#textComposeNow').addEventListener('change', renderTextComposePreview);
   $$('.tc-token').forEach((b) => b.addEventListener('click', () => {
     const el = $('#textComposeBody');
     const at = el.selectionStart ?? el.value.length;
@@ -1780,7 +1785,12 @@
     if (!body) { toast('The message is empty.', true); return; }
     btn.disabled = true;
     try {
-      const r = await api('/api/texts/queue', { method: 'POST', body: { ids: textComposeIds, template: { body } } });
+      const sendNow = $('#textComposeNow').checked;
+      if (sendNow && textComposeIds.length > 3
+          && !confirm(`Send ${textComposeIds.length} texts right now, ignoring the quiet hours? That is meant for testing one message, not a batch.`)) {
+        btn.disabled = false; return;
+      }
+      const r = await api('/api/texts/queue', { method: 'POST', body: { ids: textComposeIds, template: { body }, ignoreQuietHours: sendNow } });
       const skip = r.skipped || {};
       const notes = [];
       if (skip.alreadyTexted) notes.push(`${skip.alreadyTexted} were texted in the last 24h`);

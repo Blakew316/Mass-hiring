@@ -951,9 +951,12 @@ app.post('/api/texts/queue', asyncRoute(async (req, res) => {
   // texting one person usually means saying something other than the template.
   const custom = req.body && req.body.template && String(req.body.template.body || '').trim();
   const template = custom ? { body: String(req.body.template.body) } : db.textTemplate;
+  // Explicit, per send, and never sticky: a test message can go out at any
+  // hour without touching the quiet hours that protect the real list.
+  const ignoreQuietHours = Boolean(req.body && req.body.ignoreQuietHours);
   let result = { added: 0, skipped: {} };
   await textQueue.updateQ((q) => {
-    result = textQueue.enqueue(q, db, ids, template);
+    result = textQueue.enqueue(q, db, ids, template, { ignoreQuietHours });
     if (!result.added) return false;
   });
   const q = await textQueue.loadQ();
