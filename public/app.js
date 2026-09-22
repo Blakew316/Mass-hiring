@@ -2217,8 +2217,15 @@
         token: $('#calendlyToken').value,
         publicUrl: state.baseUrl,
       }});
-      $('#calendlyHint').textContent = `Booking alerts enabled — Calendly now notifies this app at ${r.url}.`;
-      toast('Calendly webhook registered. Bookings will update the pipeline and ping your phone.');
+      // Say what was actually cleaned up. A subscription left behind under an
+      // older hostname is the usual reason bookings were being rejected, and
+      // silently fixing it looks identical to not fixing it.
+      const stale = (r.replacedUrls || []).length;
+      $('#calendlyHint').textContent = `Booking alerts enabled — Calendly now notifies this app at ${r.url}.`
+        + (stale ? ` Removed ${stale} old subscription${stale === 1 ? '' : 's'} pointing at a previous address, which is what was being rejected.` : '');
+      toast(stale
+        ? `Calendly webhook registered, and ${stale} stale subscription${stale === 1 ? '' : 's'} removed.`
+        : 'Calendly webhook registered. Bookings will update the pipeline and ping your phone.');
       await refresh();
     } catch (err) { oops(err); }
   });

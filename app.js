@@ -1169,6 +1169,11 @@ app.post('/auth/google/disconnect', asyncRoute(async (_req, res) => {
 }));
 
 // ---------- Calendly ----------
+// The one warning that has to be retractable: it tells the user to go and fix
+// something, so once they have, it must stop shouting at them.
+const CALENDLY_SIGNATURE_WARNING = 'Rejected a Calendly webhook call with an invalid signature. If bookings stop showing up, click "Enable booking alerts" in Settings to re-register.';
+const isCalendlySignatureWarning = (e) => e && e.type === 'error' && /Calendly webhook call with an invalid signature/.test(e.message || '');
+
 app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   const db = await store.load();
   const provided = String(req.body.token || '').trim();
@@ -1183,7 +1188,11 @@ app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   db.settings.calendlyToken = token;
   if (!db.settings.calendlyUrl && result.schedulingUrl) db.settings.calendlyUrl = result.schedulingUrl;
   await store.save(db);
-  res.json({ ok: true, ...result, signingKey: undefined });
+  // Re-registering IS the fix the warning asked for, so retire it here rather
+  // than leaving it on screen for a day after the problem is gone.
+  lastSignatureWarning = 0;
+  const cleared = await store.clearEvents(isCalendlySignatureWarning).catch(() => 0);
+  res.json({ ok: true, ...result, signingKey: undefined, clearedWarnings: cleared });
 }));
 
 // Interview times are shown in the user's own time zone (auto-saved from the
@@ -1257,10 +1266,13 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
     // bogus calls can't spam it).
     if (Date.now() - lastSignatureWarning > 10 * 60 * 1000) {
       lastSignatureWarning = Date.now();
-      await store.addEvent('error', 'Rejected a Calendly webhook call with an invalid signature. If bookings stop showing up, click "Enable booking alerts" in Settings to re-register.');
+      await store.addEvent('error', CALENDLY_SIGNATURE_WARNING);
     }
     return res.status(401).json({ error: 'Invalid Calendly signature' });
   }
+  // A call that verifies proves the key is right, so the old warning goes.
+  lastSignatureWarning = 0;
+  await store.clearEvents(isCalendlySignatureWarning).catch(() => {});
   const event = req.body.event;
   const p = req.body.payload || {};
   const inviteeEmail = String(p.email || '').toLowerCase();
