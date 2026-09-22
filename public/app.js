@@ -1035,8 +1035,7 @@
     openTextCompose(selectedTextable().map((c) => c.id), { thenEmail: [...selected] });
   });
   $('#selClearBtn').addEventListener('click', () => { selected.clear(); renderCandidates(); });
-  $('#candEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
-  $('#dashEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
+  $('#emailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
   $$('.follow-up-btn').forEach((b) => b.addEventListener('click', () => {
     if (b.id === 'tplFollowUpBtn' && followUpDirty) return;   // that button sends the unsaved draft (handled below)
     openCompose(followUpDueIds(), null, { followUp: true });

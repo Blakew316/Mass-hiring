@@ -72,11 +72,7 @@
         <div>
           <h1>Dashboard</h1>
         </div>
-        <div class="head-actions">
-          <button class="btn" data-goto="import">Import candidates</button>
-          <button class="btn follow-up-btn" id="dashFollowUpBtn" title="Reply in the same conversation to everyone who hasn't answered"><span data-icon="reply" data-size="15"></span> Follow up</button>
-          <button class="btn btn-primary email-all-btn" id="dashEmailAllBtn">Email all not contacted</button>
-        </div>
+        <div class="head-actions"></div>
       </header>
 
       <div class="stat-grid">
@@ -169,8 +165,6 @@
         </div>
         <div class="head-actions">
           <button class="btn" id="addCandidateBtn"><span data-icon="plus" data-size="15"></span> Add manually</button>
-          <button class="btn follow-up-btn" id="candFollowUpBtn"><span data-icon="reply" data-size="15"></span> Follow up</button>
-          <button class="btn email-all-btn" id="candEmailAllBtn">Email all not contacted</button>
         </div>
       </header>
 
@@ -374,8 +368,9 @@
           <h1>Email</h1>
         </div>
         <div class="head-actions">
-          <button class="btn" id="resetTemplateBtn">Reset to default</button>
-          <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
+          <button class="btn" data-goto="import">Import candidates</button>
+          <button class="btn follow-up-btn" id="emailFollowUpBtn" title="Reply in the same conversation to everyone who hasn't answered"><span data-icon="reply" data-size="15"></span> Follow up</button>
+          <button class="btn btn-primary email-all-btn" id="emailAllBtn">Email all not contacted</button>
         </div>
       </header>
 
@@ -451,6 +446,10 @@
               <button class="btn-link" id="attachRestore" hidden>Restore the Account Executive flyer</button>
               <span class="muted small">PNG, JPG, GIF, WebP or PDF · up to 4 MB each, 3 files</span>
             </div>
+          </div>
+          <div class="card-actions">
+            <button class="btn" id="resetTemplateBtn">Reset to default</button>
+            <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
           </div>
         </div>
         <div class="card">
