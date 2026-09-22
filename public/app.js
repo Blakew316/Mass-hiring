@@ -1793,12 +1793,19 @@
       const r = await api('/api/texts/queue', { method: 'POST', body: { ids: textComposeIds, template: { body }, ignoreQuietHours: sendNow } });
       const skip = r.skipped || {};
       const notes = [];
-      if (skip.alreadyTexted) notes.push(`${skip.alreadyTexted} were texted in the last 24h`);
+      if (skip.queued) notes.push(`${skip.queued} ${skip.queued === 1 ? 'is' : 'are'} already waiting in the queue`);
+      if (skip.alreadyTexted) notes.push(`${skip.alreadyTexted} ${skip.alreadyTexted === 1 ? 'was' : 'were'} texted in the last 24h`);
       if (skip.optedOut) notes.push(`${skip.optedOut} asked to stop`);
       if (skip.noPhone) notes.push(`${skip.noPhone} had no usable number`);
-      toast(r.added
-        ? `${r.added} text${r.added === 1 ? '' : 's'} queued${notes.length ? ` · ${notes.join(', ')}` : ''}.`
-        : `Nothing queued${notes.length ? ` — ${notes.join(', ')}` : ''}.`, !r.added);
+      const did = [];
+      if (r.added) did.push(`${r.added} text${r.added === 1 ? '' : 's'} queued`);
+      if (r.promoted) did.push(`${r.promoted} moved to the front to go now`);
+      // Never report "nothing happened" without saying why — that was the whole
+      // problem: a red toast with no reason and no way to tell what to do next.
+      toast(did.length
+        ? `${did.join(' · ')}${notes.length ? ` · ${notes.join(', ')}` : ''}.`
+        : `Nothing to send — ${notes.length ? notes.join(', ') : 'those people cannot be texted right now'}.`,
+        !did.length);
       $('#textComposeModal').hidden = true;
       const alsoEmail = textComposeThenEmail;
       textComposeThenEmail = null;

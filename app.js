@@ -954,10 +954,12 @@ app.post('/api/texts/queue', asyncRoute(async (req, res) => {
   // Explicit, per send, and never sticky: a test message can go out at any
   // hour without touching the quiet hours that protect the real list.
   const ignoreQuietHours = Boolean(req.body && req.body.ignoreQuietHours);
-  let result = { added: 0, skipped: {} };
+  let result = { added: 0, promoted: 0, skipped: {} };
   await textQueue.updateQ((q) => {
     result = textQueue.enqueue(q, db, ids, template, { ignoreQuietHours });
-    if (!result.added) return false;
+    // Promoting someone already waiting is a change worth writing, even though
+    // it adds nobody new.
+    if (!result.added && !result.promoted) return false;
   });
   const q = await textQueue.loadQ();
   res.json({ ...result, queue: textQueue.status(q, db.settings, await relayState()) });
