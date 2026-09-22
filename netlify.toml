@@ -9,3 +9,23 @@
 # Routing for /api/*, /auth/* and /webhooks/* is declared by the function
 # itself (see `config.path` in netlify/src/api.mjs); everything else is the
 # static dashboard in public/.
+
+# The dashboard's JS and CSS are referenced without a version in the filename,
+# so a browser that has cached them will keep serving the old copy after a
+# deploy — a shipped change then looks like a change that never happened.
+# These make the browser revalidate on every load; the ETag means an unchanged
+# file still costs a 304 and nothing more.
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
