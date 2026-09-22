@@ -2274,6 +2274,251 @@
       <i class="dot"></i>${st.label}</span>`;
   }
 
+  // ---------------- Messages ----------------
+  // A conversation view, because a reply with no record of what it answers is
+  // unreadable. The thread itself is fetched per conversation rather than
+  // shipped with the dashboard state: fifty messages for each of 2,800 people
+  // would be most of the payload, and all but one of them is off screen.
+  let convFilter = 'all';
+  let convSearch = '';
+  let openThreadId = null;
+  let thread = null;          // the fetched conversation, or null
+  let threadLoading = false;
+
+  // The table's initials() wants a candidate and falls back to an email. A
+  // conversation may only ever have had a phone number, so this one takes what
+  // it is given and degrades to the number rather than to "undefined".
+  const convInitials = (name, fallback) => {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return String(fallback || '?').replace(/\D/g, '').slice(-2) || '?';
+    return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+  };
+
+  // Everyone we have actually exchanged a message with, newest first.
+  function conversations() {
+    const all = (state.candidates || []).filter((c) => c.textCount > 0);
+    const q = convSearch.trim().toLowerCase();
+    return all
+      .filter((c) => (convFilter === 'unread' ? c.textUnread : true))
+      .filter((c) => !q || `${c.name || ''} ${c.phone || ''} ${c.company || ''}`.toLowerCase().includes(q))
+      .sort((a, b) => String((b.textLast || {}).ts || '').localeCompare(String((a.textLast || {}).ts || '')));
+  }
+
+  const unreadCount = () => (state.candidates || []).filter((c) => c.textUnread).length;
+
+  function renderConvList() {
+    const rows = conversations();
+    const n = unreadCount();
+    $('#convUnreadN').textContent = n || '';
+    $('#convUnreadN').hidden = !n;
+    $$('.conv-tab').forEach((b) => b.classList.toggle('on', b.dataset.convTab === convFilter));
+    $('#convList').innerHTML = rows.length
+      ? rows.map((c) => {
+          const last = c.textLast || {};
+          const who = c.name || textPhoneOf(c) || 'Unknown';
+          return `<li><button class="conv${c.id === openThreadId ? ' on' : ''}${c.textUnread ? ' unread' : ''}" data-conv="${esc(c.id)}">
+            <span class="avatar">${esc(convInitials(c.name, c.phone))}</span>
+            <span class="conv-main">
+              <span class="conv-top"><span class="conv-name">${esc(who)}</span><span class="conv-when">${last.ts ? timeAgo(last.ts) : ''}</span></span>
+              <span class="conv-last">${last.dir === 'out' ? '<span class="conv-you">You:</span> ' : ''}${esc(last.text || '')}</span>
+            </span>
+            ${c.textUnread ? '<span class="conv-dot" aria-label="unread"></span>' : ''}
+          </button></li>`;
+        }).join('')
+      : `<li class="conv-none">${convFilter === 'unread' ? 'Nothing unread.' : convSearch ? 'No conversation matches that.' : 'No conversations yet. Texts you send show up here.'}</li>`;
+  }
+
+  async function openThread(id, { markSeen = true } = {}) {
+    openThreadId = id;
+    threadLoading = true;
+    renderConvList();
+    $('#threadEmpty').hidden = true;
+    $('#threadLive').hidden = false;
+    $('#threadBody').innerHTML = '<p class="thread-loading">Loading…</p>';
+    try {
+      thread = await api(`/api/texts/thread?id=${encodeURIComponent(id)}`);
+    } catch (e) {
+      thread = null;
+      $('#threadBody').innerHTML = `<p class="thread-loading">${esc(e.message)}</p>`;
+      threadLoading = false;
+      return;
+    }
+    threadLoading = false;
+    renderThread();
+    if (markSeen) {
+      const c = (state.candidates || []).find((x) => x.id === id);
+      if (c && c.textUnread) {
+        c.textUnread = false;           // locally, so the badge clears at once
+        renderConvList(); renderBell();
+        api('/api/texts/seen', { method: 'POST', body: { id } }).catch(() => {});
+      }
+    }
+  }
+
+  function renderThread() {
+    if (!thread) return;
+    $('#threadAvatar').textContent = convInitials(thread.name, thread.phone);
+    $('#threadName').textContent = thread.name || thread.phone || 'Unknown';
+    const bits = [thread.phone, thread.role, thread.company].filter(Boolean);
+    $('#threadSub').textContent = bits.join(' · ');
+
+    // Anything still queued for the Mac is shown as a pending bubble, so a
+    // reply does not disappear between pressing send and the relay picking
+    // it up a minute later.
+    const msgs = [
+      ...thread.thread.map((m) => ({ ...m, pending: false })),
+      ...(thread.pending || []).map((m) => ({ dir: 'out', ts: null, text: m.text, pending: true })),
+    ];
+    $('#threadBody').innerHTML = msgs.length
+      ? msgs.map((m, i) => {
+          const prev = msgs[i - 1];
+          const gap = !prev || (m.ts && prev.ts && new Date(m.ts) - new Date(prev.ts) > 60 * 60 * 1000);
+          const stamp = gap && m.ts ? `<div class="thread-stamp">${esc(whenLabel(m.ts))}</div>` : '';
+          return `${stamp}<div class="msg ${m.dir === 'out' ? 'out' : 'in'}${m.pending ? ' pending' : ''}">
+            <div class="bubble">${esc(m.text)}</div>
+            ${m.pending ? '<div class="msg-meta">Sending…</div>' : ''}
+          </div>`;
+        }).join('')
+      : '<p class="thread-loading">No messages yet.</p>';
+    $('#threadBody').scrollTop = $('#threadBody').scrollHeight;
+
+    const stopped = thread.optedOut;
+    $('#threadInput').disabled = stopped;
+    $('#threadSend').disabled = stopped;
+    $('#threadInput').placeholder = stopped ? 'They replied STOP' : 'iMessage';
+    const relay = ((state.texting || {}).queue || {}).relay || {};
+    $('#threadNote').textContent = stopped
+      ? 'They replied STOP, so nothing more can be sent to this number.'
+      : relay.online ? '' : 'The Mac relay is offline — replies will queue and send when it is back.';
+  }
+
+  function whenLabel(ts) {
+    const d = new Date(ts);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (sameDay) return `Today ${time}`;
+    const yday = new Date(now); yday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yday.toDateString()) return `Yesterday ${time}`;
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+  }
+
+  async function sendReply() {
+    const box = $('#threadInput');
+    const body = box.value.trim();
+    if (!body || !openThreadId) return;
+    $('#threadSend').disabled = true;
+    try {
+      await api('/api/texts/reply', { method: 'POST', body: { id: openThreadId, body } });
+      box.value = '';
+      box.style.height = '';
+      // Show it immediately rather than waiting for the next poll.
+      if (thread) { thread.pending = [...(thread.pending || []), { text: body }]; renderThread(); }
+      await refresh();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      $('#threadSend').disabled = Boolean(thread && thread.optedOut);
+    }
+  }
+
+  // ---------------- The bell ----------------
+  // One button, injected into every page's header rather than copied into six
+  // of them, so a reply is visible from wherever you happen to be standing.
+  function mountBell() {
+    $$('.head-actions').forEach((row) => {
+      if (row.querySelector('.bell')) return;
+      const b = document.createElement('button');
+      b.className = 'bell';
+      b.type = 'button';
+      b.title = 'Replies';
+      b.innerHTML = `${icon('bubble', 17)}<span class="bell-n" hidden></span>`;
+      b.addEventListener('click', (e) => { e.stopPropagation(); toggleBell(); });
+      row.appendChild(b);
+    });
+  }
+
+  function renderBell() {
+    const n = unreadCount();
+    $$('.bell').forEach((b) => {
+      const dot = b.querySelector('.bell-n');
+      dot.textContent = n > 9 ? '9+' : String(n);
+      dot.hidden = !n;
+      b.classList.toggle('lit', Boolean(n));
+    });
+    if (!$('#bellPanel').hidden) renderBellPanel();
+  }
+
+  function renderBellPanel() {
+    const unread = (state.candidates || [])
+      .filter((c) => c.textUnread)
+      .sort((a, b) => String((b.textLast || {}).ts || '').localeCompare(String((a.textLast || {}).ts || '')));
+    const recent = (state.candidates || [])
+      .filter((c) => !c.textUnread && c.textLast && c.textLast.dir === 'in')
+      .sort((a, b) => String((b.textLast || {}).ts || '').localeCompare(String((a.textLast || {}).ts || '')))
+      .slice(0, 6);
+    const row = (c, isNew) => {
+      const last = c.textLast || {};
+      return `<button class="bell-row${isNew ? ' new' : ''}" data-bell-open="${esc(c.id)}">
+        <span class="avatar">${esc(convInitials(c.name, c.phone))}</span>
+        <span class="bell-main">
+          <span class="bell-top"><span class="bell-name">${esc(c.name || textPhoneOf(c) || 'Unknown')}</span><span class="bell-when">${last.ts ? timeAgo(last.ts) : ''}</span></span>
+          <span class="bell-text">${esc(last.text || '')}</span>
+        </span>
+      </button>`;
+    };
+    $('#bellBody').innerHTML = unread.length || recent.length
+      ? `${unread.length ? `<div class="bell-sec">New</div>${unread.map((c) => row(c, true)).join('')}` : ''}
+         ${recent.length ? `<div class="bell-sec">Earlier</div>${recent.map((c) => row(c, false)).join('')}` : ''}`
+      : '<p class="bell-none">No replies yet. When someone texts back it lands here.</p>';
+    $('#bellClear').hidden = !unread.length;
+  }
+
+  function toggleBell(force) {
+    const panel = $('#bellPanel');
+    const show = force !== undefined ? force : panel.hidden;
+    panel.hidden = !show;
+    if (show) renderBellPanel();
+  }
+
+  function wireMessages() {
+    $('#convList').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-conv]');
+      if (b) openThread(b.dataset.conv);
+    });
+    $$('.conv-tab').forEach((b) => b.addEventListener('click', () => { convFilter = b.dataset.convTab; renderConvList(); }));
+    $('#convSearch').addEventListener('input', (e) => { convSearch = e.target.value; renderConvList(); });
+    $('#threadCompose').addEventListener('submit', (e) => { e.preventDefault(); sendReply(); });
+    // Enter sends, shift-enter makes a new line — the way every messenger works.
+    $('#threadInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(); }
+    });
+    $('#threadInput').addEventListener('input', (e) => {
+      e.target.style.height = 'auto';
+      e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+    });
+    $('#threadOpenCandidate').addEventListener('click', () => { if (openThreadId) openCandidate(openThreadId); });
+
+    $('#bellPanel').addEventListener('click', (e) => {
+      const r = e.target.closest('[data-bell-open]');
+      if (!r) return;
+      toggleBell(false);
+      show('texting');
+      openThread(r.dataset.bellOpen);
+    });
+    $('#bellClear').addEventListener('click', async () => {
+      (state.candidates || []).forEach((c) => { c.textUnread = false; });
+      renderBell(); renderConvList();
+      try { await api('/api/texts/seen', { method: 'POST', body: { all: true } }); } catch {}
+    });
+    document.addEventListener('click', (e) => {
+      if ($('#bellPanel').hidden) return;
+      if (e.target.closest('#bellPanel') || e.target.closest('.bell')) return;
+      toggleBell(false);
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleBell(false); });
+  }
+
   function renderTexting() {
     const t = state.texting || {};
     const q = t.queue || {};
@@ -2659,6 +2904,12 @@
     renderCandidates();
     renderApollo();
     renderTexting();
+    mountBell();
+    renderBell();
+    renderConvList();
+    // A thread left open stays live: a reply arriving while you are reading it
+    // should appear, not wait for you to click away and back.
+    if (openThreadId && !threadLoading) openThread(openThreadId, { markSeen: false });
     renderSettings();
     // Only prime the template editor when there are no unsaved edits.
     if (!templateDirty) {
@@ -2688,6 +2939,7 @@
   function start() {
     if (started) return;
     started = true;
+    wireMessages();
     syncTimeZone();
     const hash = location.hash.replace('#', '');
     if (hash) {

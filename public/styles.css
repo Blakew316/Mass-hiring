@@ -122,7 +122,8 @@ button, input, select, textarea { font-family: var(--font); }
 .signout { width: 100%; justify-content: center; padding: 7px 10px; font-size: 12.5px; }
 
 /* ---------------- Main / pages ---------------- */
-.main { flex: 1; padding: 28px 36px 48px; max-width: 1200px; }
+/* `relative` so the bell's panel can anchor to the top right of the page. */
+.main { flex: 1; padding: 28px 36px 48px; max-width: 1200px; position: relative; }
 .view { display: none; }
 .view.active { display: block; animation: fadeUp 0.22s ease; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -379,6 +380,8 @@ tr:hover .row-actions { opacity: 1; }
 .view.dense .card > p.muted { font-size: 12.5px; line-height: 1.5; margin: 0; }
 .view.dense .label { font-size: 11.5px; margin: 10px 0 4px; }
 .view.dense .input { padding: 7px 10px; font-size: 12.5px; border-radius: 9px; }
+/* ...except a search box, which has to keep the room its icon sits in. */
+.view.dense .search-wrap .search { padding-left: 30px; }
 .view.dense .btn { padding: 6px 12px; font-size: 12.5px; border-radius: 9px; }
 .view.dense .hint { font-size: 11.5px; margin-top: 7px; line-height: 1.5; }
 .view.dense .card-actions { margin-top: 12px; gap: 8px; }
@@ -909,3 +912,142 @@ tr.row-muted { opacity: .55; }
   .activity-strip { grid-template-columns: 1fr; }
   .activity-strip .today-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------------- Messages ---------------- */
+/* A conversation view shaped like the app these messages actually arrive in:
+   a list of people on the left, the thread on the right, ours on the right of
+   it in blue and theirs on the left in grey. */
+.messages-card .card-head { margin-bottom: 12px; }
+.msg-head-right { display: flex; align-items: center; gap: 10px; }
+.msg-search { max-width: 220px; }
+.messenger {
+  display: grid;
+  grid-template-columns: 268px 1fr;
+  gap: 0;
+  height: 460px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card);
+}
+@media (max-width: 900px) { .messenger { grid-template-columns: 1fr; height: auto; } }
+
+.conv-col { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--surface-sunk); }
+.conv-tabs { display: flex; gap: 4px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.conv-tab {
+  flex: 1; padding: 5px 8px; border-radius: 8px; border: none; cursor: pointer;
+  background: transparent; font-family: var(--font); font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.conv-tab:hover { background: var(--navy-tint); color: var(--navy); }
+.conv-tab.on { background: var(--card); color: var(--navy); box-shadow: 0 1px 2px rgba(20,27,77,.08); }
+.conv-tab-n { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 99px; background: var(--red); color: #fff; font-size: 10px; }
+.conv-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+.conv {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 10px 11px; border: none; background: transparent; cursor: pointer;
+  text-align: left; font-family: var(--font); border-bottom: 1px solid var(--line);
+}
+.conv:hover { background: var(--navy-tint); }
+.conv.on { background: var(--blue); }
+.conv.on .conv-name, .conv.on .conv-last, .conv.on .conv-when, .conv.on .conv-you { color: #fff; }
+.conv.on .avatar { background: rgba(255,255,255,.25); color: #fff; }
+.conv-main { flex: 1; min-width: 0; }
+.conv-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.conv-name { font-size: 13px; font-weight: 600; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-when { font-size: 10.5px; color: var(--muted); flex-shrink: 0; }
+.conv-last { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-you { color: var(--navy-soft); font-weight: 600; }
+.conv.unread .conv-name { font-weight: 700; }
+.conv.unread .conv-last { color: var(--ink); }
+.conv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex-shrink: 0; }
+.conv.on .conv-dot { background: #fff; }
+.conv-none { padding: 22px 14px; font-size: 12.5px; color: var(--muted); text-align: center; line-height: 1.5; }
+
+/* The table's avatars are tinted per row; a conversation's is plain, and has
+   no right margin because its row is a flex layout with its own gap. */
+.conv .avatar, .thread-who .avatar, .bell-row .avatar {
+  width: 32px; height: 32px; flex-shrink: 0; margin-right: 0;
+  background: var(--navy-tint); color: var(--navy-soft);
+}
+
+.thread-col { display: flex; flex-direction: column; min-height: 0; }
+.thread-empty { flex: 1; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); }
+.thread-empty p { margin: 0; font-size: 13px; }
+.thread-live { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.thread-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.thread-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.thread-name { font-size: 14px; font-weight: 650; color: var(--navy); }
+.thread-sub { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+.thread-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 3px; background: var(--surface-sunk); min-height: 0; }
+.thread-loading { margin: auto; color: var(--muted); font-size: 12.5px; }
+.thread-stamp { text-align: center; font-size: 10.5px; color: var(--muted); margin: 10px 0 6px; font-weight: 600; }
+
+/* The bubbles. Ours right and blue, theirs left and grey, exactly as they
+   appear on the phone this conversation is really happening on. */
+.msg { display: flex; flex-direction: column; max-width: 78%; }
+.msg.in { align-self: flex-start; align-items: flex-start; }
+.msg.out { align-self: flex-end; align-items: flex-end; }
+.bubble {
+  padding: 8px 13px; border-radius: 18px;
+  font-size: 13.5px; line-height: 1.42;
+  white-space: pre-wrap; word-break: break-word;
+}
+.msg.in .bubble { background: #e8eaef; color: var(--ink); border-bottom-left-radius: 5px; }
+.msg.out .bubble { background: linear-gradient(#20b2fb, #1088e8); color: #fff; border-bottom-right-radius: 5px; }
+.msg.pending .bubble { opacity: .6; }
+.msg-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+
+.thread-compose { display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.thread-compose .textarea { flex: 1; resize: none; min-height: 36px; max-height: 120px; border-radius: 18px; padding: 8px 14px; font-size: 13.5px; }
+.send-btn {
+  width: 34px; height: 34px; flex-shrink: 0;
+  border: none; border-radius: 50%; cursor: pointer;
+  background: var(--blue); color: #fff; display: grid; place-items: center;
+  transition: background .12s, opacity .12s;
+}
+.send-btn:hover { background: var(--blue-deep); }
+.send-btn:disabled { opacity: .4; cursor: not-allowed; }
+.thread-note { margin: 0; padding: 0 14px 10px; font-size: 11.5px; color: var(--amber); }
+.thread-note:empty { display: none; }
+
+/* ---------------- The replies bell ---------------- */
+.bell {
+  position: relative; width: 36px; height: 36px; flex-shrink: 0;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+  color: var(--navy-soft); cursor: pointer; display: grid; place-items: center;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.bell:hover { border-color: #cfd8ea; color: var(--navy); background: var(--navy-tint); }
+.bell.lit { color: var(--blue); border-color: var(--blue-tint); background: var(--blue-tint); }
+.bell:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.bell-n {
+  position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px;
+  padding: 0 4px; border-radius: 99px; background: var(--red); color: #fff;
+  font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center;
+  border: 2px solid var(--card); box-sizing: content-box;
+}
+
+.bell-panel {
+  position: absolute; top: 72px; right: 36px; z-index: 60;
+  width: 340px; max-height: 420px; display: flex; flex-direction: column;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(20,27,77,.10), 0 24px 48px -16px rgba(20,27,77,.28);
+  overflow: hidden;
+}
+.bell-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 650; color: var(--navy); }
+.bell-body { overflow-y: auto; }
+.bell-sec { padding: 8px 14px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.bell-row {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border: none; background: transparent; cursor: pointer;
+  text-align: left; font-family: var(--font);
+}
+.bell-row:hover { background: var(--navy-tint); }
+.bell-row.new { background: var(--blue-tint); }
+.bell-row.new:hover { background: #e2f0fd; }
+.bell-main { flex: 1; min-width: 0; }
+.bell-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.bell-name { font-size: 13px; font-weight: 650; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bell-when { font-size: 10.5px; color: var(--muted); flex-shrink: 0; }
+.bell-text { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bell-none { padding: 22px 16px; margin: 0; font-size: 12.5px; color: var(--muted); text-align: center; line-height: 1.5; }

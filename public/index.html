@@ -55,6 +55,15 @@
 
   <!-- ================= Main ================= -->
   <main class="main">
+    <!-- The bell's panel. One of them, anchored to whichever header the bell
+         was injected into, rather than six copies that can disagree. -->
+    <div class="bell-panel" id="bellPanel" hidden>
+      <div class="bell-head">
+        <span>Replies</span>
+        <button class="btn-link" id="bellClear" hidden>Mark all read</button>
+      </div>
+      <div class="bell-body" id="bellBody"></div>
+    </div>
     <div class="notices" id="notices"></div>
 
     <!-- ===== Dashboard ===== -->
@@ -279,6 +288,7 @@
         <div>
           <h1>Import</h1>
         </div>
+        <div class="head-actions"></div>
       </header>
 
       <div class="two-col">
@@ -479,6 +489,51 @@
         <div class="stat"><div class="stat-label">Replied</div><div class="stat-value" id="txReplied">0</div></div>
       </div>
 
+      <div class="card messages-card">
+        <div class="card-head">
+          <h2><span class="card-ico tone-green" data-icon="bubble" data-size="15"></span>Messages</h2>
+          <div class="msg-head-right">
+            <div class="search-wrap msg-search">
+              <span class="search-ico" data-icon="search" data-size="14"></span>
+              <input type="text" id="convSearch" class="input search" placeholder="Search conversations…">
+            </div>
+          </div>
+        </div>
+        <div class="messenger">
+          <aside class="conv-col">
+            <div class="conv-tabs">
+              <button class="conv-tab on" data-conv-tab="all">All</button>
+              <button class="conv-tab" data-conv-tab="unread">Unread <span class="conv-tab-n" id="convUnreadN"></span></button>
+            </div>
+            <ul class="conv-list" id="convList"></ul>
+          </aside>
+          <section class="thread-col" id="threadCol">
+            <div class="thread-empty" id="threadEmpty">
+              <span data-icon="bubble" data-size="26"></span>
+              <p>Pick a conversation to read it and reply.</p>
+            </div>
+            <div class="thread-live" id="threadLive" hidden>
+              <header class="thread-head">
+                <div class="thread-who">
+                  <span class="avatar" id="threadAvatar"></span>
+                  <div>
+                    <div class="thread-name" id="threadName"></div>
+                    <div class="thread-sub" id="threadSub"></div>
+                  </div>
+                </div>
+                <button class="btn btn-sm" id="threadOpenCandidate">Open candidate</button>
+              </header>
+              <div class="thread-body" id="threadBody"></div>
+              <form class="thread-compose" id="threadCompose">
+                <textarea id="threadInput" class="input textarea" rows="1" placeholder="iMessage" maxlength="2000"></textarea>
+                <button class="send-btn" type="submit" id="threadSend" title="Send"><span data-icon="send" data-size="15"></span></button>
+              </form>
+              <p class="thread-note" id="threadNote"></p>
+            </div>
+          </section>
+        </div>
+      </div>
+
       <div class="card sending-card" id="textSendingCard" hidden>
         <div class="card-head">
           <h2><span class="card-ico tone-blue" data-icon="send" data-size="15"></span>Texting in progress</h2>
@@ -582,7 +637,9 @@
         <div>
           <h1>Settings</h1>
         </div>
-        <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
+        <div class="head-actions">
+          <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
+        </div>
       </header>
 
       <div class="settings-grid">

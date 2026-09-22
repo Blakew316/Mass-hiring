@@ -167,7 +167,16 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
   res.json({
     // Industry is derived, never stored — it is a view of role/company/history
     // and must not drift out of date behind a saved copy of itself.
-    candidates: db.candidates.map((c) => ({ ...c, industry: priority.industry(c).code })),
+    candidates: db.candidates.map((c) => {
+      const { textThread, ...rest } = c;
+      const last = textThread && textThread.length ? textThread[textThread.length - 1] : null;
+      return {
+        ...rest,
+        industry: priority.industry(c).code,
+        textCount: textThread ? textThread.length : 0,
+        textLast: last ? { dir: last.dir, ts: last.ts, text: last.text.slice(0, 120) } : null,
+      };
+    }),
     industries: priority.INDUSTRY_LABELS,
     events: feedWindow(db.events),
     lastError: lastError ? lastError.message : '',
@@ -887,7 +896,13 @@ app.post('/api/relay/report', asyncRoute(async (req, res) => {
     await store.update((db) => {
       const c = db.candidates.find((x) => x.id === out.candidateId);
       if (!c) return;
-      if (out.status === 'sent') { c.lastTextedAt = new Date().toISOString(); advanceText(c, 'sent'); }
+      if (out.status === 'sent') {
+        c.lastTextedAt = new Date().toISOString();
+        advanceText(c, 'sent');
+        // Our half of the conversation. Until now it lived only in the queue's
+        // lease and went in the bin on delivery.
+        if (out.body) store.addToThread(c, 'out', out.body, c.lastTextedAt);
+      }
       else if (out.status === 'not-imessage') c.textStatus = 'not-imessage';
       else c.textStatus = 'failed';
     });
@@ -949,7 +964,10 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
         if (patch.replied) {
           c.textRepliedAt = c.textRepliedAt || patch.replied;
           advanceText(c, 'replied');
-          c.textReplies = [...(c.textReplies || []), ...patch.replies].slice(-20);
+          for (const r of patch.replies) store.addToThread(c, 'in', r.text, r.ts);
+          // Cleared when the thread is opened, so the bell survives a reload
+          // and agrees with itself across devices.
+          c.textUnread = true;
           // A text reply is the same pipeline signal as an email reply.
           if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
           c.repliedAt = c.repliedAt || patch.replied;
@@ -1073,6 +1091,80 @@ app.post('/api/texts/queue/retry-failed', asyncRoute(async (_req, res) => {
   let n = 0;
   const q = await textQueue.updateQ((f) => { n = textQueue.retryFailed(f, db); if (!n) return false; });
   res.json({ ok: true, requeued: n, queue: textQueue.status(q, db.settings, await relayState()) });
+}));
+
+// One conversation, both halves, oldest first.
+app.get('/api/texts/thread', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === String((req.query && req.query.id) || ''));
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  const q = await textQueue.loadQ();
+  const p = phone.normalize(c.phone);
+  res.json({
+    ok: true,
+    id: c.id,
+    name: c.name || '',
+    phone: p ? phone.display(p) : '',
+    role: c.role || '',
+    company: c.company || '',
+    status: c.status || 'new',
+    textStatus: c.textStatus || '',
+    optedOut: Boolean(p && q.optOut.includes(p)),
+    // What is still on its way to the Mac, so a just-sent reply does not
+    // vanish from the thread until the relay gets round to it.
+    pending: [...q.items, ...Object.values(q.leases)]
+      .filter((i) => i.id === c.id)
+      .map((i) => ({ text: (q.templates[i.t] && q.templates[i.t].body) || '' }))
+      .filter((i) => i.text),
+    thread: c.textThread || [],
+  });
+}));
+
+// Answer someone in the thread. This is a reply into a live conversation, not
+// outreach, so it goes to the front and ignores the quiet hours — they texted
+// us. The opt-out list still binds.
+app.post('/api/texts/reply', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const body = String((req.body && req.body.body) || '').trim().slice(0, 2000);
+  if (!body) return res.status(400).json({ error: 'Type a message first.' });
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === id);
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  const relay = await relayState();
+  // relayState() is the raw blob the Mac last wrote; "online" is a judgement
+  // about how long ago that was, made the same way the queue makes it.
+  const seen = relay && relay.lastSeenAt ? new Date(relay.lastSeenAt).getTime() : 0;
+  const relayOnline = seen > 0 && Date.now() - seen < textQueue.RELAY_STALE_MS;
+  let out = { ok: false, reason: 'no-phone' };
+  await textQueue.updateQ((q) => { out = textQueue.enqueueReply(q, c, body); if (!out.ok) return false; });
+  if (!out.ok) {
+    const why = out.reason === 'opted-out'
+      ? 'They replied STOP, so nothing more can be sent to that number.'
+      : out.reason === 'no-phone' ? 'No mobile number on this candidate.' : 'Type a message first.';
+    return res.status(409).json({ error: why });
+  }
+  // Reading a thread is answering it, so the badge should not still be lit.
+  await store.update((fresh) => {
+    const f = fresh.candidates.find((x) => x.id === id);
+    if (f) f.textUnread = false;
+  });
+  res.json({ ok: true, queued: true, relayOnline });
+}));
+
+// Opening a conversation is reading it.
+app.post('/api/texts/seen', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const all = Boolean(req.body && req.body.all);
+  let n = 0;
+  await store.update((db) => {
+    for (const c of db.candidates) {
+      if (!c.textUnread) continue;
+      if (!all && c.id !== id) continue;
+      c.textUnread = false; n += 1;
+    }
+    if (!n) return false;
+  });
+  res.json({ ok: true, cleared: n });
 }));
 
 app.post('/api/texts/optout', asyncRoute(async (req, res) => {
