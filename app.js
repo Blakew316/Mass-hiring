@@ -881,7 +881,7 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
   const raw = Array.isArray(req.body && req.body.events) ? req.body.events.slice(0, 200) : [];
   const db = await store.load();
   const index = byPhone(db);
-  const seen = { applied: 0, unknown: 0, optOut: 0, replies: [] };
+  const seen = { applied: 0, unknown: 0, optOut: 0, tooOld: 0, neverTexted: 0, replies: [] };
   const optOuts = [];
   const touched = new Map();   // candidate id -> mutation to apply
 
@@ -897,6 +897,14 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
     else if (kind === 'read') patch.read = ts;
     else if (kind === 'undelivered') patch.undelivered = ts;
     else if (kind === 'reply') {
+      // A reply cannot predate the text it answers. Anything older belongs to a
+      // conversation that already existed on that Mac — the owner's own thread
+      // with that person — and must never be filed as outreach, however
+      // confidently a relay reports it. The relay checks this too; this is the
+      // half that cannot be undone by a stale state file on a laptop.
+      const textedAt = c.lastTextedAt ? new Date(c.lastTextedAt).getTime() : null;
+      if (textedAt && new Date(ts).getTime() < textedAt - 5 * 60 * 1000) { seen.tooOld += 1; continue; }
+      if (!textedAt) { seen.neverTexted += 1; continue; }
       patch.replied = ts;
       patch.replies.push({ ts, text });
       if (phone.optedOut(text)) { patch.optOut = true; optOuts.push(p); }

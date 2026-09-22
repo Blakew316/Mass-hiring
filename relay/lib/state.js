@@ -39,11 +39,20 @@ function save(state) {
 
 const known = (state, phone) => Object.prototype.hasOwnProperty.call(state.handles || {}, phone);
 
-function remember(state, phone) {
-  const now = new Date().toISOString();
-  const h = state.handles[phone] || { firstTextedAt: now };
-  h.lastTextedAt = now;
+function remember(state, phone, at = new Date().toISOString()) {
+  const h = state.handles[phone] || { firstTextedAt: at };
+  h.lastTextedAt = at;
   state.handles[phone] = h;
+}
+
+// When this relay first texted a number. Anything that arrived from them BEFORE
+// that is part of a conversation that already existed — old messages in a thread
+// the owner had with that person long before any outreach — and is nobody's
+// reply to anything.
+function firstTextedAt(state, phone) {
+  const h = (state.handles || {})[phone];
+  const t = h && h.firstTextedAt ? new Date(h.firstTextedAt).getTime() : NaN;
+  return Number.isNaN(t) ? null : t;
 }
 
 // Have we already sent this exact message to this number a moment ago? Guards
@@ -53,4 +62,4 @@ function alreadySent(state, phone, body, withinMs = 10 * 60 * 1000) {
   return (state.pending || []).find((p) => p.phone === phone && p.body === body && new Date(p.sentAt).getTime() >= cutoff) || null;
 }
 
-module.exports = { load, save, known, remember, alreadySent, DIR, FILE };
+module.exports = { load, save, known, remember, firstTextedAt, alreadySent, DIR, FILE };

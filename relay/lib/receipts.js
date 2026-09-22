@@ -128,7 +128,16 @@ async function since(sinceRowId = 0, limit = 500, timeoutMs = 10000) {
   }));
 }
 
+// The highest message id currently in the database. A relay starting for the
+// first time seeds its position from this, so it reads forward from the moment
+// it was installed and never walks backwards through an existing history.
+async function maxRowId(timeoutMs = 10000) {
+  const rows = await query('SELECT MAX(ROWID) AS m FROM message;', timeoutMs);
+  const m = Array.isArray(rows) && rows[0] ? Number(rows[0].m) : 0;
+  return Number.isFinite(m) && m > 0 ? m : 0;
+}
+
 // Which way it is reading, for the startup log.
 const mode = () => (inProcess() ? 'in-process (node:sqlite)' : `${SQLITE} (child process — Full Disk Access may not apply)`);
 
-module.exports = { available, since, appleDate, mode, CHAT_DB, SQLITE };
+module.exports = { available, since, maxRowId, appleDate, mode, CHAT_DB, SQLITE };

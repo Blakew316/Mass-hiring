@@ -264,7 +264,13 @@ async function main() {
           }
           if (r.deliveredAt && mark('delivered', r.guid, Date.now())) events.push({ kind: 'delivered', phone: handle, ts: r.deliveredAt.toISOString() });
           if (r.readAt && mark('read', r.guid, Date.now())) events.push({ kind: 'read', phone: handle, ts: r.readAt.toISOString() });
-        } else if (r.text && mark('reply', r.guid, Date.now())) {
+        } else if (r.text) {
+          // Only messages that arrived AFTER we texted them. An older one is
+          // part of a conversation that already existed and is not a reply.
+          const since = state.firstTextedAt(st, handle);
+          const when = r.sentAt ? r.sentAt.getTime() : Date.now();
+          if (since && when < since - 60000) continue;
+          if (!mark('reply', r.guid, Date.now())) continue;
           events.push({ kind: 'reply', phone: handle, text: r.text, ts: (r.sentAt || new Date()).toISOString() });
         }
       }
@@ -280,9 +286,12 @@ async function main() {
         const handle = normalizePhone(addressOf(m));
         const body = textOf(m);
         if (!handle || !body || !state.known(st, handle)) continue;
+        const at = toDate(m.dateCreated) || new Date();
+        const since = state.firstTextedAt(st, handle);
+        if (since && at.getTime() < since - 60000) continue;      // predates the outreach
         const guid = String(m.guid || `${handle}:${m.dateCreated || ''}`);
         if (!mark('reply', guid, Date.now())) continue;
-        events.push({ kind: 'reply', phone: handle, text: body, ts: (toDate(m.dateCreated) || new Date()).toISOString() });
+        events.push({ kind: 'reply', phone: handle, text: body, ts: at.toISOString() });
       }
     } catch (err) {
       log(`could not read recent messages from BlueBubbles: ${err.message}`);
@@ -312,6 +321,21 @@ async function main() {
     tick();
     return setInterval(tick, ms);
   };
+
+  // A fresh relay starts at the END of the Messages database, not the start.
+  // Reading from row 1 means walking years of the owner's own conversations and
+  // reporting every inbound message in them as a reply to an outreach that had
+  // not been sent yet — which is exactly what happens the first time someone
+  // texts their own number to test it.
+  if (!st.lastRowId && receipts.available()) {
+    try {
+      st.lastRowId = await receipts.maxRowId();
+      state.save(st);
+      log(`starting from the current end of the Messages database (row ${st.lastRowId}); nothing already there is treated as a reply`);
+    } catch (err) {
+      log(`could not find the end of the Messages database (${err.message}); receipts start once that is readable`);
+    }
+  }
 
   const backendName = usingBB ? 'BlueBubbles' : 'Messages';
   let bbOk = false;
@@ -344,7 +368,13 @@ async function main() {
     const { handles = [] } = await crm.handles();
     let added = 0;
     for (const h of handles) {
-      if (typeof h === 'string' && h.startsWith('+') && !state.known(st, h)) { state.remember(st, h); added += 1; }
+      if (typeof h === 'string' && h.startsWith('+') && !state.known(st, h)) {
+        // Adopted from another Mac, so treat the conversation as starting now:
+        // that Mac already reported anything earlier, and this one must not
+        // re-report the thread's whole history.
+        state.remember(st, h);
+        added += 1;
+      }
     }
     if (added) { state.save(st); log(`picked up ${added} conversation(s) started from another Mac`); }
   });
