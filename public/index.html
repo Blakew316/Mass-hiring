@@ -168,36 +168,28 @@
         </div>
       </header>
 
-      <!-- The landing view: pick a group rather than scroll 2,800 rows. -->
-      <div id="candOverview">
-        <div class="search-wrap wide"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="overviewSearch" class="input search" placeholder="Search everyone by name, email, company or role…"></div>
-        <div class="segment-block">
-          <h2 class="segment-title">Where to start</h2>
-          <div class="segment-grid" id="segStart"></div>
+      <!-- One list, filtered — the shape a CRM's candidate tab actually has.
+           Every grouping that used to be a wall of tiles is a filter here, so
+           nothing can be reached that could be reached before. -->
+      <div class="card list-card">
+        <div class="list-top">
+          <div class="search-wrap wide"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="searchInput" class="input search" placeholder="Search name, email, role or company…"></div>
+          <span class="list-count" id="candCount"></span>
         </div>
-        <div class="segment-block">
-          <h2 class="segment-title">By industry</h2>
-          <div class="segment-grid" id="segIndustry"></div>
-        </div>
-        <div class="segment-block">
-          <h2 class="segment-title">By stage</h2>
-          <div class="segment-grid" id="segStage"></div>
-        </div>
-        <div class="segment-block">
-          <h2 class="segment-title">When they were added</h2>
-          <div class="segment-grid" id="segAdded"></div>
-        </div>
-        <div class="segment-block">
-          <h2 class="segment-title">Texting</h2>
-          <div class="segment-grid" id="segTexting"></div>
-        </div>
-      </div>
 
-      <!-- The focused view. -->
-      <div id="candList" hidden>
-        <div class="toolbar">
-          <button class="btn btn-ghost" id="backToOverview"><span data-icon="chevron" data-size="14"></span> All groups</button>
-          <div class="search-wrap"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…"></div>
+        <!-- The handful of starting points worth one click. -->
+        <div class="view-pills" id="candViews"></div>
+
+        <div class="filter-row">
+          <select id="stageFilter" class="input role-filter" title="Where they are in the pipeline">
+            <option value="all">Any stage</option>
+            <option value="new">Not contacted</option>
+            <option value="emailed">Emailed</option>
+            <option value="replied">Replied</option>
+            <option value="booked">Booked</option>
+            <option value="declined">Not interested</option>
+            <option value="bounced">Bounced</option>
+          </select>
           <select id="industryFilter" class="input role-filter" title="Industry they come from"><option value="">Any industry</option></select>
           <select id="roleFilter" class="input role-filter" title="Filter by the role someone currently holds"><option value="">All roles</option></select>
           <select id="addedFilter" class="input role-filter" title="When they were added">
@@ -231,31 +223,17 @@
             <option value="name">Name A–Z</option>
           </select>
         </div>
-        <div class="toolbar">
-          <div class="filter-chips" id="filterChips">
-            <button class="chip active" data-filter="all">All</button>
-            <button class="chip" data-filter="new">Not contacted</button>
-            <button class="chip" data-filter="emailed">Emailed</button>
-            <button class="chip" data-filter="replied">Replied</button>
-            <button class="chip" data-filter="booked">Booked</button>
-            <button class="chip" data-filter="declined">Not interested</button>
-            <button class="chip" data-filter="bounced">Bounced</button>
-          </div>
-        </div>
         <div class="active-filters" id="activeFilters" hidden></div>
-      </div>
 
-      <div id="candTableWrap" hidden>
-      <div class="selection-bar" id="selectionBar" hidden>
-        <span class="sel-count" id="selCount"></span>
-        <button class="btn" id="selEmailBtn"><span data-icon="mail" data-size="15"></span> Email</button>
-        <button class="btn" id="selTextBtn"><span data-icon="bubble" data-size="15"></span> Text</button>
-        <button class="btn btn-primary" id="selBothBtn">Email + text</button>
-        <span class="sel-note" id="selNote"></span>
-        <button class="btn-link" id="selClearBtn">Clear</button>
-      </div>
-
-      <div class="card table-card">
+      <div id="candTableWrap">
+        <div class="selection-bar" id="selectionBar" hidden>
+          <span class="sel-count" id="selCount"></span>
+          <button class="btn" id="selEmailBtn"><span data-icon="mail" data-size="15"></span> Email</button>
+          <button class="btn" id="selTextBtn"><span data-icon="bubble" data-size="15"></span> Text</button>
+          <button class="btn btn-primary" id="selBothBtn">Email + text</button>
+          <span class="sel-note" id="selNote"></span>
+          <button class="btn-link" id="selClearBtn">Clear</button>
+        </div>
         <table class="table">
           <thead>
             <tr>
@@ -272,8 +250,16 @@
           <p>Connect a Google Sheet or upload a CSV to fill your pipeline.</p>
           <button class="btn btn-primary" data-goto="import">Import candidates</button>
         </div>
+        <div class="list-pager" id="candPager" hidden>
+          <span class="pager-range" id="pagerRange"></span>
+          <div class="pager-btns">
+            <span class="pager-page" id="pagerPage"></span>
+            <button class="btn btn-sm" id="pagerPrev">Previous</button>
+            <button class="btn btn-sm" id="pagerNext">Next</button>
+          </div>
+        </div>
       </div>
-      </div>
+      </div><!-- /.list-card -->
     </section>
 
     <!-- ===== Import ===== -->

@@ -11,12 +11,17 @@
   let search = '';
   let roleFilter = '';          // exact current role someone holds, '' = every role
   let sortBy = 'default';       // 'texting' = the order to work down at 60/day
-  let candView = 'overview';    // 'overview' = pick a group; 'list' = the focused table
   let industryFilter = '';
   let addedFilter = '';
   let textedFilter = '';
   let rankFilter = '';
   let feedChannel = readFeedChannel();  // 'all' | 'email' | 'text'
+  // 3,500 rows rendered at once is a 400,000-pixel page and the reason the
+  // list felt like everything at once. A page at a time, like any CRM.
+  const PAGE_SIZE = 50;
+  let page = 0;
+  let lastFilterSig = '';
+  let pageRows = [];           // what is actually on screen right now
   let pendingImport = null;    // {headers, rows, mapping, source}
   let composeIds = [];
 
@@ -254,7 +259,7 @@
   function openTile(kind) {
     if (kind === 'all') {
       filter = 'all';
-      $$('#filterChips .chip').forEach((ch) => ch.classList.toggle('active', ch.dataset.filter === 'all'));
+      $('#stageFilter').value = 'all';
       renderCandidates();
       show('candidates');
       return;
@@ -716,7 +721,6 @@
     if (patch.sort !== undefined) sortBy = patch.sort;
     search = '';
     selected.clear();
-    candView = 'list';
     syncFilterControls();
     renderCandidates();
     if (label) toast(`Showing ${label}.`);
@@ -729,90 +733,68 @@
     $('#rankFilter').value = rankFilter;
     $('#sortBy').value = sortBy;
     $('#searchInput').value = search;
-    $$('#filterChips .chip').forEach((ch) => ch.classList.toggle('active', ch.dataset.filter === filter));
+    $('#stageFilter').value = filter;
+    $('#roleFilter').value = roleFilter;
   }
 
-  function renderSegments() {
-    if (!state.candidates.length) return;
-    const all = state.candidates;
+  // Thirty-eight tiles of every possible grouping was a page you had to read
+  // before you could use it. The groupings all survive as filters below; what
+  // stays up here is the handful of starting points worth a single click, plus
+  // whatever the current filters add up to.
+  function renderPager(total, from, pageCount) {
+    const el = $('#candPager');
+    el.hidden = total <= PAGE_SIZE;
+    if (el.hidden) return;
+    $('#pagerRange').textContent = `${(from + 1).toLocaleString()}–${Math.min(from + PAGE_SIZE, total).toLocaleString()} of ${total.toLocaleString()}`;
+    $('#pagerPage').textContent = `Page ${page + 1} of ${pageCount.toLocaleString()}`;
+    $('#pagerPrev').disabled = page === 0;
+    $('#pagerNext').disabled = page >= pageCount - 1;
+  }
+
+  function renderViews() {
+    const all = state.candidates || [];
+    if (!all.length) { $('#candViews').innerHTML = ''; $('#candCount').textContent = ''; return; }
     const pri = (state.texting && state.texting.priority) || { order: {} };
     const ranked = Object.keys(pri.order || {}).length;
-    const card = (label, n, patch, ico = 'users', tone = 'navy') => ({ label, n, patch, ico, tone });
-
-    // Each tile carries an icon and a colour so the groups are distinguishable
-    // at a glance and read as something to press, rather than as white panels
-    // on a white page.
-    const cards = (el, items) => {
-      $(el).innerHTML = items.filter((i) => i.n > 0).map((i) => `
-        <button class="segment tone-${i.tone}" data-seg='${esc(JSON.stringify(i.patch))}' data-label="${esc(i.label)}">
-          <span class="segment-ico">${icon(i.ico, 16)}</span>
-          <span class="segment-n">${i.n.toLocaleString()}</span>
-          <span class="segment-label">${esc(i.label)}</span>
-        </button>`).join('') || '<p class="muted">Nothing here yet.</p>';
-    };
-
     const count = (fn) => all.filter(fn).length;
 
-    cards('#segStart', [
-      card('Everyone', all.length, {}, 'users', 'navy'),
-      card('Best to text next', Math.min(ranked, 50), { rank: '50', sort: 'texting' }, 'send', 'blue'),
-      card('Replied to you', count((c) => c.status === 'replied'), { status: 'replied' }, 'reply', 'mint'),
-      card('Interviews booked', count((c) => c.status === 'booked'), { status: 'booked' }, 'calendar', 'green'),
-      card('Ready to text', ranked, { texted: 'ready', sort: 'texting' }, 'bubble', 'blue'),
-      card('Never contacted', count((c) => c.status === 'new'), { status: 'new' }, 'circle', 'navy'),
-      card('Missing a phone number', count((c) => !textPhoneOf(c)), { texted: 'nonumber' }, 'alert', 'amber'),
-    ]);
+    const views = [
+      { label: 'Everyone', n: all.length, patch: {} },
+      { label: 'Best to text next', n: Math.min(ranked, 50), patch: { rank: '50', sort: 'texting' } },
+      { label: 'Replied', n: count((c) => c.status === 'replied'), patch: { status: 'replied' } },
+      { label: 'Not contacted', n: count((c) => c.status === 'new'), patch: { status: 'new' } },
+      { label: 'Booked', n: count((c) => c.status === 'booked'), patch: { status: 'booked' } },
+      { label: 'Needs a number', n: count((c) => !textPhoneOf(c)), patch: { texted: 'nonumber' } },
+    ].filter((v) => v.n > 0);
 
+    // Which pill, if any, describes exactly what is on screen right now.
+    const nothingElse = !search && !industryFilter && !roleFilter && !addedFilter;
+    const active = (v) => nothingElse
+      && (v.patch.status || 'all') === filter
+      && (v.patch.texted || '') === textedFilter
+      && (v.patch.rank || '') === rankFilter;
+
+    $('#candViews').innerHTML = views.map((v) => `
+      <button class="view-pill${active(v) ? ' on' : ''}" data-seg='${esc(JSON.stringify(v.patch))}' data-label="${esc(v.label)}">
+        ${esc(v.label)}<span class="view-n">${v.n.toLocaleString()}</span>
+      </button>`).join('');
+
+    // The industry menu mirrors what actually exists in the list.
     const byIndustry = {};
     for (const c of all) { const k = c.industry || 'other'; byIndustry[k] = (byIndustry[k] || 0) + 1; }
-    // A fixed colour per industry, so the same pool looks the same every visit.
-    // Each industry gets its own colour and its own icon, so the row reads as
-    // a set of places people come from rather than a row of identical boxes.
-    const INDUSTRY_TONE = {
-      payments: 'blue', solar: 'amber', security: 'navy', pest: 'green', timeshare: 'mint',
-      auto: 'blue', home: 'amber', telecom: 'navy', insurance: 'green', smb: 'mint', b2b: 'navy', weak: 'navy', other: 'navy',
-    };
-    const INDUSTRY_ICO = {
-      payments: 'card', solar: 'sun', security: 'shield', pest: 'bug', timeshare: 'key',
-      auto: 'car', home: 'home', telecom: 'wifi', insurance: 'umbrella', smb: 'store',
-      b2b: 'briefcase', weak: 'users', other: 'grid',
-    };
-    cards('#segIndustry', Object.entries(byIndustry)
-      .sort((a, b) => b[1] - a[1])
-      .map(([code, n]) => card(industryLabel(code), n, { industry: code }, INDUSTRY_ICO[code] || 'grid', INDUSTRY_TONE[code] || 'navy')));
-
-    // Stage tiles borrow the colours the status badges already use everywhere
-    // else, so a stage means the same colour wherever it appears.
-    const STAGE_TONE = { new: 'navy', emailed: 'blue', replied: 'mint', booked: 'green', declined: 'red', bounced: 'amber' };
-    const STAGE_ICO = { new: 'circle', emailed: 'mail', replied: 'reply', booked: 'calendar', declined: 'xcircle', bounced: 'alert' };
-    cards('#segStage', Object.entries(STATUS)
-      .map(([k, v]) => card(v.label, count((c) => c.status === k), { status: k }, STAGE_ICO[k] || 'circle', STAGE_TONE[k] || 'navy')));
-
-    cards('#segAdded', [
-      card('Today', count((c) => daysSince(c.addedAt) <= 1), { added: '1', sort: 'newest' }, 'calendar', 'green'),
-      card('This week', count((c) => daysSince(c.addedAt) <= 7), { added: '7', sort: 'newest' }, 'calendar', 'mint'),
-      card('This month', count((c) => daysSince(c.addedAt) <= 30), { added: '30', sort: 'newest' }, 'calendar', 'blue'),
-      card('Last 90 days', count((c) => daysSince(c.addedAt) <= 90), { added: '90', sort: 'newest' }, 'calendar', 'navy'),
-      card('Older than 90 days', count((c) => daysSince(c.addedAt) > 90), { added: 'old' }, 'calendar', 'navy'),
-    ]);
-
-    cards('#segTexting', [
-      card('Texted today', count((c) => daysSince(c.lastTextedAt) <= 1), { texted: '1' }, 'send', 'blue'),
-      card('Texted this week', count((c) => daysSince(c.lastTextedAt) <= 7), { texted: '7' }, 'send', 'blue'),
-      card('Texted at some point', count((c) => Boolean(c.lastTextedAt)), { texted: 'any' }, 'bubble', 'navy'),
-      card('Replied to a text', count((c) => c.textStatus === 'replied'), { texted: 'any' }, 'reply', 'green'),
-      card('Read your text', count((c) => c.textStatus === 'read'), { texted: 'any' }, 'eye', 'mint'),
-      card('No iMessage account', count((c) => c.textStatus === 'not-imessage'), { texted: 'any' }, 'xcircle', 'amber'),
-      card('Never texted', count((c) => !c.lastTextedAt && textPhoneOf(c)), { texted: 'never' }, 'circle', 'navy'),
-    ]);
-
-    // The industry menu in the focused view mirrors what actually exists.
     const sel = $('#industryFilter');
     const keep = sel.value;
     sel.innerHTML = '<option value="">Any industry</option>' + Object.entries(byIndustry)
-      .sort((a, b) => b[1] - a[1])
+      .sort((x, y) => y[1] - x[1])
       .map(([code, n]) => `<option value="${esc(code)}">${esc(industryLabel(code))} (${n})</option>`).join('');
     sel.value = keep;
+
+    // And the stage menu carries its counts, so picking one is informed.
+    const stage = $('#stageFilter');
+    const keepStage = stage.value;
+    stage.innerHTML = `<option value="all">Any stage (${all.length.toLocaleString()})</option>` + Object.entries(STATUS)
+      .map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)} (${count((c) => c.status === k).toLocaleString()})</option>`).join('');
+    stage.value = keepStage || 'all';
   }
 
   function renderActiveFilters() {
@@ -841,27 +823,10 @@
     renderCandidates();
   });
 
-  $$('.segment-grid').forEach((grid) => grid.addEventListener('click', (e) => {
-    const b = e.target.closest('.segment');
+  $('#candViews').addEventListener('click', (e) => {
+    const b = e.target.closest('.view-pill');
     if (!b) return;
     openSegment(JSON.parse(b.dataset.seg), { label: b.dataset.label.toLowerCase() });
-  }));
-
-  $('#backToOverview').addEventListener('click', () => {
-    candView = 'overview';
-    selected.clear();
-    renderCandidates();
-  });
-
-  $('#overviewSearch').addEventListener('input', (e) => {
-    const v = e.target.value;
-    if (!v.trim()) return;
-    search = v;
-    candView = 'list';
-    syncFilterControls();
-    renderCandidates();
-    setTimeout(() => { const el = $('#searchInput'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 30);
-    e.target.value = '';
   });
 
   for (const [id, set] of [['#industryFilter', (v) => { industryFilter = v; }], ['#addedFilter', (v) => { addedFilter = v; }],
@@ -870,17 +835,7 @@
   }
 
   function renderCandidates() {
-    const hasPeople = state.candidates.length > 0;
-    const overview = candView === 'overview' && hasPeople;
-    $('#candOverview').hidden = !overview;
-    $('#candList').hidden = overview || !hasPeople;
-    $('#candTableWrap').hidden = overview;
-    if (overview) {
-      renderSegments();
-      $('#candidatesEmpty').style.display = 'none';
-      return;
-    }
-
+    renderViews();
     let rows = visibleCandidates();
     const ranking = sortBy === 'texting';
     if (sortBy === 'newest') rows = [...rows].sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')));
@@ -898,9 +853,20 @@
       });
     }
     $('#rankHead').hidden = !ranking;
+
+    // Changing what is being asked for starts again at the first page; paging
+    // within the same question keeps your place.
+    const sig = JSON.stringify([filter, industryFilter, roleFilter, addedFilter, textedFilter, rankFilter, search, sortBy]);
+    if (sig !== lastFilterSig) { lastFilterSig = sig; page = 0; }
+    const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    page = Math.min(Math.max(0, page), pageCount - 1);
+    const from = page * PAGE_SIZE;
+    pageRows = rows.slice(from, from + PAGE_SIZE);
+    renderPager(rows.length, from, pageCount);
+
     const tbody = $('#candidateRows');
     $('#candidatesEmpty').style.display = state.candidates.length ? 'none' : 'block';
-    tbody.innerHTML = rows.map((c, i) => {
+    tbody.innerHTML = pageRows.map((c, i) => {
       const st = STATUS[c.status] || STATUS.new;
       const displayName = c.name || `${c.firstName} ${c.lastName}`.trim() || '—';
       const pri = ranking ? textPriorityOf(c.id) : null;
@@ -934,8 +900,17 @@
     }).join('');
     updateSendButton();
     renderActiveFilters();
-    $('#checkAll').checked = rows.length > 0 && rows.every((c) => selected.has(c.id));
+    $('#checkAll').checked = pageRows.length > 0 && pageRows.every((c) => selected.has(c.id));
     const empty = $('#candidatesEmpty');
+    // What the list is actually showing, which is the one number a CRM's
+    // candidate tab always carries.
+    const total = state.candidates.length;
+    $('#candCount').textContent = total
+      ? (rows.length === total
+        ? `${total.toLocaleString()} candidate${total === 1 ? '' : 's'}`
+        : `${rows.length.toLocaleString()} of ${total.toLocaleString()}`)
+      : '';
+
     if (!rows.length && state.candidates.length) {
       empty.style.display = 'block';
       empty.innerHTML = `<h3>Nobody matches those filters</h3>
@@ -1006,25 +981,25 @@
   });
 
   $('#checkAll').addEventListener('change', (e) => {
-    const rows = visibleCandidates();
-    rows.forEach((c) => (e.target.checked ? selected.add(c.id) : selected.delete(c.id)));
+    // The page you can see. Ticking one box to act on 3,500 unseen people is
+    // not something to do by accident.
+    pageRows.forEach((c) => (e.target.checked ? selected.add(c.id) : selected.delete(c.id)));
     renderCandidates();
   });
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; renderCandidates(); });
   // Arriving on the tab starts at the overview; it is a landing page, not a
   // filter that persists from whatever was last looked at.
   $$('.nav-item[data-view="candidates"]').forEach((b) => b.addEventListener('click', () => {
-    if (candView === 'list' && !search && filter === 'all' && !industryFilter && !addedFilter && !textedFilter && !rankFilter) {
-      candView = 'overview'; renderCandidates();
+    {
     }
   }));
   $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; selected.clear(); renderCandidates(); });
+  $('#pagerPrev').addEventListener('click', () => { page -= 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  $('#pagerNext').addEventListener('click', () => { page += 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   $('#sortBy').addEventListener('change', (e) => { sortBy = e.target.value; renderCandidates(); });
-  $('#filterChips').addEventListener('click', (e) => {
-    const chip = e.target.closest('.chip');
-    if (!chip) return;
-    filter = chip.dataset.filter;
-    $$('#filterChips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+  $('#stageFilter').addEventListener('change', (e) => {
+    filter = e.target.value;
+    selected.clear();
     renderCandidates();
   });
   $('#selEmailBtn').addEventListener('click', () => openCompose([...selected]));
