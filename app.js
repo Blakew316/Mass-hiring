@@ -84,6 +84,11 @@ function maskedSettings(s, fromAddress) {
     calendlyToken: s.calendlyToken ? '••••••••' : '',
     apolloApiKey: s.apolloApiKey ? '••••••••' : '',
     relayToken: s.relayToken ? '••••••••' : '',
+    // The HMAC key the open-tracking pixel is signed with. Not masked but
+    // removed: nothing in the browser reads it, and it is not writable through
+    // /api/settings either. Anyone holding it can forge an "opened" event for
+    // any candidate, which is the one thing this key protects against.
+    trackingSecret: undefined,
     // Texting pace, shown already clamped for the same reason as the email pace.
     ...textQueue.normalizeTextSettings({
       textDailyLimit: s.textDailyLimit, textMinGap: s.textMinGap, textMaxGap: s.textMaxGap,
@@ -258,7 +263,14 @@ app.get('/api/state', asyncRoute(async (req, res) => {
   // seeing no new state, skips the re-render too. Weak tag: this is semantic
   // equality of the payload, not of the bytes on any particular encoding.
   const body = JSON.stringify(payload);
-  const etag = `W/"${crypto.createHash('sha1').update(body).digest('base64url')}"`;
+  // The Mac says hello every 30 seconds, and that timestamp rode in the hash —
+  // so while the relay was running, which is the normal state, the tag changed
+  // on every poll and the conditional request below could never answer 304.
+  // It is only ever displayed once the relay has *stopped* checking in, and by
+  // then it has stopped moving; what the page actually reacts to is the
+  // `online` flag beside it, which is in the hash and flips when it should.
+  const stable = JSON.stringify(payload, (k, v) => (k === 'lastSeenAt' ? null : v));
+  const etag = `W/"${crypto.createHash('sha1').update(stable).digest('base64url')}"`;
   res.set('ETag', etag);
   // Revalidate every time — never serve this from cache without asking.
   res.set('Cache-Control', 'no-cache, private');

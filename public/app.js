@@ -2888,12 +2888,16 @@
       : 'Generate a token, then paste it into ~/.wp-relay/config.json on the Mac Studio.';
 
     if (!textTemplateDirty && t.template) $('#txBody').value = t.template.body || '';
+    // Only the focused field was protected, so typing a new pace and tabbing to
+    // the next box lost the first one the moment anything else moved — which is
+    // exactly when you adjust the pace, mid-send. These live in Settings with
+    // everything else, so the same unsaved-edits flag covers them.
     for (const [id, val] of [['txDailyLimit', q.dailyLimit], ['txGapMin', q.minGap], ['txGapMax', q.maxGap], ['txStartHour', q.startHour], ['txEndHour', q.endHour]]) {
       const el = $(`#${id}`);
-      if (el && document.activeElement !== el) el.value = val ?? '';
+      if (el && !settingsDirty && document.activeElement !== el) el.value = val ?? '';
     }
     const sun = $('#txSunday');
-    if (sun && document.activeElement !== sun) sun.checked = Boolean(q.sunday);
+    if (sun && !settingsDirty && document.activeElement !== sun) sun.checked = Boolean(q.sunday);
     $('#txOptOutHint').textContent = q.optOut
       ? `${q.optOut} number${q.optOut === 1 ? '' : 's'} asked to stop and will never be texted again.`
       : 'Anyone who replies STOP is blocked automatically and permanently.';
