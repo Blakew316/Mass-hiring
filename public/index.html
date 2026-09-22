@@ -91,21 +91,21 @@
       <div class="stat-grid">
         <div class="stat-card clickable" data-tile="all" role="button" tabindex="0">
           <div class="stat-label">Candidates</div>
-          <div class="stat-value" id="statTotal">0</div>
+          <div class="stat-value" id="statTotal">&mdash;</div>
         </div>
         <div class="stat-card clickable" data-tile="emailed" role="button" tabindex="0">
           <div class="stat-label">Contacted</div>
-          <div class="stat-value" id="statEmailed">0</div>
+          <div class="stat-value" id="statEmailed">&mdash;</div>
           <div class="stat-split" id="statContactedSplit"></div>
         </div>
         <div class="stat-card clickable" data-tile="replied" role="button" tabindex="0">
           <div class="stat-label">Replied</div>
-          <div class="stat-value" id="statReplied">0</div>
+          <div class="stat-value" id="statReplied">&mdash;</div>
           <div class="stat-split" id="statRepliedSplit"></div>
         </div>
         <div class="stat-card clickable" data-tile="booked" role="button" tabindex="0">
           <div class="stat-label">Interviews booked</div>
-          <div class="stat-value" id="statBooked">0</div>
+          <div class="stat-value" id="statBooked">&mdash;</div>
           <div class="stat-split" id="statBookedSplit"></div>
         </div>
       </div>
@@ -263,6 +263,15 @@
           <h3>No candidates yet</h3>
           <p>Connect a Google Sheet or upload a CSV to fill your pipeline.</p>
           <button class="btn btn-primary" data-goto="import">Import candidates</button>
+        </div>
+        <!-- A list that is empty because of the filters, not because it is
+             empty. Its own element: the two used to share one, and the filter
+             wording overwrote the other for the rest of the session. -->
+        <div class="empty-state" id="candidatesNoMatch">
+          <div class="empty-art"><i class="bar bar-blue"></i><i class="bar bar-green"></i><i class="bar bar-mint"></i></div>
+          <h3>Nobody matches those filters</h3>
+          <p id="noMatchLine"></p>
+          <button class="btn btn-primary" id="emptyClear">Clear the filters</button>
         </div>
         <div class="list-pager" id="candPager" hidden>
           <span class="pager-range" id="pagerRange"></span>
@@ -766,7 +775,7 @@
 
 <!-- ===== Compose modal ===== -->
 <div class="modal-backdrop" id="composeModal" hidden>
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true">
     <div class="modal-head">
       <h2 id="composeTitle">Send email</h2>
       <button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button>
@@ -791,7 +800,7 @@
 
 <!-- ===== Tile detail modal (Emailed / Replied / Booked) ===== -->
 <div class="modal-backdrop" id="tileModal" hidden>
-  <div class="modal modal-wide">
+  <div class="modal modal-wide" role="dialog" aria-modal="true">
     <div class="modal-head">
       <div><h2 id="tileTitle"></h2><p class="muted small tile-sub" id="tileSub"></p></div>
       <button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button>
@@ -805,7 +814,7 @@
 
 <!-- ===== Add candidate modal ===== -->
 <div class="modal-backdrop" id="addModal" hidden>
-  <div class="modal modal-sm">
+  <div class="modal modal-sm" role="dialog" aria-modal="true">
     <div class="modal-head"><h2 id="addModalTitle">Add candidate</h2><button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button></div>
     <div class="modal-body">
       <div class="grid-2">
@@ -831,7 +840,7 @@
 </div>
 
 <div class="modal-backdrop" id="textComposeModal" hidden>
-  <div class="modal modal-sm">
+  <div class="modal modal-sm" role="dialog" aria-modal="true">
     <div class="modal-head">
       <h2 id="textComposeTitle">Send text</h2>
       <button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button>

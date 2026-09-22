@@ -278,9 +278,11 @@
     const repliedEither = textCount((c) => c.emailReplies > 0 || Boolean(c.lastReplyAt)
       || c.textStatus === 'replied' || Boolean(c.textRepliedAt) || c.status === 'replied');
 
-    $('#statTotal').textContent = s.total;
-    $('#statEmailed').textContent = contacted;
-    $('#statReplied').textContent = repliedEither;
+    // Three and a half thousand candidates reads as 3514 without this, which
+    // is a number you have to count the digits of.
+    $('#statTotal').textContent = s.total.toLocaleString();
+    $('#statEmailed').textContent = contacted.toLocaleString();
+    $('#statReplied').textContent = repliedEither.toLocaleString();
     // Both tiles used to be email-only, which made texting invisible on the
     // page people actually look at.
     $('#statContactedSplit').textContent = `${e.sent.toLocaleString()} emailed · ${t.sent.toLocaleString()} texted`;
@@ -290,7 +292,7 @@
     // booked. With no Calendly sync there is no "upcoming" to know, so it
     // falls back to the total — and says so either way.
     const upcoming = state.calendly && state.calendly.syncEnabled;
-    $('#statBooked').textContent = upcoming ? upcomingInterviews().length : s.booked;
+    $('#statBooked').textContent = (upcoming ? upcomingInterviews().length : s.booked).toLocaleString();
     $('#statBookedSplit').textContent = upcoming
       ? (s.booked ? `${s.booked.toLocaleString()} booked in all` : 'still to come')
       : '';
@@ -310,7 +312,7 @@
       <div class="pipe-row">
         <div class="pipe-label">${label}</div>
         <div class="pipe-track"><div class="pipe-fill" style="width:${(n / max) * 100}%;background:${color};opacity:.75"></div></div>
-        <div class="pipe-count">${n}</div>
+        <div class="pipe-count">${n.toLocaleString()}</div>
       </div>`).join('');
 
     renderChannels(t, e);
@@ -335,11 +337,6 @@
         <span>${label}</span>
         ${done ? '' : `<button class="btn link" data-goto="${goto}">Set up ${icon('chevron', 13)}</button>`}
       </li>`).join('');
-  }
-
-  function contactedCount() {
-    const s = state.stats;
-    return s.emailed + s.replied + s.booked + s.declined + (s.bounced || 0);
   }
 
   function upcomingInterviews() {
@@ -435,7 +432,7 @@
       }
     }
     list.innerHTML = rows.length ? rows.join('') : '<li class="tile-empty">Nothing here yet.</li>';
-    $('#tileModal').hidden = false;
+    openModal('#tileModal');
   }
   $$('.stat-card[data-tile]').forEach((card) => {
     card.addEventListener('click', () => openTile(card.dataset.tile));
@@ -443,11 +440,11 @@
   });
   // Link an unmatched Calendly booking to a candidate: inline search, click to link.
   $('#tileActions').addEventListener('click', (e) => {
-    if (e.target.closest('#tileFollowUpBtn')) { $('#tileModal').hidden = true; openCompose(followUpDueIds(), null, { followUp: true }); }
+    if (e.target.closest('#tileFollowUpBtn')) { closeModal($('#tileModal')); openCompose(followUpDueIds(), null, { followUp: true }); }
   });
   $('#tileList').addEventListener('click', (e) => {
     const fu = e.target.closest('.tile-followup');
-    if (fu) { $('#tileModal').hidden = true; openCompose([fu.dataset.id], null, { followUp: true }); return; }
+    if (fu) { closeModal($('#tileModal')); openCompose([fu.dataset.id], null, { followUp: true }); return; }
     const btn = e.target.closest('.link-btn');
     if (!btn) return;
     const row = btn.closest('.tile-row');
@@ -1050,7 +1047,6 @@
     updateSendButton();
     renderActiveFilters();
     $('#checkAll').checked = pageRows.length > 0 && pageRows.every((c) => selected.has(c.id));
-    const empty = $('#candidatesEmpty');
     // What the list is actually showing, which is the one number a CRM's
     // candidate tab always carries.
     const total = state.candidates.length;
@@ -1060,17 +1056,9 @@
         : `${rows.length.toLocaleString()} of ${total.toLocaleString()}`)
       : '';
 
-    if (!rows.length && state.candidates.length) {
-      empty.style.display = 'block';
-      empty.innerHTML = `<h3>Nobody matches those filters</h3>
-        <p>${state.candidates.length.toLocaleString()} people are in the list — none of them fit this combination.</p>
-        <button class="btn btn-primary" id="emptyClear">Clear the filters</button>`;
-      const btn = $('#emptyClear');
-      if (btn) btn.addEventListener('click', () => {
-        filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; search = '';
-        syncFilterControls(); renderCandidates();
-      });
-    }
+    const noMatch = !rows.length && total > 0;
+    $('#candidatesNoMatch').style.display = noMatch ? 'block' : 'none';
+    if (noMatch) $('#noMatchLine').textContent = `${total.toLocaleString()} people are in the list — none of them fit this combination.`;
   }
 
   // What can actually be done with the current tick-boxes. Texting is offered
@@ -1138,6 +1126,10 @@
   // 3,514 rows filtered and rebuilt on every keystroke was ~86 ms a character.
   const searchRender = debounce(renderCandidates, 120);
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; searchRender(); });
+  $('#emptyClear').addEventListener('click', () => {
+    filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; search = '';
+    syncFilterControls(); renderCandidates();
+  });
   $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; narrowSelection(); renderCandidates(); });
   $('#pagerPrev').addEventListener('click', () => { page -= 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   $('#pagerNext').addEventListener('click', () => { page += 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
@@ -1185,7 +1177,7 @@
     $('#addNotes').value = c ? (c.notes || '') : '';
     $('#addModalTitle').textContent = c ? `Edit ${c.name || c.email}` : 'Add candidate';
     $('#addSaveBtn').textContent = c ? 'Save changes' : 'Add candidate';
-    $('#addModal').hidden = false;
+    openModal('#addModal');
     checkPhoneField();
     const el = focus === 'phone' ? $('#addPhone') : $('#addFirst');
     setTimeout(() => { el.focus(); el.select(); }, 40);
@@ -1227,7 +1219,7 @@
     try {
       if (editingId) await api(`/api/candidates/${editingId}`, { method: 'PATCH', body });
       else await api('/api/candidates', { method: 'POST', body });
-      $('#addModal').hidden = true;
+      closeModal($('#addModal'));
       const textable = textPhoneOf({ phone: body.phone });
       toast(editingId
         ? `Saved.${body.phone && textable ? ` ${prettyPhone(textable)} is ready to text.` : ''}`
@@ -1301,7 +1293,7 @@
         ? (cands.length > 1 ? `Send ${cands.length} follow-ups` : 'Send follow-up')
         : (cands.length > 1 ? `Send ${cands.length} emails` : 'Send');
     }
-    $('#composeModal').hidden = false;
+    openModal('#composeModal');
   }
   let queueMode = false;
 
@@ -1322,7 +1314,7 @@
     if (queueMode) {
       try {
         const r = await api('/api/queue', { method: 'POST', body: { candidateIds: composeIds, template, followUp } });
-        $('#composeModal').hidden = true;
+        closeModal($('#composeModal'));
         selected.clear();
         toast(`${r.added} emails queued — sending has started.`);
         await refresh();
@@ -1391,7 +1383,7 @@
       toast(stopped ? `Stopped — ${sent} sent.` : `Sent ${sent} of ${total} email${total === 1 ? '' : 's'}.`, failed.length > 0);
       selected.clear();
       await refresh();
-      if (!failed.length && !stopped) setTimeout(() => { $('#composeModal').hidden = true; }, 1000);
+      if (!failed.length && !stopped) setTimeout(() => { closeModal($('#composeModal')); }, 1000);
       else {
         btn.disabled = failed.length === 0;
         btn.textContent = failed.length ? `Retry ${failed.length} failed` : 'Done';
@@ -2278,7 +2270,7 @@
       + (people.length > 12 ? `<span class="to-chip muted">+${people.length - 12} more</span>` : '');
     $('#textComposeBody').value = (state.texting && state.texting.template && state.texting.template.body) || '';
     $('#textComposeNow').checked = false;   // never sticky between sends
-    $('#textComposeModal').hidden = false;
+    openModal('#textComposeModal');
     renderTextComposePreview();
     setTimeout(() => $('#textComposeBody').focus(), 40);
   }
@@ -2348,7 +2340,7 @@
         ? `${did.join(' · ')}${notes.length ? ` · ${notes.join(', ')}` : ''}.`
         : `Nothing to send — ${notes.length ? notes.join(', ') : 'those people cannot be texted right now'}.`,
         !did.length);
-      $('#textComposeModal').hidden = true;
+      closeModal($('#textComposeModal'));
       const alsoEmail = textComposeThenEmail;
       textComposeThenEmail = null;
       await refresh();
@@ -3320,13 +3312,56 @@
   });
 
   // ---------------- Modals ----------------
+  // Opening one used to leave the keyboard behind it: Tab walked the page
+  // underneath while the dialog sat on top, and closing it dropped focus on
+  // <body>, so the next Tab started again from the top of the document.
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusablesIn = (m) => [...m.querySelectorAll(FOCUSABLE)].filter((el) => !el.hidden && el.offsetParent !== null);
+  const openModals = () => $$('.modal-backdrop:not([hidden])');
+  const focusBefore = new WeakMap();
+
+  function openModal(sel) {
+    const m = $(sel);
+    if (!m.hidden) return m;
+    focusBefore.set(m, document.activeElement);
+    m.hidden = false;
+    // Whatever you came here to fill in, if there is one; otherwise the first
+    // thing you can act on. Callers that know better focus their own field
+    // straight after this and win.
+    const items = focusablesIn(m);
+    const field = items.find((el) => /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) || items[0];
+    if (field) field.focus();
+    return m;
+  }
+
+  function closeModal(m) {
+    if (!m || m.hidden) return;
+    m.hidden = true;
+    const back = focusBefore.get(m);
+    focusBefore.delete(m);
+    if (back && document.contains(back) && back.offsetParent !== null) back.focus();
+  }
+
   $$('.modal-backdrop').forEach((m) => {
     m.addEventListener('click', (e) => {
-      if (e.target === m || e.target.closest('[data-close]')) m.hidden = true;
+      if (e.target === m || e.target.closest('[data-close]')) closeModal(m);
     });
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') $$('.modal-backdrop:not([hidden])').forEach((m) => { m.hidden = true; });
+    const open = openModals();
+    if (!open.length) return;
+    if (e.key === 'Escape') { open.forEach(closeModal); return; }
+    if (e.key !== 'Tab') return;
+    // Keep Tab inside the topmost dialog.
+    const m = open[open.length - 1];
+    const items = focusablesIn(m);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const here = document.activeElement;
+    if (!m.contains(here)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+    if (e.shiftKey && here === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && here === last) { e.preventDefault(); first.focus(); }
   });
 
   // ---------------- Boot ----------------
@@ -3352,7 +3387,7 @@
   // The counts beside the nav items are visible from every page, so they are
   // cheap by construction and always run.
   function renderNavCounts() {
-    $('#navCount').textContent = (state.stats && state.stats.total) || '';
+    $('#navCount').textContent = ((state.stats && state.stats.total) || '').toLocaleString();
     $('#navEmailCount').textContent = mailUnreadCount() || '';
   }
 

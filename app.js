@@ -1,8 +1,12 @@
 // The Express app. Run locally via server.js, or on Netlify wrapped as a
 // serverless function (netlify/functions/api.js).
-require('dotenv').config();
-const express = require('express');
 const path = require('path');
+// Only when there is a file to read. dotenv looks for .env in the working
+// directory and quietly does nothing when it is absent -- which is always, on
+// Netlify -- so this is the same behaviour without 16 ms of every cold start
+// spent loading a parser for a file that is not there.
+if (require('fs').existsSync(path.join(process.cwd(), '.env'))) require('dotenv').config();
+const express = require('express');
 
 const store = require('./lib/store');
 const storage = require('./lib/storage');
@@ -104,7 +108,9 @@ function textPriority(db, q) {
     optOut: (q && q.optOut) || [],
   });
   const order = {};
-  ranked.forEach((r, i) => { order[r.id] = { rank: i + 1, score: r.score, reason: r.reason, fit: r.fit }; });
+  // rank and reason only: the score and the fit bucket are what the ranking was
+  // computed from, and nothing on the page ever reads them back.
+  ranked.forEach((r, i) => { order[r.id] = { rank: i + 1, reason: r.reason }; });
   const blocked = {};
   for (const c of db.candidates) {
     if (order[c.id]) continue;
@@ -1348,17 +1354,6 @@ app.post('/api/texts/seen', asyncRoute(async (req, res) => {
     if (!n) return false;
   });
   res.json({ ok: true, cleared: n });
-}));
-
-app.post('/api/texts/optout', asyncRoute(async (req, res) => {
-  const p = phone.normalize(req.body && req.body.phone);
-  if (!p) return res.status(400).json({ error: 'That does not look like a phone number.' });
-  await textQueue.updateQ((q) => { if (!textQueue.addOptOut(q, p)) return false; });
-  await store.update((db) => {
-    const c = db.candidates.find((x) => phone.normalize(x.phone) === p);
-    if (c) c.status = 'declined';
-  });
-  res.json({ ok: true, phone: phone.display(p) });
 }));
 
 // The shared secret for the Mac. Generated here rather than typed, shown in
