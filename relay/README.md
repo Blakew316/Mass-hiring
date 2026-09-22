@@ -69,11 +69,30 @@ says exactly this, and nothing sends until it is granted.
 ### 3. Grant Full Disk Access
 
 **System Settings → Privacy & Security → Full Disk Access → + →** add your `node`
-binary (`which node` tells you where it is).
+binary. Find its real path first, because the one on your PATH is usually a
+symlink and macOS tracks the file it points at:
+
+```bash
+readlink -f "$(which node)"      # e.g. /opt/homebrew/Cellar/node/25.1.0/bin/node
+```
+
+In the file picker press **⌘⇧G** and paste that path. Then restart the relay —
+the permission is only re-checked when the process starts:
+
+```bash
+launchctl kickstart -k gui/$UID/com.wholesalepayments.wprelay
+```
 
 This one matters more than it sounds. The relay reads the Messages database for
 **delivery receipts, read receipts and replies** — all three. Without it you can
 send, and you will see nothing come back.
+
+The relay reads that database from inside its own process, using Node's built-in
+SQLite. That is deliberate: running `/usr/bin/sqlite3` instead does not work,
+because macOS gives Apple-signed system binaries their own permission identity
+rather than letting them inherit the relay's, so the read is refused no matter
+who you granted Full Disk Access to. The startup log prints which way it is
+reading.
 
 ### 4. Keep the Mac awake and logged in
 

@@ -27,6 +27,15 @@ const receipts = require('./lib/receipts');
 const { AppleScript } = require('./lib/applescript');
 const { BlueBubbles, toDate, addressOf, textOf, isFromMe } = require('./lib/bluebubbles');
 
+// node:sqlite is still flagged experimental, and its warning would be printed
+// into the log on every start. Only that one is dropped; anything else Node
+// wants to say still comes through.
+process.removeAllListeners('warning');
+process.on('warning', (w) => {
+  if (w.name === 'ExperimentalWarning' && /SQLite/i.test(w.message)) return;
+  console.error(`${w.name}: ${w.message}`);
+});
+
 const VERSION = '1.0.0';
 const CONFIG_PATH = process.env.WP_RELAY_CONFIG || path.join(state.DIR, 'config.json');
 
@@ -121,9 +130,10 @@ async function main() {
   log(`  sending  ${usingBB ? `BlueBubbles at ${cfg.bluebubblesUrl}` : 'Messages.app via AppleScript'}`);
   log(`  state    ${state.FILE}`);
   if (cfg.dryRun) log('  DRY RUN — messages will be logged, not sent');
+  log(`  reading  ${receipts.mode()}`);
   if (!receipts.available()) {
-    log('  note: the Messages database is not readable, so delivery receipts, read receipts and replies are all off.');
-    log('        Grant Full Disk Access to whatever runs the relay — see README. Sending still works.');
+    log('  note: the Messages database was not found, so delivery receipts, read receipts and replies are all off.');
+    log('        Sending still works.');
   }
 
   let lastError = '';
