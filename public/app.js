@@ -131,13 +131,73 @@
     const res = await fetch('/api/state', {
       headers: stateTag ? { 'If-None-Match': stateTag } : {},
     });
-    if (res.status === 304) return false;
-    if (res.status === 401) { showLogin(); throw new Error('Please sign in.'); }
+    // Answered, therefore in touch: a 304 is as current as a 200, it just has
+    // nothing new to say.
+    if (res.status === 304) { lastSyncAt = Date.now(); return false; }
+    if (res.status === 401) { showLogin(); const e = new Error('Please sign in.'); e.authFailed = true; throw e; }
     if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    lastSyncAt = Date.now();
     stateTag = res.headers.get('ETag') || '';
     state = await res.json();
     renderAll();
     return true;
+  }
+
+  // ---------------- Connection ----------------
+  // A failed poll used to fail in complete silence: the numbers on screen
+  // simply stopped moving, which looks exactly like a quiet afternoon. While a
+  // send is running that is the worst lie the page can tell. Two failures in a
+  // row now say so in the header, and we try again sooner than the next
+  // half-minute instead of waiting it out.
+  let pollFails = 0;
+  let lastSyncAt = 0;
+  let retryTimer = null;
+
+  async function poll() {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    try {
+      await refresh();
+      if (pollFails) { pollFails = 0; renderConnection(); }
+    } catch (err) {
+      // Signed out is not offline — the login panel is already up, and
+      // hammering the server would not help.
+      if (err && err.authFailed) { pollFails = 0; renderConnection(); return; }
+      pollFails += 1;
+      renderConnection();
+      retryTimer = setTimeout(poll, Math.min(5000 * pollFails, 30000));
+    }
+  }
+
+  function mountConnection() {
+    $$('.head-actions').forEach((row) => {
+      if (row.querySelector('.conn-lost')) return;
+      const el = document.createElement('button');
+      el.className = 'conn-lost';
+      el.type = 'button';
+      el.hidden = true;
+      el.innerHTML = '<span class="conn-dot"></span><span class="conn-text">Offline</span>';
+      el.addEventListener('click', () => poll());
+      // leftmost, so it never shifts the bell and the theme switch around
+      row.prepend(el);
+    });
+  }
+
+  function renderConnection() {
+    const lost = pollFails >= 2;
+    const when = lastSyncAt
+      ? new Date(lastSyncAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : '';
+    $$('.conn-lost').forEach((el) => {
+      el.hidden = !lost;
+      // Only while it is up: a tooltip on a hidden button helps nobody, and a
+      // clock baked into an always-present attribute makes two pages showing
+      // the same thing differ.
+      if (!lost) el.removeAttribute('title');
+      else el.title = when
+        ? `Cannot reach the server. Everything on screen is as it was at ${when}. Click to try again.`
+        : 'Cannot reach the server. Click to try again.';
+    });
   }
 
   // ---------------- Toasts ----------------
@@ -685,11 +745,22 @@
 
   function visibleCandidates() {
     const q = search.toLowerCase().trim();
+    // A number is written a dozen ways — (617) 235-0001, 617.235.0001,
+    // +1 617 235 0001 — and nobody types it back the way it was stored, so a
+    // literal substring match found almost nothing. Once the query looks like a
+    // number, compare digits to digits as well.
+    // A US number is stored and typed with and without the leading 1, so drop
+    // it from both sides before comparing — otherwise "+1 617 235 0003" is
+    // longer than the number it is looking for and matches nothing.
+    const tail = (d) => (d.length === 11 && d[0] === '1' ? d.slice(1) : d);
+    const qDigits = tail(q.replace(/\D/g, ''));
+    const byDigits = qDigits.length >= 3 && /^[\d\s().+-]+$/.test(q);
     return state.candidates.filter((c) => {
       if (filter !== 'all' && c.status !== filter) return false;
       if (roleFilter === '__none' && roleKey(c.role)) return false;
       if (!matchesFilters(c)) return false;
       if (!q) return true;
+      if (byDigits && tail(String(c.phone || '').replace(/\D/g, '')).includes(qDigits)) return true;
       return [c.name, c.firstName, c.lastName, c.email, c.role, c.company, c.pastRoles, c.phone, c.location]
         .some((f) => String(f || '').toLowerCase().includes(q));
     });
@@ -710,10 +781,9 @@
     const roles = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].label.localeCompare(b[1].label));
     const missing = state.candidates.filter((c) => !roleKey(c.role)).length;
     if (roleFilter && !counts.has(roleFilter)) roleFilter = '';     // that role is gone from the list
-    sel.innerHTML = `<option value="">All roles (${state.candidates.length})</option>`
+    setOptions(sel, `<option value="">All roles (${state.candidates.length})</option>`
       + roles.map(([key, r]) => `<option value="${esc(key)}">${esc(r.label)} (${r.n})</option>`).join('')
-      + (missing ? `<option value="__none">No role on file (${missing})</option>` : '');
-    sel.value = roleFilter;
+      + (missing ? `<option value="__none">No role on file (${missing})</option>` : ''), roleFilter);
     sel.title = roles.length ? `Filter by the role someone currently holds (${roles.length} in your list)` : 'Roles appear here once your candidates have one on file';
   }
 
@@ -776,6 +846,35 @@
     if (label) toast(`Showing ${label}.`);
   }
 
+  // Rewriting a <select>'s options closes it under the cursor of anybody who
+  // has it open, and these three run on every poll. Only touch the markup when
+  // the options have actually changed.
+  // Kept off the element itself: a dataset attribute would put a copy of every
+  // option's markup back into the DOM, which is the opposite of the point.
+  const lastMarkup = new WeakMap();
+  function drawOnce(el, html) {
+    if (lastMarkup.get(el) === html) return false;
+    lastMarkup.set(el, html);
+    el.innerHTML = html;
+    return true;
+  }
+  function setOptions(sel, html, value) {
+    drawOnce(sel, html);
+    if (sel.value !== value) sel.value = value;
+  }
+
+  // Ticking thirty boxes and then narrowing the list used to throw the lot away
+  // without a word. Keep whoever is still on screen — so nothing hidden can be
+  // emailed or texted either — and say how many fell outside.
+  function narrowSelection() {
+    if (!selected.size) return;
+    const before = selected.size;
+    const visible = new Set(visibleCandidates().map((c) => c.id));
+    for (const id of [...selected]) if (!visible.has(id)) selected.delete(id);
+    const gone = before - selected.size;
+    if (gone) toast(`${gone} selected ${gone === 1 ? 'person' : 'people'} fell outside this filter and ${gone === 1 ? 'is' : 'are'} no longer selected.`);
+  }
+
   function syncFilterControls() {
     $('#industryFilter').value = industryFilter;
     $('#addedFilter').value = addedFilter;
@@ -803,7 +902,7 @@
 
   function renderViews() {
     const all = state.candidates || [];
-    if (!all.length) { $('#candViews').innerHTML = ''; $('#candCount').textContent = ''; return; }
+    if (!all.length) { drawOnce($('#candViews'), ''); $('#candCount').textContent = ''; return; }
     const pri = (state.texting && state.texting.priority) || { order: {} };
     const ranked = Object.keys(pri.order || {}).length;
     const count = (fn) => all.filter(fn).length;
@@ -822,36 +921,36 @@
     const active = (v) => nothingElse
       && (v.patch.status || 'all') === filter
       && (v.patch.texted || '') === textedFilter
-      && (v.patch.rank || '') === rankFilter;
+      && (v.patch.rank || '') === rankFilter
+      // "Best to text next" is an order as much as a set: once the list is
+      // sorted some other way the pill no longer describes what is on screen.
+      && (v.patch.sort === undefined || v.patch.sort === sortBy);
 
-    $('#candViews').innerHTML = views.map((v) => `
+    const pills = views.map((v) => `
       <button class="view-pill${active(v) ? ' on' : ''}" data-seg='${esc(JSON.stringify(v.patch))}' data-label="${esc(v.label)}">
         ${esc(v.label)}<span class="view-n">${v.n.toLocaleString()}</span>
       </button>`).join('');
+    drawOnce($('#candViews'), pills);
 
     // The industry menu mirrors what actually exists in the list.
     const byIndustry = {};
     for (const c of all) { const k = c.industry || 'other'; byIndustry[k] = (byIndustry[k] || 0) + 1; }
-    const sel = $('#industryFilter');
-    const keep = sel.value;
-    sel.innerHTML = '<option value="">Any industry</option>' + Object.entries(byIndustry)
+    setOptions($('#industryFilter'), '<option value="">Any industry</option>' + Object.entries(byIndustry)
       .sort((x, y) => y[1] - x[1])
-      .map(([code, n]) => `<option value="${esc(code)}">${esc(industryLabel(code))} (${n})</option>`).join('');
-    sel.value = keep;
+      .map(([code, n]) => `<option value="${esc(code)}">${esc(industryLabel(code))} (${n})</option>`).join(''), industryFilter);
 
     // And the stage menu carries its counts, so picking one is informed.
-    const stage = $('#stageFilter');
-    const keepStage = stage.value;
-    stage.innerHTML = `<option value="all">Any stage (${all.length.toLocaleString()})</option>` + Object.entries(STATUS)
-      .map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)} (${count((c) => c.status === k).toLocaleString()})</option>`).join('');
-    stage.value = keepStage || 'all';
+    setOptions($('#stageFilter'), `<option value="all">Any stage (${all.length.toLocaleString()})</option>` + Object.entries(STATUS)
+      .map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)} (${count((c) => c.status === k).toLocaleString()})</option>`).join(''), filter || 'all');
   }
 
   function renderActiveFilters() {
     const bits = [];
     if (filter !== 'all') bits.push([`Stage: ${(STATUS[filter] || {}).label || filter}`, () => { filter = 'all'; }]);
     if (industryFilter) bits.push([`Industry: ${industryLabel(industryFilter)}`, () => { industryFilter = ''; }]);
-    if (roleFilter) bits.push([`Role: ${roleFilter}`, () => { roleFilter = ''; }]);
+    // the select's own wording, not the lowercased key it is matched on —
+    // this used to read "Role: account executive", or literally "Role: __none"
+    if (roleFilter) bits.push([`Role: ${($('#roleFilter').selectedOptions[0] || {}).textContent || roleFilter}`, () => { roleFilter = ''; }]);
     if (addedFilter) bits.push([`Added: ${$('#addedFilter').selectedOptions[0].textContent}`, () => { addedFilter = ''; }]);
     if (textedFilter) bits.push([`Texting: ${$('#textedFilter').selectedOptions[0].textContent}`, () => { textedFilter = ''; }]);
     if (rankFilter) bits.push([`Ranking: ${$('#rankFilter').selectedOptions[0].textContent}`, () => { rankFilter = ''; }]);
@@ -881,7 +980,7 @@
 
   for (const [id, set] of [['#industryFilter', (v) => { industryFilter = v; }], ['#addedFilter', (v) => { addedFilter = v; }],
     ['#textedFilter', (v) => { textedFilter = v; }], ['#rankFilter', (v) => { rankFilter = v; }]]) {
-    $(id).addEventListener('change', (e) => { set(e.target.value); selected.clear(); renderCandidates(); });
+    $(id).addEventListener('change', (e) => { set(e.target.value); narrowSelection(); renderCandidates(); });
   }
 
   function renderCandidates() {
@@ -1039,19 +1138,13 @@
   // 3,514 rows filtered and rebuilt on every keystroke was ~86 ms a character.
   const searchRender = debounce(renderCandidates, 120);
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; searchRender(); });
-  // Arriving on the tab starts at the overview; it is a landing page, not a
-  // filter that persists from whatever was last looked at.
-  $$('.nav-item[data-view="candidates"]').forEach((b) => b.addEventListener('click', () => {
-    {
-    }
-  }));
-  $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; selected.clear(); renderCandidates(); });
+  $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; narrowSelection(); renderCandidates(); });
   $('#pagerPrev').addEventListener('click', () => { page -= 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   $('#pagerNext').addEventListener('click', () => { page += 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   $('#sortBy').addEventListener('change', (e) => { sortBy = e.target.value; renderCandidates(); });
   $('#stageFilter').addEventListener('change', (e) => {
     filter = e.target.value;
-    selected.clear();
+    narrowSelection();
     renderCandidates();
   });
   $('#selEmailBtn').addEventListener('click', () => openCompose([...selected]));
@@ -2907,16 +3000,20 @@
   }
 
   function renderTextPreview() {
-    const body = $('#txBody').value || '';
-    const who = state.candidates.find((c) => textPhoneOf(c)) || { name: 'Sam Rivera', role: 'Account Executive', company: 'Acme Payments' };
-    const first = (who.firstName || (who.name || '').split(' ')[0] || 'there');
-    const filled = body
-      .replace(/\{\{\s*firstName\s*\}\}/g, first)
-      .replace(/\{\{\s*fullName\s*\}\}/g, who.name || first)
-      .replace(/\{\{\s*role\s*\}\}/g, who.role || 'professional')
-      .replace(/\{\{\s*company\s*\}\}/g, who.company || '');
-    const withLink = state.settings.calendlyUrl && !filled.includes(state.settings.calendlyUrl)
-      ? `${filled.trim()}\n\n${state.settings.calendlyUrl}` : filled.trim();
+    // Same filler as the email preview, and the same tidying lib/template.js
+    // does before a text is handed to the relay. This used to resolve four
+    // placeholders of the eight the send understands, so {{lastName}},
+    // {{email}} and the rest sat in the preview as literal braces while the
+    // real message had them filled in -- and blank lines the send collapses
+    // were shown uncollapsed, making the character count wrong too.
+    const who = state.candidates.find((c) => textPhoneOf(c))
+      || { name: 'Sam Rivera', role: 'Account Executive', company: 'Acme Payments' };
+    const filled = fillClient($('#txBody').value || '', who)
+      .replace(/\r\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    const calendly = String(state.settings.calendlyUrl || '').trim();
+    const withLink = calendly && !filled.includes(calendly) ? `${filled}\n\n${calendly}` : filled;
     $('#txPreview').textContent = withLink;
     const chars = withLink.length;
     const chip = $('#txChars');
@@ -3265,7 +3362,9 @@
     renderTexting();
     mountTheme();
     mountBell();
+    mountConnection();
     renderBell();
+    renderConnection();
     renderNavCounts();
     // These two are cheap and cross-view: the send and follow-up buttons live
     // in the Email header, the due badge in Settings, and the queue timer has
@@ -3324,10 +3423,12 @@
     // call every 30 seconds for as long as it stays open. Coming back to the
     // tab refreshes straight away, so it is also fresher than waiting out the
     // rest of an interval — which is what used to happen.
-    setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 30000);
+    setInterval(() => { if (!document.hidden) poll(); }, 30000);
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) refresh().catch(() => {});
+      if (!document.hidden) poll();
     });
+    window.addEventListener('online', () => poll());
+    window.addEventListener('offline', () => { pollFails = Math.max(pollFails, 2); renderConnection(); });
     checkReplies();
     setInterval(checkReplies, 60000);
     syncCalendly();
@@ -3349,14 +3450,28 @@
   }
 
   (async () => {
-    try {
+    const boot = async () => {
       const a = await api('/api/auth/status');
       if (a.setupRequired) { $('#setupScreen').hidden = false; return; }
       if (a.required && !a.authed) { showLogin(); return; }
       await refresh();
       start();
-    } catch (err) {
-      if (err.message !== 'Please sign in.' && err.message !== 'Set APP_PASSWORD first.') oops(err);
-    }
+    };
+    // A blip at load used to leave the page dead until somebody noticed and
+    // reloaded it: one toast, no polling started, no retry. Keep trying.
+    const attempt = async (first) => {
+      try {
+        await boot();
+        if (pollFails) { pollFails = 0; renderConnection(); }
+      } catch (err) {
+        if (err.message === 'Please sign in.' || err.message === 'Set APP_PASSWORD first.') return;
+        if (first) oops(err);
+        mountConnection();
+        pollFails += 1;
+        renderConnection();
+        setTimeout(() => attempt(false), Math.min(5000 * pollFails, 30000));
+      }
+    };
+    attempt(true);
   })();
 })();

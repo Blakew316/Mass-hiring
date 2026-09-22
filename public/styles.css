@@ -1094,6 +1094,28 @@ tr.row-muted { opacity: .55; }
 @media (prefers-reduced-motion: reduce) {
   .theme-knob, .theme-ico { transition: none; }}
 
+/* ---------------- Lost the server ---------------- */
+/* Only ever visible when two polls in a row have failed. Amber, not red: the
+   data on screen is real, it is just not current, and the page is still trying. */
+.conn-lost {
+  display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0;
+  height: 36px; padding: 0 11px; cursor: pointer;
+  border: 1px solid var(--warn-line); border-radius: 10px;
+  background: var(--amber-tint); color: var(--warn-ink);
+  font: inherit; font-size: 12.5px; font-weight: 600; letter-spacing: .01em;
+}
+.conn-lost:hover { border-color: var(--amber); }
+.conn-lost:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.conn-lost[hidden] { display: none; }
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--amber);
+  animation: connPulse 1.6s ease-in-out infinite;
+}
+@keyframes connPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .conn-dot { animation: none; } }
+/* On a phone the word is the first thing worth dropping; the dot still shows. */
+@media (max-width: 560px) { .conn-text { display: none; } .conn-lost { padding: 0 9px; } }
+
 /* ---------------- The replies bell ---------------- */
 .bell {
   position: relative; width: 36px; height: 36px; flex-shrink: 0;
