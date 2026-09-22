@@ -447,10 +447,29 @@ tr:hover .row-actions { opacity: 1; }
 .email-signature img { max-width: 100%; height: auto; }
 .email-signature[hidden] { display: none; }
 
-/* With the descriptions gone the Mac relay card holds only a token field, so
-   stretching it to match Pace & hours left a card that was mostly empty. Each
-   one is its own height here instead. */
-#view-texting .template-cols { align-items: start; }
+/* The Mac relay card holds only a token field, so stretching it to match
+   Pace & hours left a card that was mostly empty. Each one is its own height.
+   Scoped to the texting block, because the template editor's preview DOES
+   want to match the height of the editor beside it. */
+[data-block="texting"] .template-cols { align-items: start; }
+
+/* Settings carries three different kinds of thing now — the accounts, the
+   email template, the texting setup. Without a heading between them it reads
+   as one undifferentiated pile of cards. */
+.settings-block { margin-bottom: 26px; }
+.settings-block:last-child { margin-bottom: 0; }
+.settings-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+/* The last row inside a block should not add its own gap under it. */
+.settings-block > .two-col:last-child, .settings-block > .settings-grid:last-child { margin-bottom: 0; }
 
 /* ---------------- Settings ---------------- */
 /* Six cards of very different heights. A two-column grid rows them up, so a
@@ -924,7 +943,10 @@ tr.row-muted { opacity: .55; }
   display: grid;
   grid-template-columns: 268px 1fr;
   gap: 0;
-  height: 460px;
+  /* It is the only thing on the page now, so it takes the page: as tall as the
+     window allows, floored so a short laptop still shows a usable thread and
+     capped so a tall monitor does not stretch it to nothing but whitespace. */
+  height: clamp(420px, calc(100vh - 232px), 780px);
   border: 1px solid var(--line);
   border-radius: 12px;
   overflow: hidden;

@@ -423,98 +423,6 @@
         </div>
       </div>
 
-      <div class="two-col template-cols">
-        <div class="card">
-          <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="doc" data-size="15"></span>Edit</h2></div>
-          <label class="label">Subject</label>
-          <input type="text" id="tplSubject" class="input">
-          <label class="label">Body</label>
-          <textarea id="tplBody" class="input textarea" rows="11"></textarea>
-          <div class="token-row">
-            <span class="muted small">Insert:</span>
-            <button class="token" data-token="{{firstName}}">first name</button>
-            <button class="token" data-token="{{fullName}}">full name</button>
-            <button class="token" data-token="{{role}}">role</button>
-            <button class="token" data-token="{{company}}">company</button>
-          </div>
-          <div class="attach-block">
-            <label class="label">Attachments <span class="muted small">— sent with every email</span></label>
-            <ul class="attach-list" id="attachList"></ul>
-            <div class="attach-actions">
-              <button class="btn" id="attachAddBtn"><span data-icon="paperclip" data-size="14"></span> Add file</button>
-              <input type="file" id="attachFile" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" hidden>
-              <button class="btn-link" id="attachRestore" hidden>Restore the Account Executive flyer</button>
-              <span class="muted small">PNG, JPG, GIF, WebP or PDF · up to 4 MB each, 3 files</span>
-            </div>
-          </div>
-          <div class="card-actions">
-            <button class="btn" id="resetTemplateBtn">Reset to default</button>
-            <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-head">
-            <h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Live preview</h2>
-            <select id="previewCandidate" class="input select slim"></select>
-          </div>
-          <div class="email-preview">
-            <div class="email-meta">
-              <div><span class="muted">From:</span> <span id="pvFrom">your work email</span></div>
-              <div><span class="muted">Subject:</span> <strong id="pvSubject"></strong></div>
-            </div>
-            <div class="email-body" id="pvBody"></div>
-            <div class="email-signature" id="pvSignature" hidden></div>
-            <div class="pv-attachments" id="pvAttachments" hidden></div>
-          </div>
-          <div class="hint" id="calendlyHintTpl"></div>
-          <div class="hint" id="signatureHintTpl"></div>
-        </div>
-      </div>
-
-      <div class="two-col template-cols">
-        <div class="card">
-          <div class="card-head">
-            <h2><span class="card-ico tone-green" data-icon="reply" data-size="15"></span>Follow-up email</h2>
-            <span class="badge tint-mint" id="followUpDueBadge"></span>
-          </div>
-          <label class="label">Subject</label>
-          <input type="text" id="fuSubject" class="input">
-          <label class="label">Body</label>
-          <textarea id="fuBody" class="input textarea" rows="7"></textarea>
-          <div class="token-row">
-            <span class="muted small">Insert:</span>
-            <button class="token fu-token" data-fu-token="{{firstName}}">first name</button>
-            <button class="token fu-token" data-fu-token="{{originalSubject}}">original subject</button>
-            <button class="token fu-token" data-fu-token="{{company}}">company</button>
-          </div>
-          <div class="card-actions">
-            <button class="btn" id="resetFollowUpBtn">Reset to default</button>
-            <button class="btn btn-primary" id="saveFollowUpBtn">Save follow-up</button>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-head"><h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Follow-up preview</h2></div>
-          <div class="email-preview">
-            <div class="email-meta">
-              <div><span class="muted">Subject:</span> <strong id="fuPvSubject"></strong></div>
-            </div>
-            <div class="email-body" id="fuPvBody"></div>
-          </div>
-          <div class="card-actions">
-            <button class="btn btn-primary follow-up-btn" id="tplFollowUpBtn"><span data-icon="reply" data-size="15"></span> Follow up</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="card send-card">
-        <div class="card-head">
-          <h2><span class="card-ico tone-green" data-icon="send" data-size="15"></span>Send</h2>
-          <div class="send-row">
-            <span class="badge tint-blue" id="sendCountBadge"></span>
-            <button class="btn btn-primary email-all-btn" id="tplSendAllBtn">Email all not-contacted candidates</button>
-          </div>
-        </div>
-      </div>
     </section>
 
     <!-- ===== Texting ===== -->
@@ -528,14 +436,6 @@
           <button class="btn btn-primary" id="textSendAllBtn">Text everyone with a number</button>
         </div>
       </header>
-
-      <div class="stat-grid text-stats">
-        <div class="stat"><div class="stat-label">Have a number</div><div class="stat-value" id="txWithPhone">0</div></div>
-        <div class="stat"><div class="stat-label">Texted</div><div class="stat-value" id="txSent">0</div></div>
-        <div class="stat"><div class="stat-label">Delivered</div><div class="stat-value" id="txDelivered">0</div></div>
-        <div class="stat"><div class="stat-label">Read</div><div class="stat-value" id="txRead">0</div></div>
-        <div class="stat"><div class="stat-label">Replied</div><div class="stat-value" id="txReplied">0</div></div>
-      </div>
 
       <div class="card messages-card">
         <div class="card-head">
@@ -582,101 +482,6 @@
         </div>
       </div>
 
-      <div class="card sending-card" id="textSendingCard" hidden>
-        <div class="card-head">
-          <h2><span class="card-ico tone-blue" data-icon="send" data-size="15"></span>Texting in progress</h2>
-          <span class="badge tint-blue" id="textSendingBadge"></span>
-        </div>
-        <div class="progress"><div class="progress-fill" id="textSendingFill"></div></div>
-        <p class="muted small" id="textSendingMeta"></p>
-        <div class="card-actions">
-          <button class="btn" id="textRetryBtn" hidden>Retry failed</button>
-        </div>
-      </div>
-
-      <div class="two-col template-cols">
-        <div class="card">
-          <div class="card-head">
-            <h2><span class="card-ico tone-blue" data-icon="bubble" data-size="15"></span>Mac relay</h2>
-            <span class="badge" id="relayChip">checking…</span>
-          </div>
-          <details class="relay-steps">
-            <summary>Setting it up on the Mac — three steps</summary>
-            <ol class="steps">
-              <li>Generate a relay token below and copy it.</li>
-              <li>On the Mac: <code>cd Mass-hiring/relay &amp;&amp; ./install.sh</code>, paste the token into the config it creates, then run it again.</li>
-              <li>Grant the two macOS permissions it asks for: <strong>Automation</strong>, so it can tell Messages to send, and <strong>Full Disk Access</strong>, so it can read delivery receipts, read receipts and replies.</li>
-            </ol>
-            <p class="muted small">Without Automation nothing sends; without Full Disk Access texts go out but nothing comes back. Full instructions are in <code>relay/README.md</code>.</p>
-          </details>
-          <label class="label">Relay token</label>
-          <div class="field-row">
-            <input type="text" id="relayTokenInput" class="input" readonly placeholder="No token yet — generate one">
-            <button class="btn" id="relayTokenShow">Show</button>
-            <button class="btn" id="relayTokenGen">Generate</button>
-          </div>
-          <div class="hint" id="relayTokenHint">A separate secret from your dashboard password. It unlocks the relay routes and nothing else.</div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="calendar" data-size="15"></span>Pace &amp; hours</h2></div>
-          <div class="field-grid">
-            <div>
-              <label class="label" for="txDailyLimit">Texts per day</label>
-              <input type="number" id="txDailyLimit" class="input" min="1" max="100" placeholder="60">
-              <div class="hint">Up to 100. Above that, Apple bans accounts.</div>
-            </div>
-            <div>
-              <label class="label" for="txGapMin">Shortest gap (seconds)</label>
-              <input type="number" id="txGapMin" class="input" min="20" max="1800" placeholder="45">
-              <div class="hint">The wait is randomised between the two.</div>
-            </div>
-            <div>
-              <label class="label" for="txGapMax">Longest gap (seconds)</label>
-              <input type="number" id="txGapMax" class="input" min="20" max="1800" placeholder="150">
-              <div class="hint">A fixed interval is the clearest bot signal there is.</div>
-            </div>
-            <div>
-              <label class="label" for="txStartHour">Start at (their time)</label>
-              <input type="number" id="txStartHour" class="input" min="0" max="23" placeholder="9">
-            </div>
-            <div>
-              <label class="label" for="txEndHour">Stop at (their time)</label>
-              <input type="number" id="txEndHour" class="input" min="1" max="24" placeholder="19">
-            </div>
-          </div>
-          <label class="check-row"><input type="checkbox" id="txSunday"> Text on Sundays too</label>
-          <div class="card-actions">
-            <button class="btn btn-primary" id="txSavePace">Save pace</button>
-          </div>
-          <div class="hint" id="txOptOutHint"></div>
-        </div>
-      </div>
-
-      <div class="two-col template-cols">
-        <div class="card">
-          <div class="card-head"><h2><span class="card-ico tone-green" data-icon="doc" data-size="15"></span>Message</h2></div>
-          <textarea id="txBody" class="input textarea" rows="6" placeholder="Hi {{firstName}}…"></textarea>
-          <div class="token-row">
-            <span class="muted small">Insert:</span>
-            <button class="token tx-token" data-tx-token="{{firstName}}">first name</button>
-            <button class="token tx-token" data-tx-token="{{role}}">role</button>
-            <button class="token tx-token" data-tx-token="{{company}}">company</button>
-          </div>
-          <div class="card-actions">
-            <button class="btn" id="txReset">Reset to default</button>
-            <button class="btn btn-primary" id="txSave">Save message</button>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-head">
-            <h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Preview</h2>
-            <span class="badge" id="txChars"></span>
-          </div>
-          <div class="imessage-preview"><div class="imessage-bubble" id="txPreview"></div></div>
-          <div class="hint" id="txPreviewHint"></div>
-        </div>
-      </div>
     </section>
 
     <!-- ===== Settings ===== -->
@@ -690,85 +495,271 @@
         </div>
       </header>
 
-      <div class="settings-grid">
-        <div class="card">
-          <div class="card-head">
-            <h2><span class="card-ico tone-green" data-icon="mail" data-size="15"></span>Google — Sheets &amp; Gmail</h2>
-            <span class="badge" id="googleBadge">not connected</span>
+      <div class="settings-block">
+        <h2 class="settings-title">Accounts &amp; connections</h2>
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-green" data-icon="mail" data-size="15"></span>Google — Sheets &amp; Gmail</h2>
+              <span class="badge" id="googleBadge">not connected</span>
+            </div>
+            <label class="label">From name <span class="muted small">(what recipients see instead of the address)</span></label>
+            <input type="text" id="setFromName" class="input" placeholder="e.g. Blake Woodruff">
+            <label class="label">OAuth Client ID</label>
+            <input type="text" id="setGoogleClientId" class="input" placeholder="xxxxx.apps.googleusercontent.com">
+            <label class="label">OAuth Client Secret</label>
+            <input type="password" id="setGoogleClientSecret" class="input" placeholder="GOCSPX-…">
+            <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web).</div>
+            <div class="redirect-box">
+              <div class="redirect-label">Authorized redirect URI — this exact address must be listed on that OAuth client</div>
+              <div class="redirect-row"><code id="redirectUriCode"></code><button class="btn btn-small" id="copyRedirectBtn" type="button">Copy</button></div>
+              <div class="hint" id="redirectHint">If Google answers <em>Error 400: redirect_uri_mismatch</em>, the address above is missing there: open the client → <strong>Authorized redirect URIs</strong> → <strong>Add URI</strong> → paste → <strong>Save</strong>, wait a minute, then connect again.</div>
+            </div>
+            <label class="check">
+              <input type="checkbox" id="setGmailSignature" checked>
+              <span>Use my Gmail signature and detect replies <span class="muted small">(asks for two extra Gmail permissions when connecting — change this before you click Connect / Reconnect)</span></span>
+            </label>
+            <div class="card-actions">
+              <button class="btn" id="googleDisconnectBtn" hidden>Disconnect</button>
+              <a class="btn btn-primary" href="/auth/google" id="googleConnectBtn">Connect Google</a>
+            </div>
           </div>
-          <label class="label">From name <span class="muted small">(what recipients see instead of the address)</span></label>
-          <input type="text" id="setFromName" class="input" placeholder="e.g. Blake Woodruff">
-          <label class="label">OAuth Client ID</label>
-          <input type="text" id="setGoogleClientId" class="input" placeholder="xxxxx.apps.googleusercontent.com">
-          <label class="label">OAuth Client Secret</label>
-          <input type="password" id="setGoogleClientSecret" class="input" placeholder="GOCSPX-…">
-          <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web).</div>
-          <div class="redirect-box">
-            <div class="redirect-label">Authorized redirect URI — this exact address must be listed on that OAuth client</div>
-            <div class="redirect-row"><code id="redirectUriCode"></code><button class="btn btn-small" id="copyRedirectBtn" type="button">Copy</button></div>
-            <div class="hint" id="redirectHint">If Google answers <em>Error 400: redirect_uri_mismatch</em>, the address above is missing there: open the client → <strong>Authorized redirect URIs</strong> → <strong>Add URI</strong> → paste → <strong>Save</strong>, wait a minute, then connect again.</div>
-          </div>
-          <label class="check">
-            <input type="checkbox" id="setGmailSignature" checked>
-            <span>Use my Gmail signature and detect replies <span class="muted small">(asks for two extra Gmail permissions when connecting — change this before you click Connect / Reconnect)</span></span>
-          </label>
-          <div class="card-actions">
-            <button class="btn" id="googleDisconnectBtn" hidden>Disconnect</button>
-            <a class="btn btn-primary" href="/auth/google" id="googleConnectBtn">Connect Google</a>
-          </div>
-        </div>
 
-        <div class="card">
-          <div class="card-head">
-            <h2><span class="card-ico tone-blue" data-icon="lock" data-size="15"></span>Gmail App Password</h2>
-            <span class="badge tint-blue">easy alternative</span>
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-blue" data-icon="lock" data-size="15"></span>Gmail App Password</h2>
+              <span class="badge tint-blue">easy alternative</span>
+            </div>
+            <label class="label">Work email</label>
+            <input type="email" id="setSmtpUser" class="input" placeholder="you@company.com">
+            <label class="label">App password</label>
+            <input type="password" id="setSmtpPass" class="input" placeholder="16-character app password">
           </div>
-          <label class="label">Work email</label>
-          <input type="email" id="setSmtpUser" class="input" placeholder="you@company.com">
-          <label class="label">App password</label>
-          <input type="password" id="setSmtpPass" class="input" placeholder="16-character app password">
-        </div>
 
-        <div class="card">
-          <div class="card-head"><h2><span class="card-ico tone-navy" data-icon="calendar" data-size="15"></span>Calendly</h2></div>
-          <label class="label">Your Calendly booking link (added to every email)</label>
-          <input type="text" id="setCalendlyUrl" class="input" placeholder="https://calendly.com/you/interview">
-          <label class="label">Personal Access Token <span class="muted small">(kept securely — registers the booking webhook and syncs your scheduled interviews)</span></label>
-          <div class="field-row">
-            <input type="password" id="calendlyToken" class="input" placeholder="calendly.com → Integrations → API & webhooks">
-            <button class="btn" id="registerWebhookBtn">Enable booking alerts</button>
+          <div class="card">
+            <div class="card-head"><h2><span class="card-ico tone-navy" data-icon="calendar" data-size="15"></span>Calendly</h2></div>
+            <label class="label">Your Calendly booking link (added to every email)</label>
+            <input type="text" id="setCalendlyUrl" class="input" placeholder="https://calendly.com/you/interview">
+            <label class="label">Personal Access Token <span class="muted small">(kept securely — registers the booking webhook and syncs your scheduled interviews)</span></label>
+            <div class="field-row">
+              <input type="password" id="calendlyToken" class="input" placeholder="calendly.com → Integrations → API & webhooks">
+              <button class="btn" id="registerWebhookBtn">Enable booking alerts</button>
+            </div>
+            <div class="hint" id="calendlyHint">Bookings flip the candidate to “Booked” and push to your phone; your upcoming interviews sync into the Interviews booked tile every few minutes.</div>
           </div>
-          <div class="hint" id="calendlyHint">Bookings flip the candidate to “Booked” and push to your phone; your upcoming interviews sync into the Interviews booked tile every few minutes.</div>
-        </div>
 
-        <div class="card">
-          <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
-          <div class="grid-2">
-            <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"><div class="hint" id="dailyLimitHint">Up to 2,000 (Google Workspace). When it is reached the queue pauses and resumes by itself as the 24-hour window frees up.</div></div>
-            <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="60" placeholder="30"><div class="hint" id="perMinuteHint">Up to 60 (Gmail's API quota). Several emails are sent in parallel each minute to keep this pace.</div></div>
-            <div><label class="label">Follow up after (days)</label><input type="number" id="setFollowUpDays" class="input" min="1" max="30" placeholder="3"></div>
-            <div><label class="label">Follow-ups per person (max)</label><input type="number" id="setMaxFollowUps" class="input" min="0" max="5" placeholder="2"></div>
+          <div class="card">
+            <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
+            <div class="grid-2">
+              <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"><div class="hint" id="dailyLimitHint">Up to 2,000 (Google Workspace). When it is reached the queue pauses and resumes by itself as the 24-hour window frees up.</div></div>
+              <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="60" placeholder="30"><div class="hint" id="perMinuteHint">Up to 60 (Gmail's API quota). Several emails are sent in parallel each minute to keep this pace.</div></div>
+              <div><label class="label">Follow up after (days)</label><input type="number" id="setFollowUpDays" class="input" min="1" max="30" placeholder="3"></div>
+              <div><label class="label">Follow-ups per person (max)</label><input type="number" id="setMaxFollowUps" class="input" min="0" max="5" placeholder="2"></div>
+            </div>
+            <p class="muted small">People who were emailed and never replied become due for a follow-up after the wait; the <strong>Follow up</strong> buttons show how many are due.</p>
           </div>
-          <p class="muted small">People who were emailed and never replied become due for a follow-up after the wait; the <strong>Follow up</strong> buttons show how many are due.</p>
-        </div>
 
-        <div class="card" id="apolloSettingsCard">
-          <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="search" data-size="15"></span>Apollo (candidate search)</h2></div>
-          <label class="label">Apollo API key</label>
-          <input type="password" id="setApolloApiKey" class="input" placeholder="paste your Apollo API key">
-          <div class="hint">Searching costs nothing. Revealing an email costs one Apollo credit, and the Import page always shows how many a batch will use before you confirm.</div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h2><span class="card-ico tone-green" data-icon="alert" data-size="15"></span>Phone notifications</h2></div>
-          <label class="label">ntfy topic</label>
-          <div class="field-row">
-            <input type="text" id="setNtfyTopic" class="input" placeholder="e.g. blake-hiring-alerts-8241">
-            <button class="btn" id="testNotifyBtn">Send test</button>
+          <div class="card" id="apolloSettingsCard">
+            <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="search" data-size="15"></span>Apollo (candidate search)</h2></div>
+            <label class="label">Apollo API key</label>
+            <input type="password" id="setApolloApiKey" class="input" placeholder="paste your Apollo API key">
+            <div class="hint">Searching costs nothing. Revealing an email costs one Apollo credit, and the Import page always shows how many a batch will use before you confirm.</div>
           </div>
-          <div class="hint">Pick something hard to guess — anyone who knows the topic name can see its notifications.</div>
+
+          <div class="card">
+            <div class="card-head"><h2><span class="card-ico tone-green" data-icon="alert" data-size="15"></span>Phone notifications</h2></div>
+            <label class="label">ntfy topic</label>
+            <div class="field-row">
+              <input type="text" id="setNtfyTopic" class="input" placeholder="e.g. blake-hiring-alerts-8241">
+              <button class="btn" id="testNotifyBtn">Send test</button>
+            </div>
+            <div class="hint">Pick something hard to guess — anyone who knows the topic name can see its notifications.</div>
+          </div>
         </div>
       </div>
+
+      <div class="settings-block">
+        <h2 class="settings-title">Email template</h2>
+        <div class="two-col template-cols">
+          <div class="card">
+            <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="doc" data-size="15"></span>Edit</h2></div>
+            <label class="label">Subject</label>
+            <input type="text" id="tplSubject" class="input">
+            <label class="label">Body</label>
+            <textarea id="tplBody" class="input textarea" rows="11"></textarea>
+            <div class="token-row">
+              <span class="muted small">Insert:</span>
+              <button class="token" data-token="{{firstName}}">first name</button>
+              <button class="token" data-token="{{fullName}}">full name</button>
+              <button class="token" data-token="{{role}}">role</button>
+              <button class="token" data-token="{{company}}">company</button>
+            </div>
+            <div class="attach-block">
+              <label class="label">Attachments <span class="muted small">— sent with every email</span></label>
+              <ul class="attach-list" id="attachList"></ul>
+              <div class="attach-actions">
+                <button class="btn" id="attachAddBtn"><span data-icon="paperclip" data-size="14"></span> Add file</button>
+                <input type="file" id="attachFile" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" hidden>
+                <button class="btn-link" id="attachRestore" hidden>Restore the Account Executive flyer</button>
+                <span class="muted small">PNG, JPG, GIF, WebP or PDF · up to 4 MB each, 3 files</span>
+              </div>
+            </div>
+            <div class="card-actions">
+              <button class="btn" id="resetTemplateBtn">Reset to default</button>
+              <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Live preview</h2>
+              <select id="previewCandidate" class="input select slim"></select>
+            </div>
+            <div class="email-preview">
+              <div class="email-meta">
+                <div><span class="muted">From:</span> <span id="pvFrom">your work email</span></div>
+                <div><span class="muted">Subject:</span> <strong id="pvSubject"></strong></div>
+              </div>
+              <div class="email-body" id="pvBody"></div>
+              <div class="email-signature" id="pvSignature" hidden></div>
+              <div class="pv-attachments" id="pvAttachments" hidden></div>
+            </div>
+            <div class="hint" id="calendlyHintTpl"></div>
+            <div class="hint" id="signatureHintTpl"></div>
+          </div>
+        </div>
+        <div class="two-col template-cols">
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-green" data-icon="reply" data-size="15"></span>Follow-up email</h2>
+              <span class="badge tint-mint" id="followUpDueBadge"></span>
+            </div>
+            <label class="label">Subject</label>
+            <input type="text" id="fuSubject" class="input">
+            <label class="label">Body</label>
+            <textarea id="fuBody" class="input textarea" rows="7"></textarea>
+            <div class="token-row">
+              <span class="muted small">Insert:</span>
+              <button class="token fu-token" data-fu-token="{{firstName}}">first name</button>
+              <button class="token fu-token" data-fu-token="{{originalSubject}}">original subject</button>
+              <button class="token fu-token" data-fu-token="{{company}}">company</button>
+            </div>
+            <div class="card-actions">
+              <button class="btn" id="resetFollowUpBtn">Reset to default</button>
+              <button class="btn btn-primary" id="saveFollowUpBtn">Save follow-up</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Follow-up preview</h2></div>
+            <div class="email-preview">
+              <div class="email-meta">
+                <div><span class="muted">Subject:</span> <strong id="fuPvSubject"></strong></div>
+              </div>
+              <div class="email-body" id="fuPvBody"></div>
+            </div>
+            <div class="card-actions">
+              <button class="btn btn-primary follow-up-btn" id="tplFollowUpBtn"><span data-icon="reply" data-size="15"></span> Follow up</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-block" data-block="texting">
+        <h2 class="settings-title">Texting</h2>
+        <div class="card sending-card" id="textSendingCard" hidden>
+          <div class="card-head">
+            <h2><span class="card-ico tone-blue" data-icon="send" data-size="15"></span>Texting in progress</h2>
+            <span class="badge tint-blue" id="textSendingBadge"></span>
+          </div>
+          <div class="progress"><div class="progress-fill" id="textSendingFill"></div></div>
+          <p class="muted small" id="textSendingMeta"></p>
+          <div class="card-actions">
+            <button class="btn" id="textRetryBtn" hidden>Retry failed</button>
+          </div>
+        </div>
+        <div class="two-col template-cols">
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-blue" data-icon="bubble" data-size="15"></span>Mac relay</h2>
+              <span class="badge" id="relayChip">checking…</span>
+            </div>
+            <details class="relay-steps">
+              <summary>Setting it up on the Mac — three steps</summary>
+              <ol class="steps">
+                <li>Generate a relay token below and copy it.</li>
+                <li>On the Mac: <code>cd Mass-hiring/relay &amp;&amp; ./install.sh</code>, paste the token into the config it creates, then run it again.</li>
+                <li>Grant the two macOS permissions it asks for: <strong>Automation</strong>, so it can tell Messages to send, and <strong>Full Disk Access</strong>, so it can read delivery receipts, read receipts and replies.</li>
+              </ol>
+              <p class="muted small">Without Automation nothing sends; without Full Disk Access texts go out but nothing comes back. Full instructions are in <code>relay/README.md</code>.</p>
+            </details>
+            <label class="label">Relay token</label>
+            <div class="field-row">
+              <input type="text" id="relayTokenInput" class="input" readonly placeholder="No token yet — generate one">
+              <button class="btn" id="relayTokenShow">Show</button>
+              <button class="btn" id="relayTokenGen">Generate</button>
+            </div>
+            <div class="hint" id="relayTokenHint">A separate secret from your dashboard password. It unlocks the relay routes and nothing else.</div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="calendar" data-size="15"></span>Pace &amp; hours</h2></div>
+            <div class="field-grid">
+              <div>
+                <label class="label" for="txDailyLimit">Texts per day</label>
+                <input type="number" id="txDailyLimit" class="input" min="1" max="100" placeholder="60">
+                <div class="hint">Up to 100. Above that, Apple bans accounts.</div>
+              </div>
+              <div>
+                <label class="label" for="txGapMin">Shortest gap (seconds)</label>
+                <input type="number" id="txGapMin" class="input" min="20" max="1800" placeholder="45">
+                <div class="hint">The wait is randomised between the two.</div>
+              </div>
+              <div>
+                <label class="label" for="txGapMax">Longest gap (seconds)</label>
+                <input type="number" id="txGapMax" class="input" min="20" max="1800" placeholder="150">
+                <div class="hint">A fixed interval is the clearest bot signal there is.</div>
+              </div>
+              <div>
+                <label class="label" for="txStartHour">Start at (their time)</label>
+                <input type="number" id="txStartHour" class="input" min="0" max="23" placeholder="9">
+              </div>
+              <div>
+                <label class="label" for="txEndHour">Stop at (their time)</label>
+                <input type="number" id="txEndHour" class="input" min="1" max="24" placeholder="19">
+              </div>
+            </div>
+            <label class="check-row"><input type="checkbox" id="txSunday"> Text on Sundays too</label>
+            <div class="card-actions">
+              <button class="btn btn-primary" id="txSavePace">Save pace</button>
+            </div>
+            <div class="hint" id="txOptOutHint"></div>
+          </div>
+        </div>
+        <div class="two-col template-cols">
+          <div class="card">
+            <div class="card-head"><h2><span class="card-ico tone-green" data-icon="doc" data-size="15"></span>Message</h2></div>
+            <textarea id="txBody" class="input textarea" rows="6" placeholder="Hi {{firstName}}…"></textarea>
+            <div class="token-row">
+              <span class="muted small">Insert:</span>
+              <button class="token tx-token" data-tx-token="{{firstName}}">first name</button>
+              <button class="token tx-token" data-tx-token="{{role}}">role</button>
+              <button class="token tx-token" data-tx-token="{{company}}">company</button>
+            </div>
+            <div class="card-actions">
+              <button class="btn" id="txReset">Reset to default</button>
+              <button class="btn btn-primary" id="txSave">Save message</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-navy" data-icon="eye" data-size="15"></span>Preview</h2>
+              <span class="badge" id="txChars"></span>
+            </div>
+            <div class="imessage-preview"><div class="imessage-bubble" id="txPreview"></div></div>
+            <div class="hint" id="txPreviewHint"></div>
+          </div>
+        </div>
+      </div>
+
     </section>
   </main>
 </div>

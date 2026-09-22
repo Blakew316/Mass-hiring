@@ -137,8 +137,9 @@
   function show(view) {
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
-    if (view === 'template') renderTemplatePreview();
-    if (view === 'texting') { renderTexting(); loadRelayToken(); }
+    // The editors moved to Settings; Email and Texting are conversations only.
+    if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); }
+    if (view === 'texting') renderTexting();
   }
   $$('.nav-item').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
   document.addEventListener('click', (e) => {
@@ -605,7 +606,6 @@
     const n = uncontactedIds().length;
     const label = n ? `Email all ${n} not contacted` : 'Everyone has been contacted';
     $$('.email-all-btn').forEach((b) => { b.textContent = label; b.disabled = n === 0; });
-    $('#sendCountBadge').textContent = n ? `${n} to send` : 'nothing to send';
     const due = followUpDueIds().length;
     $$('.follow-up-btn').forEach((b) => {
       b.innerHTML = `${icon('reply', 15)} ${due ? `Follow up with ${due}` : 'No follow-ups due'}`;
@@ -1040,9 +1040,6 @@
     if (b.id === 'tplFollowUpBtn' && followUpDirty) return;   // that button sends the unsaved draft (handled below)
     openCompose(followUpDueIds(), null, { followUp: true });
   }));
-  // From the template page, send exactly what's in the editor (saved or not).
-  $('#tplSendAllBtn').addEventListener('click', () =>
-    openCompose(uncontactedIds(), { subject: $('#tplSubject').value, body: $('#tplBody').value }));
 
   // Add-candidate modal
   // ---------------- Add / edit one candidate ----------------
@@ -2700,16 +2697,8 @@
   function renderTexting() {
     const t = state.texting || {};
     const q = t.queue || {};
-    const by = (s) => state.candidates.filter((c) => c.textStatus === s).length;
-    // Someone who replied was necessarily delivered and read, so the funnel
-    // counts everyone who reached at least that step rather than exactly it.
-    const atLeast = (...kinds) => state.candidates.filter((c) => kinds.includes(c.textStatus)).length;
-    $('#txWithPhone').textContent = t.withPhone || 0;
-    $('#txSent').textContent = atLeast('sent', 'delivered', 'read', 'replied');
-    $('#txDelivered').textContent = atLeast('delivered', 'read', 'replied');
-    $('#txRead').textContent = atLeast('read', 'replied');
-    $('#txReplied').textContent = by('replied');
-
+    // The funnel strip that used to sit here said exactly what the dashboard's
+    // Channels card says, on a page that is now only conversations.
     const n = textableIds().length;
     $('#navTextCount').textContent = n ? String(n) : '';
     const btn = $('#textSendAllBtn');
