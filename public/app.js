@@ -1853,23 +1853,47 @@
     return c.firstName || (c.name ? c.name.trim().split(/\s+/)[0] : '');
   }
 
-  // Client-side mirror of the server's placeholder fill, for live preview.
-  const replaceVars = (text, vars) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] ?? '');
+  // A mirror of fill() in lib/template.js, which is what actually goes out.
+  // The two had drifted: {{lastName}} was not derived from a single "name"
+  // column, so a sheet-imported candidate previewed a blank surname and was
+  // sent the real one; and {{fullName}} did not fall back to the first and
+  // last name, so an Apollo import previewed "there" and was sent their name.
+  // A preview that does not match the send is worse than no preview.
+  // template-parity-test feeds both implementations the same records and
+  // fails if they ever disagree again.
+  const TPL_FALLBACKS = { firstName: 'there', fullName: 'there', role: 'professional' };
+  const replaceVars = (text, vars) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => {
+    const v = vars[k];
+    if (v) return v;
+    return TPL_FALLBACKS[k] || '';
+  });
   function fillClient(text, cand) {
     const s = state.settings;
     const vars = {
-      firstName: firstNameOf(cand) || 'there',
-      lastName: cand.lastName || '',
-      fullName: cand.name || 'there',
-      role: cand.role || 'professional',
+      firstName: firstNameOf(cand),
+      lastName: cand.lastName || (cand.name ? cand.name.trim().split(/\s+/).slice(1).join(' ') : ''),
+      fullName: cand.name || [cand.firstName, cand.lastName].filter(Boolean).join(' '),
+      role: cand.role || '',
       company: cand.company || '',
       email: cand.email || '',
       calendlyUrl: s.calendlyUrl || '',
+      originalSubject: cand.lastSubject || '',
     };
-    // The subject this person received (or would receive), for {{originalSubject}} in follow-ups.
-    vars.originalSubject = cand.lastSubject || replaceVars($('#tplSubject').value || state.template.subject, vars);
+    // Preview-only nicety: for somebody not yet emailed there is no original
+    // subject, so a follow-up preview shows the subject they *would* get
+    // rather than "Re: ". Anyone actually due a follow-up has been emailed and
+    // carries the real one, which is what the server uses.
+    if (!vars.originalSubject) {
+      vars.originalSubject = replaceVars($('#tplSubject').value || state.template.subject, vars);
+    }
     return replaceVars(text, vars);
   }
+
+  // A subject line is collapsed to single spaces and trimmed before it is sent
+  // (lib/template.js), because a placeholder that resolves to nothing would
+  // otherwise leave a gap in it. The preview has to do the same or it shows a
+  // subject nobody will receive.
+  const fillSubject = (text, cand) => fillClient(text, cand).replace(/\s+/g, ' ').trim();
   // Follow-ups: who is due comes from the server (same rule the queue uses).
   const followUpDueIds = () => (state && state.followUp && state.followUp.dueIds) || [];
 
@@ -1882,7 +1906,7 @@
         `<option value="${c.id}">${esc(c.name || c.email)}</option>`).join('');
     if ([...sel.options].some((o) => o.value === current)) sel.value = current;
     const cand = state.candidates.find((c) => c.id === sel.value) || SAMPLE;
-    $('#pvSubject').textContent = fillClient($('#tplSubject').value, cand);
+    $('#pvSubject').textContent = fillSubject($('#tplSubject').value, cand);
     $('#pvFrom').textContent = state.sending.from
       ? (state.settings.fromName ? `${state.settings.fromName} <${state.sending.from}>` : state.sending.from)
       : 'your work email (set up in Settings)';
@@ -2085,7 +2109,7 @@
     if (!state) return;
     const sel = $('#previewCandidate');
     const cand = state.candidates.find((c) => c.id === sel.value) || state.candidates.find((c) => c.status === 'emailed') || SAMPLE;
-    $('#fuPvSubject').textContent = fillClient($('#fuSubject').value, cand);
+    $('#fuPvSubject').textContent = fillSubject($('#fuSubject').value, cand);
     $('#fuPvBody').innerHTML = esc(fillClient($('#fuBody').value, cand)).split('\n').join('<br>');
     const fu = state.followUp || { days: 3, max: 2 };
   }

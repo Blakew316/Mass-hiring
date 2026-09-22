@@ -688,6 +688,7 @@ app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
   const db = await store.load();
   const c = db.candidates.find((x) => x.id === req.params.id);
   if (!c) throw new Error('Candidate not found.');
+  const wasDeclined = c.status === 'declined';
   const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
   for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
   if ('email' in req.body) {
@@ -696,6 +697,14 @@ app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
     c.email = email;
   }
   await store.save(db);
+  // Marking somebody "Not interested" has to stop a text that is already
+  // waiting to go out. The ranking reads the status, but the queue does not —
+  // it only consults its own opt-out list — so a text queued before the change
+  // was still handed to the Mac and sent to somebody who had said no. This is
+  // the one mistake the daily cap exists to avoid.
+  if (!wasDeclined && c.status === 'declined' && phone.normalize(c.phone)) {
+    await textQueue.updateQ((q) => { if (!textQueue.addOptOut(q, c.phone)) return false; });
+  }
   res.json({ ok: true, candidate: c });
 }));
 
