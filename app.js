@@ -161,45 +161,76 @@ function feedWindow(events) {
 }
 
 // ---------- App state ----------
-app.get('/api/state', asyncRoute(async (_req, res) => {
+// What a candidate looks like to the browser. An allowlist rather than a
+// spread, because the browser polls this for every candidate every 30 seconds:
+// a field added to the store for the server's own use would otherwise start
+// riding along on a payload that is already the largest thing the app sends.
+// Anything not here is deliberately server-side only — the record the browser
+// never reads (messageId, threadId, sheetRow, city, altEmails, lastFollowUpAt,
+// calendlyEventUri). If the UI needs one of them, add it here on purpose.
+const CANDIDATE_FIELDS = [
+  'id', 'name', 'firstName', 'lastName', 'email', 'phone',
+  'role', 'pastRoles', 'company', 'location', 'notes', 'source',
+  'status', 'addedAt',
+  'lastEmailedAt', 'openedAt', 'lastReplyAt', 'lastSubject', 'gmailThreadId',
+  'emailUnread', 'followUpCount',
+  'lastTextedAt', 'textStatus', 'textUnread',
+  'textDeliveredAt', 'textReadAt', 'textRepliedAt',
+  'bookedAt', 'bookedEvent', 'bookedJoinUrl',
+];
+
+function publicCandidate(c) {
+  const out = {};
+  for (const k of CANDIDATE_FIELDS) if (c[k] !== undefined) out[k] = c[k];
+  const thread = c.textThread;
+  const last = thread && thread.length ? thread[thread.length - 1] : null;
+  const real = (c.replies || []).filter((r) => !r.kind);
+  const lastReply = real[real.length - 1] || null;
+  // Industry is derived, never stored — it is a view of role/company/history
+  // and must not drift out of date behind a saved copy of itself.
+  out.industry = priority.industry(c).code;
+  out.textCount = thread ? thread.length : 0;
+  out.textLast = last ? { dir: last.dir, ts: last.ts, text: last.text.slice(0, 120) } : null;
+  // Email's conversation lives in Gmail, so what rides along here is only
+  // enough to list and sort it: how many real replies, and the last one.
+  out.emailReplies = real.length;
+  out.emailBounced = (c.replies || []).some((r) => r.kind === 'bounce');
+  out.emailLast = lastReply
+    ? { ts: lastReply.date || c.lastReplyAt || '', text: String(lastReply.text || lastReply.snippet || '').slice(0, 160) }
+    : null;
+  return out;
+}
+
+app.get('/api/state', asyncRoute(async (req, res) => {
   const db = await store.load();
   const lastError = db.events.find((e) => e.type === 'error' && Date.now() - new Date(e.ts).getTime() < 24 * 3600 * 1000);
-  const sendingNow = await mailer.sendStatus(db.settings);
-  res.json({
-    // Industry is derived, never stored — it is a view of role/company/history
-    // and must not drift out of date behind a saved copy of itself.
-    candidates: db.candidates.map((c) => {
-      const { textThread, replies, ...rest } = c;
-      const last = textThread && textThread.length ? textThread[textThread.length - 1] : null;
-      const real = (replies || []).filter((r) => !r.kind);
-      const lastReply = real[real.length - 1] || null;
-      return {
-        ...rest,
-        industry: priority.industry(c).code,
-        textCount: textThread ? textThread.length : 0,
-        textLast: last ? { dir: last.dir, ts: last.ts, text: last.text.slice(0, 120) } : null,
-        // Email's conversation lives in Gmail, so what rides along here is only
-        // enough to list and sort it: how many real replies, and the last one.
-        emailReplies: real.length,
-        emailBounced: (replies || []).some((r) => r.kind === 'bounce'),
-        emailLast: lastReply
-          ? { ts: lastReply.date || c.lastReplyAt || '', text: String(lastReply.text || lastReply.snippet || '').slice(0, 160) }
-          : null,
-      };
-    }),
+  // Four independent reads. On Netlify Blobs each one is its own round trip, so
+  // awaiting them in a line made this route as slow as the sum of them; nothing
+  // here depends on anything else here.
+  const [googleStatus, textQ, emailQ, relay, storageBackend] = await Promise.all([
+    google.status(db.settings),
+    textQueue.loadQ(),
+    queue.loadQ(),
+    storage.getJson('relay').catch(() => null),
+    storage.backend(),
+  ]);
+  // Derived from the status above rather than fetching it a second time.
+  const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
+  const payload = {
+    candidates: db.candidates.map(publicCandidate),
     industries: priority.INDUSTRY_LABELS,
     events: feedWindow(db.events),
     lastError: lastError ? lastError.message : '',
     template: db.template,
     followUp: { template: db.followUp, dueIds: followUpDueIds(db), ...followUpSettings(db.settings) },
     settings: maskedSettings(db.settings, sendingNow.from),
-    google: await google.status(db.settings),
+    google: googleStatus,
     sending: sendingNow,
     stats: stats(db),
     baseUrl: google.baseUrl(),
-    storage: await storage.backend(),
+    storage: storageBackend,
     auth: { required: auth.required() },
-    queue: queue.status(await queue.loadQ(), db.settings, sendingNow.from),
+    queue: queue.status(emailQ, db.settings, sendingNow.from),
     maxImmediate: MAX_PER_REQUEST,
     interviews: db.interviews || [],
     apollo: { configured: Boolean(db.settings.apolloApiKey), maxPerPull: apollo.MAX_PER_PULL, batch: apollo.ENRICH_BATCH },
@@ -209,8 +240,8 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
       // id -> { rank, score, reason } for everyone worth texting, plus why
       // anyone else is not. Sent as a small map rather than on each candidate
       // so the candidate list stays the same shape it has always been.
-      priority: textPriority(db, await textQueue.loadQ()),
-      queue: textQueue.status(await textQueue.loadQ(), db.settings, await storage.getJson('relay').catch(() => null)),
+      priority: textPriority(db, textQ),
+      queue: textQueue.status(textQ, db.settings, relay),
       tokenSet: Boolean(db.settings.relayToken || (process.env.RELAY_TOKEN || '').trim()),
     },
     calendly: {
@@ -219,7 +250,20 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
       lastSyncAt: db.calendlyLastSyncAt || null,
       error: db.calendlySyncError || '',
     },
-  });
+  };
+
+  // The browser asks for this every 30 seconds and most of the time nothing
+  // has changed. The body is byte-stable for a given state, so hashing it lets
+  // an unchanged poll cost 304 bytes instead of megabytes — and the browser,
+  // seeing no new state, skips the re-render too. Weak tag: this is semantic
+  // equality of the payload, not of the bytes on any particular encoding.
+  const body = JSON.stringify(payload);
+  const etag = `W/"${crypto.createHash('sha1').update(body).digest('base64url')}"`;
+  res.set('ETag', etag);
+  // Revalidate every time — never serve this from cache without asking.
+  res.set('Cache-Control', 'no-cache, private');
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  return res.type('application/json').send(body);
 }));
 
 // ---------- Settings & template ----------

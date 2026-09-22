@@ -1096,6 +1096,12 @@ tr.row-muted { opacity: .55; }
 .conv.unread .conv-last { color: var(--ink); }
 .conv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex-shrink: 0; }
 .conv.on .conv-dot { background: #fff; }
+/* The tail of a long conversation list: how many more are waiting, and the
+   thing you scroll into to load them. */
+.conv-more {
+  padding: 10px 14px 14px; text-align: center;
+  font-size: 11.5px; color: var(--muted); letter-spacing: .02em;
+}
 .conv-none { padding: 22px 14px; font-size: 12.5px; color: var(--muted); text-align: center; line-height: 1.5; }
 
 /* The table's avatars are tinted per row; a conversation's is plain, and has

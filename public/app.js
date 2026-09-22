@@ -123,9 +123,21 @@
     $('#signOutBtn').hidden = !(state.auth && state.auth.required);
   }
 
+  // The 30-second poll. The server tags the state, so an unchanged poll comes
+  // back 304 with no body — nothing to parse, and nothing to re-render, which
+  // is the whole point: most polls change nothing and should cost nothing.
+  let stateTag = '';
   async function refresh() {
-    state = await api('/api/state');
+    const res = await fetch('/api/state', {
+      headers: stateTag ? { 'If-None-Match': stateTag } : {},
+    });
+    if (res.status === 304) return false;
+    if (res.status === 401) { showLogin(); throw new Error('Please sign in.'); }
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    stateTag = res.headers.get('ETag') || '';
+    state = await res.json();
     renderAll();
+    return true;
   }
 
   // ---------------- Toasts ----------------
@@ -139,9 +151,14 @@
   const oops = (err) => toast(err.message || String(err), true);
 
   // ---------------- Navigation ----------------
+  let currentView = 'dashboard';
   function show(view) {
+    currentView = view;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+    // Anything that fell behind while you were on another page is drawn now,
+    // rather than on every poll for six pages at once.
+    if (staleViews.has(view)) renderView(view);
     // The editors moved to Settings; Email and Texting are conversations only.
     if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); }
     if (view === 'texting') renderTexting();
@@ -170,7 +187,20 @@
       replied: textCount((c) => c.textStatus === 'replied'),
       dead: textCount((c) => c.textStatus === 'not-imessage'),
     };
-    const emailOpened = textCount((c) => Boolean(c.openedAt));
+    // The email funnel, counted the way the texting one already was: how many
+    // people ever reached each stage, so every row is a subset of the one above
+    // it. Counting the *current status* instead mixed two different questions —
+    // somebody who opened and then replied has status "replied", so they landed
+    // in Opened but not in Sent, and the funnel read 200%.
+    const e = {
+      sent: textCount((c) => Boolean(c.lastEmailedAt) || c.emailBounced || c.status === 'bounced'),
+      opened: textCount((c) => Boolean(c.openedAt)),
+      replied: textCount((c) => c.emailReplies > 0 || Boolean(c.lastReplyAt)),
+      // Scoped to people who were emailed: a booking that came from a text
+      // belongs in the texting story, not this one.
+      booked: textCount((c) => Boolean(c.bookedAt) && Boolean(c.lastEmailedAt)),
+      bounced: textCount((c) => c.emailBounced || c.status === 'bounced'),
+    };
     const contacted = textCount((c) => Boolean(c.lastEmailedAt) || Boolean(c.lastTextedAt));
 
     $('#statTotal').textContent = s.total;
@@ -178,13 +208,10 @@
     $('#statReplied').textContent = s.replied;
     // Both tiles used to be email-only, which made texting invisible on the
     // page people actually look at.
-    $('#statContactedSplit').textContent = `${s.emailed.toLocaleString()} emailed · ${t.sent.toLocaleString()} texted`;
+    $('#statContactedSplit').textContent = `${e.sent.toLocaleString()} emailed · ${t.sent.toLocaleString()} texted`;
     $('#statRepliedSplit').textContent = `${t.replied.toLocaleString()} by text`;
     $('#statBooked').textContent = state.calendly && state.calendly.syncEnabled ? upcomingInterviews().length : s.booked;
-    $('#navCount').textContent = s.total || '';
-    renderEmailAllButtons();
     renderSendingCard();
-    scheduleQueueWork();
 
     // Pipeline bars
     const steps = [
@@ -203,7 +230,7 @@
         <div class="pipe-count">${n}</div>
       </div>`).join('');
 
-    renderChannels(t, emailOpened, s);
+    renderChannels(t, e);
     renderTextToday(t);
 
     renderFeed();
@@ -401,7 +428,7 @@
   // be compared at a glance. Texting is the one that can show delivered and
   // read at all — email has no equivalent — so the rows deliberately differ
   // rather than being forced into a shared shape that flatters neither.
-  function renderChannels(t, emailOpened, s) {
+  function renderChannels(t, e) {
     const pct = (n, of) => (of ? `${Math.round((n / of) * 100)}%` : '—');
     const funnel = (el, rows, top) => {
       const base = Math.max(1, top);
@@ -415,12 +442,12 @@
     };
 
     funnel('#emailFunnel', [
-      ['Sent', s.emailed, 'var(--blue)', ''],
-      ['Opened', emailOpened, 'var(--mint)'],
-      ['Replied', s.replied, 'var(--green)'],
-      ['Booked', s.booked, '#23a55a'],
-      ['Bounced', s.bounced || 0, 'var(--amber)'],
-    ], s.emailed);
+      ['Sent', e.sent, 'var(--blue)', ''],
+      ['Opened', e.opened, 'var(--mint)'],
+      ['Replied', e.replied, 'var(--green)'],
+      ['Booked', e.booked, '#23a55a'],
+      ['Bounced', e.bounced, 'var(--amber)'],
+    ], e.sent);
 
     funnel('#textFunnel', [
       ['Sent', t.sent, 'var(--blue)', ''],
@@ -986,7 +1013,9 @@
     pageRows.forEach((c) => (e.target.checked ? selected.add(c.id) : selected.delete(c.id)));
     renderCandidates();
   });
-  $('#searchInput').addEventListener('input', (e) => { search = e.target.value; renderCandidates(); });
+  // 3,514 rows filtered and rebuilt on every keystroke was ~86 ms a character.
+  const searchRender = debounce(renderCandidates, 120);
+  $('#searchInput').addEventListener('input', (e) => { search = e.target.value; searchRender(); });
   // Arriving on the tab starts at the overview; it is a landing page, not a
   // filter that persists from whatever was last looked at.
   $$('.nav-item[data-view="candidates"]').forEach((b) => b.addEventListener('click', () => {
@@ -2264,6 +2293,41 @@
   };
 
   // Everyone we have actually exchanged a message with, newest first.
+  // Both conversation lists are sorted by recency and can run to thousands of
+  // rows. Building them all cost 15,813 DOM nodes for Texting and 5,624 for
+  // Email — rebuilt on every poll, for a list nobody scrolls past the top of.
+  // So: render a screenful, and grow when you reach the bottom.
+  const CONV_PAGE = 60;
+
+  // The row you have open is always included, so a conversation you opened
+  // from a search does not vanish when the search is cleared.
+  function convPage(rows, shown, openId) {
+    const slice = rows.slice(0, shown);
+    if (openId && !slice.some((c) => c.id === openId)) {
+      const open = rows.find((c) => c.id === openId);
+      if (open) slice.push(open);
+    }
+    return slice;
+  }
+
+  // Writing innerHTML resets scrollTop. A poll landing while you are half way
+  // down the list should not throw you back to the top.
+  function keepingScroll(el, write) {
+    const top = el.scrollTop;
+    write();
+    if (top && el.scrollHeight > el.clientHeight) el.scrollTop = top;
+  }
+
+  const moreRow = (n) => (n > 0 ? `<li class="conv-more">${n.toLocaleString()} more</li>` : '');
+
+  // Grow the list as it is scrolled, rather than making anyone click for it.
+  function growOnScroll(el, more, render) {
+    el.addEventListener('scroll', () => {
+      if (el.scrollTop + el.clientHeight < el.scrollHeight - 240) return;
+      if (more()) render();
+    }, { passive: true });
+  }
+
   function conversations() {
     const all = (state.candidates || []).filter((c) => c.textCount > 0);
     const q = convSearch.trim().toLowerCase();
@@ -2275,13 +2339,16 @@
 
   const unreadCount = () => (state.candidates || []).filter((c) => c.textUnread).length;
 
+  let convShown = CONV_PAGE;
   function renderConvList() {
-    const rows = conversations();
+    const all = conversations();
+    const rows = convPage(all, convShown, openThreadId);
     const n = unreadCount();
     $('#convUnreadN').textContent = n || '';
     $('#convUnreadN').hidden = !n;
-    $$('.conv-tab').forEach((b) => b.classList.toggle('on', b.dataset.convTab === convFilter));
-    $('#convList').innerHTML = rows.length
+    $$('[data-conv-tab]').forEach((b) => b.classList.toggle('on', b.dataset.convTab === convFilter));
+    const el = $('#convList');
+    keepingScroll(el, () => { el.innerHTML = rows.length
       ? rows.map((c) => {
           const last = c.textLast || {};
           const who = c.name || textPhoneOf(c) || 'Unknown';
@@ -2293,23 +2360,29 @@
             </span>
             ${c.textUnread ? '<span class="conv-dot" aria-label="unread"></span>' : ''}
           </button></li>`;
-        }).join('')
-      : `<li class="conv-none">${convFilter === 'unread' ? 'Nothing unread.' : convSearch ? 'No conversation matches that.' : 'No conversations yet. Texts you send show up here.'}</li>`;
+        }).join('') + moreRow(all.length - rows.length)
+      : `<li class="conv-none">${convFilter === 'unread' ? 'Nothing unread.' : convSearch ? 'No conversation matches that.' : 'No conversations yet. Texts you send show up here.'}</li>`; });
   }
 
-  async function openThread(id, { markSeen = true } = {}) {
+  // `quiet` means this is the background refresh of a conversation already on
+  // screen, not you opening one. Blanking it to "Loading…" every 30 seconds
+  // made a conversation you were reading flicker; leave what is there and swap
+  // it when the new copy arrives.
+  async function openThread(id, { markSeen = true, quiet = false } = {}) {
     openThreadId = id;
     threadLoading = true;
     renderConvList();
     $('#threadEmpty').hidden = true;
     $('#threadLive').hidden = false;
-    $('#threadBody').innerHTML = '<p class="thread-loading">Loading…</p>';
+    if (!quiet) $('#threadBody').innerHTML = '<p class="thread-loading">Loading…</p>';
     try {
       thread = await api(`/api/texts/thread?id=${encodeURIComponent(id)}`);
     } catch (e) {
+      threadLoading = false;
+      // A failed background refresh keeps the conversation you were reading.
+      if (quiet) return;
       thread = null;
       $('#threadBody').innerHTML = `<p class="thread-loading">${esc(e.message)}</p>`;
-      threadLoading = false;
       return;
     }
     threadLoading = false;
@@ -2415,13 +2488,16 @@
 
   const mailUnreadCount = () => (state.candidates || []).filter((c) => c.emailUnread).length;
 
+  let mailShown = CONV_PAGE;
   function renderMailList() {
-    const rows = mailboxes();
+    const all = mailboxes();
+    const rows = convPage(all, mailShown, openMailId);
     const n = mailUnreadCount();
     $('#mailUnreadN').textContent = n || '';
     $('#mailUnreadN').hidden = !n;
     $$('[data-mail-tab]').forEach((b) => b.classList.toggle('on', b.dataset.mailTab === mailFilter));
-    $('#mailList').innerHTML = rows.length
+    const el = $('#mailList');
+    keepingScroll(el, () => { el.innerHTML = rows.length
       ? rows.map((c) => {
           const last = c.emailLast;
           const ts = (last && last.ts) || c.lastReplyAt || c.lastEmailedAt || '';
@@ -2435,23 +2511,24 @@
             ${c.emailBounced && !c.emailReplies ? '<span class="conv-flag" title="Bounced">!</span>' : ''}
             ${c.emailUnread ? '<span class="conv-dot"></span>' : ''}
           </button></li>`;
-        }).join('')
-      : `<li class="conv-none">${mailFilter === 'unread' ? 'Nothing unread.' : mailFilter === 'replied' ? 'Nobody has replied by email yet.' : mailSearch ? 'No conversation matches that.' : 'Nothing emailed yet.'}</li>`;
+        }).join('') + moreRow(all.length - rows.length)
+      : `<li class="conv-none">${mailFilter === 'unread' ? 'Nothing unread.' : mailFilter === 'replied' ? 'Nobody has replied by email yet.' : mailSearch ? 'No conversation matches that.' : 'Nothing emailed yet.'}</li>`; });
   }
 
-  async function openMail(id, { markSeen = true } = {}) {
+  async function openMail(id, { markSeen = true, quiet = false } = {}) {
     openMailId = id;
     mailLoading = true;
     renderMailList();
     $('#mailEmpty').hidden = true;
     $('#mailLive').hidden = false;
-    $('#mailBody').innerHTML = '<p class="thread-loading">Reading the conversation from Gmail…</p>';
+    if (!quiet) $('#mailBody').innerHTML = '<p class="thread-loading">Reading the conversation from Gmail…</p>';
     try {
       mail = await api(`/api/emails/thread?id=${encodeURIComponent(id)}`);
     } catch (e) {
+      mailLoading = false;
+      if (quiet) return;
       mail = null;
       $('#mailBody').innerHTML = `<p class="thread-loading">${esc(e.message)}</p>`;
-      mailLoading = false;
       return;
     }
     mailLoading = false;
@@ -2516,7 +2593,9 @@
       box.style.height = '';
       toast('Reply sent.');
       await refresh();
-      await openMail(openMailId, { markSeen: false });
+      // The conversation is already on screen — swap the new copy in rather
+      // than blanking it, so your reply appears without a flash.
+      await openMail(openMailId, { markSeen: false, quiet: true });
     } catch (e) {
       toast(e.message, true);
       $('#mailSend').disabled = false;
@@ -2528,8 +2607,15 @@
       const b = e.target.closest('[data-mail]');
       if (b) openMail(b.dataset.mail);
     });
-    $$('[data-mail-tab]').forEach((b) => b.addEventListener('click', () => { mailFilter = b.dataset.mailTab; renderMailList(); }));
-    $('#mailSearch').addEventListener('input', (e) => { mailSearch = e.target.value; renderMailList(); });
+    $$('[data-mail-tab]').forEach((b) => b.addEventListener('click', () => { mailFilter = b.dataset.mailTab; mailShown = CONV_PAGE; renderMailList(); }));
+    // Debounced: every keystroke used to rebuild the whole list.
+    const mailSearchRender = debounce(renderMailList, 120);
+    $('#mailSearch').addEventListener('input', (e) => { mailSearch = e.target.value; mailShown = CONV_PAGE; mailSearchRender(); });
+    growOnScroll($('#mailList'), () => {
+      if (mailShown >= mailboxes().length) return false;
+      mailShown += CONV_PAGE;
+      return true;
+    }, renderMailList);
     $('#mailCompose').addEventListener('submit', (e) => { e.preventDefault(); sendMailReply(); });
     // An email is long-form, so Enter makes a paragraph and Cmd/Ctrl-Enter sends.
     $('#mailInput').addEventListener('keydown', (e) => {
@@ -2681,8 +2767,17 @@
       const b = e.target.closest('[data-conv]');
       if (b) openThread(b.dataset.conv);
     });
-    $$('.conv-tab').forEach((b) => b.addEventListener('click', () => { convFilter = b.dataset.convTab; renderConvList(); }));
-    $('#convSearch').addEventListener('input', (e) => { convSearch = e.target.value; renderConvList(); });
+    // Email's tab strip is styled with the same class, so match on the data
+    // attribute: a document-wide '.conv-tab' bound this handler to Email's tabs
+    // too, which set convFilter to undefined and lit all three of them at once.
+    $$('[data-conv-tab]').forEach((b) => b.addEventListener('click', () => { convFilter = b.dataset.convTab; convShown = CONV_PAGE; renderConvList(); }));
+    const convSearchRender = debounce(renderConvList, 120);
+    $('#convSearch').addEventListener('input', (e) => { convSearch = e.target.value; convShown = CONV_PAGE; convSearchRender(); });
+    growOnScroll($('#convList'), () => {
+      if (convShown >= conversations().length) return false;
+      convShown += CONV_PAGE;
+      return true;
+    }, renderConvList);
     $('#threadCompose').addEventListener('submit', (e) => { e.preventDefault(); sendReply(); });
     // Enter sends, shift-enter makes a new line — the way every messenger works.
     $('#threadInput').addEventListener('keydown', (e) => {
@@ -3087,22 +3182,50 @@
   });
 
   // ---------------- Boot ----------------
+  // The five expensive renders, and the page each one draws. Measured against
+  // 3,514 candidates they were 55 of the 61 ms a full render cost, and four of
+  // the five were drawing a page nobody was looking at. They run for the view
+  // you are on; the others are marked stale and drawn when you arrive.
+  const VIEW_RENDERERS = {
+    dashboard: [renderDashboard],
+    candidates: [renderRoleFilter, renderCandidates],
+    template: [renderMailList],
+    texting: [renderConvList],
+  };
+  const staleViews = new Set();
+
+  function renderView(view) {
+    const fns = VIEW_RENDERERS[view];
+    if (!fns) return;
+    staleViews.delete(view);
+    for (const fn of fns) fn();
+  }
+
+  // The counts beside the nav items are visible from every page, so they are
+  // cheap by construction and always run.
+  function renderNavCounts() {
+    $('#navCount').textContent = (state.stats && state.stats.total) || '';
+    $('#navEmailCount').textContent = mailUnreadCount() || '';
+  }
+
   function renderAll() {
     renderNotices();
-    renderDashboard();
-    renderRoleFilter();
-    renderCandidates();
     renderApollo();
     renderTexting();
     mountTheme();
     mountBell();
     renderBell();
-    renderConvList();
-    renderMailList();
-    $('#navEmailCount').textContent = mailUnreadCount() || '';
+    renderNavCounts();
+    // These two are cheap and cross-view: the send and follow-up buttons live
+    // in the Email header, the due badge in Settings, and the queue timer has
+    // to keep running wherever you are. They used to ride along inside
+    // renderDashboard, which meant they stopped updating once that became
+    // dashboard-only.
+    renderEmailAllButtons();
+    scheduleQueueWork();
     // A thread left open stays live: a reply arriving while you are reading it
     // should appear, not wait for you to click away and back.
-    if (openThreadId && !threadLoading) openThread(openThreadId, { markSeen: false });
+    if (openThreadId && !threadLoading) openThread(openThreadId, { markSeen: false, quiet: true });
     renderSettings();
     // Only prime the template editor when there are no unsaved edits.
     if (!templateDirty) {
@@ -3112,6 +3235,8 @@
     renderAttachments();
     renderTemplatePreview();
     renderFollowUpEditor();
+    for (const v of Object.keys(VIEW_RENDERERS)) staleViews.add(v);
+    renderView(currentView);
   }
 
   // Booking times (feed + phone push) are formatted server-side in the
@@ -3144,7 +3269,14 @@
       if (params.get('error')) toast(`Google sign-in problem: ${params.get('error')}`, true);
       history.replaceState(null, '', location.pathname);
     }
-    setInterval(() => refresh().catch(() => {}), 30000);
+    // Polling a tab nobody is looking at buys nothing and costs a function
+    // call every 30 seconds for as long as it stays open. Coming back to the
+    // tab refreshes straight away, so it is also fresher than waiting out the
+    // rest of an interval — which is what used to happen.
+    setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 30000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refresh().catch(() => {});
+    });
     checkReplies();
     setInterval(checkReplies, 60000);
     syncCalendly();
