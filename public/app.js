@@ -546,6 +546,7 @@
         <td><div class="row-actions">
           <button class="icon-btn act-edit" title="Edit details (name, phone, role…)">${icon('doc', 16)}</button>
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
+          ${textPhoneOf(c) ? `<button class="icon-btn act-text" title="Send a text">${icon('bubble', 16)}</button>` : ''}
           ${c.status === 'emailed' ? `<button class="icon-btn act-followup" title="Follow up (reply in the same conversation)">${icon('reply', 16)}</button>` : ''}
           <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
         </div></td>
@@ -555,10 +556,27 @@
     $('#checkAll').checked = rows.length > 0 && rows.every((c) => selected.has(c.id));
   }
 
+  // What can actually be done with the current tick-boxes. Texting is offered
+  // only for the selected people who have a number, and says how many that is
+  // — "Text 12" when 30 are selected is the honest number, and the difference
+  // is exactly the thing worth knowing.
+  const selectedCandidates = () => state.candidates.filter((c) => selected.has(c.id));
+  const selectedTextable = () => selectedCandidates().filter((c) => textPhoneOf(c));
+
   function updateSendButton() {
-    const btn = $('#sendSelectedBtn');
-    btn.disabled = selected.size === 0;
-    $('#sendSelectedLabel').textContent = selected.size > 1 ? `Email ${selected.size} selected` : 'Email selected';
+    const bar = $('#selectionBar');
+    const n = selected.size;
+    bar.hidden = n === 0;
+    if (!n) return;
+    const textable = selectedTextable().length;
+    $('#selCount').textContent = `${n} selected`;
+    $('#selEmailBtn').innerHTML = `${icon('mail', 15)} Email ${n}`;
+    $('#selTextBtn').innerHTML = `${icon('bubble', 15)} Text ${textable}`;
+    $('#selTextBtn').disabled = textable === 0;
+    $('#selBothBtn').disabled = textable === 0;
+    $('#selNote').textContent = textable === 0
+      ? 'None of these have a phone number yet'
+      : (textable < n ? `${n - textable} of them have no number` : '');
   }
 
   $('#candidateRows').addEventListener('click', (e) => {
@@ -576,6 +594,7 @@
     // want: putting a number on someone who has none.
     if (e.target.closest('.add-number')) { openCandidate(cand, { focus: 'phone' }); return; }
     if (e.target.closest('.act-email')) { openCompose([id]); return; }
+    if (e.target.closest('.act-text')) { openTextCompose([id]); return; }
     if (e.target.closest('.act-followup')) { openCompose([id], null, { followUp: true }); return; }
     if (e.target.closest('.act-delete')) {
       if (confirm(`Remove ${cand.name || cand.email} from the pipeline?`)) {
@@ -607,7 +626,14 @@
     $$('#filterChips .chip').forEach((c) => c.classList.toggle('active', c === chip));
     renderCandidates();
   });
-  $('#sendSelectedBtn').addEventListener('click', () => openCompose([...selected]));
+  $('#selEmailBtn').addEventListener('click', () => openCompose([...selected]));
+  $('#selTextBtn').addEventListener('click', () => openTextCompose(selectedTextable().map((c) => c.id)));
+  $('#selBothBtn').addEventListener('click', () => {
+    // Text first: it opens, queues and closes, leaving the email composer —
+    // which needs the window to stay open while it sends — to run last.
+    openTextCompose(selectedTextable().map((c) => c.id), { thenEmail: [...selected] });
+  });
+  $('#selClearBtn').addEventListener('click', () => { selected.clear(); renderCandidates(); });
   $('#candEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
   $('#dashEmailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
   $$('.follow-up-btn').forEach((b) => b.addEventListener('click', () => {
@@ -1687,6 +1713,90 @@
     $('#saveSettingsBtn').textContent = d ? 'Save settings •' : 'Save settings';
   }
   $$('#view-settings input').forEach((el) => el.addEventListener('input', () => setSettingsDirty(true)));
+
+  // ---------------- Text composer ----------------
+  // Texting one person, or a handful, without touching the saved template.
+  // Queued rather than sent on the spot: the pace, the daily cap and the
+  // recipient's own clock are all decided server-side, and a text that goes
+  // out the instant a button is pressed would defeat all three.
+  let textComposeIds = [];
+  let textComposeThenEmail = null;
+
+  function openTextCompose(ids, { thenEmail = null } = {}) {
+    const people = state.candidates.filter((c) => ids.includes(c.id) && textPhoneOf(c));
+    if (!people.length) {
+      toast('None of those people have a phone number yet — add one from the Text column.', true);
+      return;
+    }
+    textComposeIds = people.map((c) => c.id);
+    textComposeThenEmail = thenEmail;
+    $('#textComposeTitle').textContent = people.length === 1
+      ? `Text ${people[0].name || prettyPhone(textPhoneOf(people[0]))}`
+      : `Text ${people.length} people`;
+    $('#textComposeTo').innerHTML = people.slice(0, 12).map((c) =>
+      `<span class="to-chip">${esc(c.name || 'Unnamed')} <span class="muted">${esc(prettyPhone(textPhoneOf(c)))}</span></span>`).join('')
+      + (people.length > 12 ? `<span class="to-chip muted">+${people.length - 12} more</span>` : '');
+    $('#textComposeBody').value = (state.texting && state.texting.template && state.texting.template.body) || '';
+    $('#textComposeModal').hidden = false;
+    renderTextComposePreview();
+    setTimeout(() => $('#textComposeBody').focus(), 40);
+  }
+
+  function renderTextComposePreview() {
+    const who = state.candidates.find((c) => c.id === textComposeIds[0]) || {};
+    const first = who.firstName || (who.name || '').split(' ')[0] || 'there';
+    const body = ($('#textComposeBody').value || '')
+      .replace(/\{\{\s*firstName\s*\}\}/g, first)
+      .replace(/\{\{\s*fullName\s*\}\}/g, who.name || first)
+      .replace(/\{\{\s*role\s*\}\}/g, who.role || 'professional')
+      .replace(/\{\{\s*company\s*\}\}/g, who.company || '');
+    const link = state.settings.calendlyUrl;
+    const full = link && !body.includes(link) ? `${body.trim()}\n\n${link}` : body.trim();
+    $('#textComposePreview').textContent = full;
+
+    const q = (state.texting && state.texting.queue) || {};
+    const n = textComposeIds.length;
+    const bits = [`${full.length} characters`];
+    if (!q.relay || !q.relay.online) bits.push('the Mac relay is offline, so these will wait until it is back');
+    else if (n > 1) bits.push(`sent one at a time, roughly every ${Math.round(((q.minGap || 45) + (q.maxGap || 150)) / 2)}s`);
+    if (q.startHour !== undefined) bits.push(`only between ${q.startHour}:00 and ${q.endHour}:00 where each person lives`);
+    if (q.remainingToday !== undefined && n > q.remainingToday) bits.push(`only ${q.remainingToday} fit under today's cap — the rest go tomorrow`);
+    $('#textComposeHint').textContent = bits.join(' · ');
+  }
+
+  $('#textComposeBody').addEventListener('input', renderTextComposePreview);
+  $$('.tc-token').forEach((b) => b.addEventListener('click', () => {
+    const el = $('#textComposeBody');
+    const at = el.selectionStart ?? el.value.length;
+    el.value = el.value.slice(0, at) + b.dataset.tcToken + el.value.slice(el.selectionEnd ?? at);
+    el.focus();
+    el.selectionStart = el.selectionEnd = at + b.dataset.tcToken.length;
+    renderTextComposePreview();
+  }));
+
+  $('#textComposeSendBtn').addEventListener('click', async () => {
+    const btn = $('#textComposeSendBtn');
+    const body = $('#textComposeBody').value.trim();
+    if (!body) { toast('The message is empty.', true); return; }
+    btn.disabled = true;
+    try {
+      const r = await api('/api/texts/queue', { method: 'POST', body: { ids: textComposeIds, template: { body } } });
+      const skip = r.skipped || {};
+      const notes = [];
+      if (skip.alreadyTexted) notes.push(`${skip.alreadyTexted} were texted in the last 24h`);
+      if (skip.optedOut) notes.push(`${skip.optedOut} asked to stop`);
+      if (skip.noPhone) notes.push(`${skip.noPhone} had no usable number`);
+      toast(r.added
+        ? `${r.added} text${r.added === 1 ? '' : 's'} queued${notes.length ? ` · ${notes.join(', ')}` : ''}.`
+        : `Nothing queued${notes.length ? ` — ${notes.join(', ')}` : ''}.`, !r.added);
+      $('#textComposeModal').hidden = true;
+      const alsoEmail = textComposeThenEmail;
+      textComposeThenEmail = null;
+      await refresh();
+      if (alsoEmail && alsoEmail.length) openCompose(alsoEmail);
+    } catch (err) { oops(err); }
+    finally { btn.disabled = false; }
+  });
 
   // ---------------- Texting ----------------
   // A parallel channel to email: the queue lives on the server, but the

@@ -947,9 +947,13 @@ app.post('/api/texts/queue', asyncRoute(async (req, res) => {
   const ids = Array.isArray(req.body && req.body.ids) && req.body.ids.length
     ? req.body.ids
     : db.candidates.filter((c) => phone.normalize(c.phone) && !c.lastTextedAt && c.status !== 'declined' && c.status !== 'booked').map((c) => c.id);
+  // A one-off message for this send only, exactly as the email side allows —
+  // texting one person usually means saying something other than the template.
+  const custom = req.body && req.body.template && String(req.body.template.body || '').trim();
+  const template = custom ? { body: String(req.body.template.body) } : db.textTemplate;
   let result = { added: 0, skipped: {} };
   await textQueue.updateQ((q) => {
-    result = textQueue.enqueue(q, db, ids, db.textTemplate);
+    result = textQueue.enqueue(q, db, ids, template);
     if (!result.added) return false;
   });
   const q = await textQueue.loadQ();

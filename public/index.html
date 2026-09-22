@@ -131,7 +131,6 @@
           <button class="btn" id="addCandidateBtn"><span data-icon="plus" data-size="15"></span> Add manually</button>
           <button class="btn follow-up-btn" id="candFollowUpBtn"><span data-icon="reply" data-size="15"></span> Follow up</button>
           <button class="btn email-all-btn" id="candEmailAllBtn">Email all not contacted</button>
-          <button class="btn btn-primary" id="sendSelectedBtn" disabled><span data-icon="mail" data-size="15"></span> <span id="sendSelectedLabel">Email selected</span></button>
         </div>
       </header>
 
@@ -147,6 +146,15 @@
           <button class="chip" data-filter="declined">Not interested</button>
           <button class="chip" data-filter="bounced">Bounced</button>
         </div>
+      </div>
+
+      <div class="selection-bar" id="selectionBar" hidden>
+        <span class="sel-count" id="selCount"></span>
+        <button class="btn" id="selEmailBtn"><span data-icon="mail" data-size="15"></span> Email</button>
+        <button class="btn" id="selTextBtn"><span data-icon="bubble" data-size="15"></span> Text</button>
+        <button class="btn btn-primary" id="selBothBtn">Email + text</button>
+        <span class="sel-note" id="selNote"></span>
+        <button class="btn-link" id="selClearBtn">Clear</button>
       </div>
 
       <div class="card table-card">
@@ -641,6 +649,32 @@
     <div class="modal-foot">
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="addSaveBtn">Add candidate</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="textComposeModal" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="textComposeTitle">Send text</h2>
+      <button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button>
+    </div>
+    <div class="modal-body">
+      <div class="compose-to" id="textComposeTo"></div>
+      <label class="label">Message <span class="muted small">(placeholders are filled per person)</span></label>
+      <textarea id="textComposeBody" class="input textarea" rows="6"></textarea>
+      <div class="token-row">
+        <span class="muted small">Insert:</span>
+        <button class="token tc-token" data-tc-token="{{firstName}}">first name</button>
+        <button class="token tc-token" data-tc-token="{{role}}">role</button>
+        <button class="token tc-token" data-tc-token="{{company}}">company</button>
+      </div>
+      <div class="imessage-preview"><div class="imessage-bubble" id="textComposePreview"></div></div>
+      <div class="hint" id="textComposeHint"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="textComposeSendBtn">Send text</button>
     </div>
   </div>
 </div>

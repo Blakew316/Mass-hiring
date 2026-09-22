@@ -597,3 +597,21 @@ button.text-pip.is-none:hover { border-color: var(--amber); background: var(--am
 .input.bad  { border-color: var(--red); }
 .hint.good  { color: #1e8a50; }
 .hint.bad   { color: var(--red); }
+
+/* Appears the moment anything in the candidates table is ticked. */
+.selection-bar[hidden] { display: none !important; }
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  background: var(--blue-tint);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.selection-bar .sel-count { font-weight: 600; color: var(--blue-deep); margin-right: 2px; }
+.selection-bar .sel-note { color: var(--ink-soft); font-size: 12.5px; }
+.selection-bar .btn-link { margin-left: auto; }
+.selection-bar .btn[disabled] { opacity: .5; cursor: not-allowed; }
