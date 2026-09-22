@@ -272,21 +272,19 @@
         `Sent ${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : ''}${c.followUpCount ? ` · followed up ${c.followUpCount}×` : ''} · ${c.openedAt ? `${icon('eye', 12)} opened ${timeAgo(c.openedAt)}` : 'not opened yet'}${c.pastRoles ? ` · previously ${String(c.pastRoles).split('|').map((x) => x.trim()).filter(Boolean).slice(0, 2).join('; ')}` : ''}${due.has(c.id) ? ' · <span class="due-tag">due a follow-up</span>' : ''}`,
         `<button class="tile-link tile-followup" data-id="${esc(c.id)}">${icon('reply', 13)} Follow up</button>${statusSelect(c)}${gmailLink(c)}`));
     } else if (kind === 'replied') {
-      const realReplies = (c) => (c.replies || []).filter((r) => !r.kind);
       const cs = state.candidates.filter((c) => c.status === 'replied').sort((a, b) => String(b.lastReplyAt || b.repliedAt || '').localeCompare(String(a.lastReplyAt || a.repliedAt || '')));
       $('#tileTitle').textContent = `Replied (${cs.length})`;
       $('#tileSub').textContent = 'Real replies only — bounces and automatic replies are filtered out. Change a status here once you have followed up.';
       rows = cs.map((c) => {
-        const reps = realReplies(c);
-        const last = reps.slice(-1)[0];
-        const text = last ? (last.text || last.snippet || '') : '';
+        const reps = c.emailReplies || 0;
+        const text = (c.emailLast && c.emailLast.text) || '';
         const quote = text
           ? `<blockquote class="reply-quote">${esc(text)}</blockquote>`
           : `<blockquote class="reply-quote muted-quote">${replyTextLimited
               ? 'Reply text can’t be read with the current Google permissions — Settings → Google → Reconnect and tick every box.'
               : 'Reply text hasn’t been captured yet — it fills in automatically within a minute or two. Use “Open in Gmail” to read it now.'}</blockquote>`;
         const when = c.lastReplyAt || c.repliedAt;
-        return candRow(c, `Replied ${when ? timeAgo(when) : ''}${reps.length > 1 ? ` · ${reps.length} messages` : ''}`,
+        return candRow(c, `Replied ${when ? timeAgo(when) : ''}${reps > 1 ? ` · ${reps} messages` : ''}`,
           `${statusSelect(c)}${gmailLink(c)}`, quote);
       });
     } else if (kind === 'booked') {
@@ -2422,6 +2420,157 @@
     }
   }
 
+  // ---------------- The inbox ----------------
+  // The same shape as Messages, over a different store. Email conversations
+  // are NOT mirrored onto the candidate: Gmail already holds them, and a copy
+  // would go stale the moment a reply is sent from a phone or from Gmail
+  // itself. So the list is built from what we know locally — who was emailed,
+  // who answered — and the thread is read live when it is opened.
+  let mailFilter = 'replied';
+  let mailSearch = '';
+  let openMailId = null;
+  let mail = null;
+  let mailLoading = false;
+
+  function mailboxes() {
+    const all = (state.candidates || []).filter((c) => c.lastEmailedAt || c.emailReplies);
+    const q = mailSearch.trim().toLowerCase();
+    const when = (c) => (c.emailLast && c.emailLast.ts) || c.lastReplyAt || c.lastEmailedAt || '';
+    return all
+      .filter((c) => (mailFilter === 'unread' ? c.emailUnread : mailFilter === 'replied' ? c.emailReplies > 0 : true))
+      .filter((c) => !q || `${c.name || ''} ${c.email || ''} ${c.company || ''}`.toLowerCase().includes(q))
+      .sort((a, b) => String(when(b)).localeCompare(String(when(a))));
+  }
+
+  const mailUnreadCount = () => (state.candidates || []).filter((c) => c.emailUnread).length;
+
+  function renderMailList() {
+    const rows = mailboxes();
+    const n = mailUnreadCount();
+    $('#mailUnreadN').textContent = n || '';
+    $('#mailUnreadN').hidden = !n;
+    $$('[data-mail-tab]').forEach((b) => b.classList.toggle('on', b.dataset.mailTab === mailFilter));
+    $('#mailList').innerHTML = rows.length
+      ? rows.map((c) => {
+          const last = c.emailLast;
+          const ts = (last && last.ts) || c.lastReplyAt || c.lastEmailedAt || '';
+          const preview = last ? last.text : c.lastSubject || 'Sent, no reply yet';
+          return `<li><button class="conv${c.id === openMailId ? ' on' : ''}${c.emailUnread ? ' unread' : ''}" data-mail="${esc(c.id)}">
+            <span class="avatar">${esc(convInitials(c.name, c.email))}</span>
+            <span class="conv-main">
+              <span class="conv-top"><span class="conv-name">${esc(c.name || c.email || 'Unknown')}</span><span class="conv-when">${ts ? timeAgo(ts) : ''}</span></span>
+              <span class="conv-last">${last ? '' : '<span class="conv-you">You:</span> '}${esc(preview)}</span>
+            </span>
+            ${c.emailBounced && !c.emailReplies ? '<span class="conv-flag" title="Bounced">!</span>' : ''}
+            ${c.emailUnread ? '<span class="conv-dot"></span>' : ''}
+          </button></li>`;
+        }).join('')
+      : `<li class="conv-none">${mailFilter === 'unread' ? 'Nothing unread.' : mailFilter === 'replied' ? 'Nobody has replied by email yet.' : mailSearch ? 'No conversation matches that.' : 'Nothing emailed yet.'}</li>`;
+  }
+
+  async function openMail(id, { markSeen = true } = {}) {
+    openMailId = id;
+    mailLoading = true;
+    renderMailList();
+    $('#mailEmpty').hidden = true;
+    $('#mailLive').hidden = false;
+    $('#mailBody').innerHTML = '<p class="thread-loading">Reading the conversation from Gmail…</p>';
+    try {
+      mail = await api(`/api/emails/thread?id=${encodeURIComponent(id)}`);
+    } catch (e) {
+      mail = null;
+      $('#mailBody').innerHTML = `<p class="thread-loading">${esc(e.message)}</p>`;
+      mailLoading = false;
+      return;
+    }
+    mailLoading = false;
+    renderMail();
+    if (markSeen) {
+      const c = (state.candidates || []).find((x) => x.id === id);
+      if (c && c.emailUnread) {
+        c.emailUnread = false;
+        renderMailList(); renderBell();
+        api('/api/emails/seen', { method: 'POST', body: { id } }).catch(() => {});
+      }
+    }
+  }
+
+  function renderMail() {
+    if (!mail) return;
+    $('#mailAvatar').textContent = convInitials(mail.name, mail.email);
+    $('#mailName').textContent = mail.name || mail.email || 'Unknown';
+    $('#mailSub').textContent = [mail.email, mail.role, mail.company].filter(Boolean).join(' · ');
+    const gm = $('#mailGmail');
+    gm.hidden = !mail.gmailUrl;
+    if (mail.gmailUrl) gm.href = mail.gmailUrl;
+
+    if (mail.unavailable) {
+      $('#mailBody').innerHTML = `<p class="thread-loading">${esc(mail.unavailable)}</p>`;
+    } else {
+      $('#mailBody').innerHTML = (mail.messages || []).length
+        ? mail.messages.map((m, i) => {
+            const prev = mail.messages[i - 1];
+            const gap = !prev || (m.date && prev.date && new Date(m.date) - new Date(prev.date) > 60 * 60 * 1000);
+            const stamp = gap && m.date ? `<div class="thread-stamp">${esc(whenLabel(m.date))}</div>` : '';
+            const text = m.text || m.snippet || '';
+            // A bounce is the mail system talking, not the candidate, so it is
+            // marked rather than dressed up as a reply.
+            const tag = m.kind === 'bounce' ? '<span class="msg-tag bad">Bounce</span>'
+              : m.kind === 'auto' ? '<span class="msg-tag">Auto-reply</span>' : '';
+            return `${stamp}<div class="msg ${m.dir === 'out' ? 'out' : 'in'}${m.kind ? ' machine' : ''}">
+              <div class="bubble">${esc(text)}${mail.limited && !m.text ? '<span class="msg-clip"> …</span>' : ''}</div>
+              ${tag}
+            </div>`;
+          }).join('')
+        : '<p class="thread-loading">Nothing in this conversation yet.</p>';
+    }
+    $('#mailBody').scrollTop = $('#mailBody').scrollHeight;
+
+    const can = Boolean(mail.canReply);
+    $('#mailInput').disabled = !can;
+    $('#mailSend').disabled = !can;
+    $('#mailNote').textContent = can && mail.limited
+      ? 'Only previews are readable with the current Google permissions — Settings → Google → Reconnect and tick every box to see full messages.'
+      : '';
+  }
+
+  async function sendMailReply() {
+    const box = $('#mailInput');
+    const body = box.value.trim();
+    if (!body || !openMailId) return;
+    $('#mailSend').disabled = true;
+    try {
+      await api('/api/emails/reply', { method: 'POST', body: { id: openMailId, body } });
+      box.value = '';
+      box.style.height = '';
+      toast('Reply sent.');
+      await refresh();
+      await openMail(openMailId, { markSeen: false });
+    } catch (e) {
+      toast(e.message, true);
+      $('#mailSend').disabled = false;
+    }
+  }
+
+  function wireMail() {
+    $('#mailList').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-mail]');
+      if (b) openMail(b.dataset.mail);
+    });
+    $$('[data-mail-tab]').forEach((b) => b.addEventListener('click', () => { mailFilter = b.dataset.mailTab; renderMailList(); }));
+    $('#mailSearch').addEventListener('input', (e) => { mailSearch = e.target.value; renderMailList(); });
+    $('#mailCompose').addEventListener('submit', (e) => { e.preventDefault(); sendMailReply(); });
+    // An email is long-form, so Enter makes a paragraph and Cmd/Ctrl-Enter sends.
+    $('#mailInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendMailReply(); }
+    });
+    $('#mailInput').addEventListener('input', (e) => {
+      e.target.style.height = 'auto';
+      e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+    });
+    $('#mailOpenCandidate').addEventListener('click', () => { if (openMailId) openCandidate(openMailId); });
+  }
+
   // ---------------- The bell ----------------
   // One button, injected into every page's header rather than copied into six
   // of them, so a reply is visible from wherever you happen to be standing.
@@ -2438,8 +2587,12 @@
     });
   }
 
+  // One bell for both channels. Two would mean deciding which to look at, and
+  // a reply is a reply whichever way it arrived.
+  const allUnread = () => unreadCount() + mailUnreadCount();
+
   function renderBell() {
-    const n = unreadCount();
+    const n = allUnread();
     $$('.bell').forEach((b) => {
       const dot = b.querySelector('.bell-n');
       dot.textContent = n > 9 ? '9+' : String(n);
@@ -2449,28 +2602,37 @@
     if (!$('#bellPanel').hidden) renderBellPanel();
   }
 
+  // One entry per unanswered conversation, not per person: someone who
+  // answered both the text and the email is two things to read, not one.
+  function bellItems() {
+    const out = [];
+    for (const c of state.candidates || []) {
+      if (c.textLast && c.textLast.dir === 'in') {
+        out.push({ c, ch: 'text', ts: c.textLast.ts, text: c.textLast.text, unread: Boolean(c.textUnread), who: c.name || textPhoneOf(c) || 'Unknown' });
+      }
+      if (c.emailLast) {
+        out.push({ c, ch: 'email', ts: c.emailLast.ts, text: c.emailLast.text, unread: Boolean(c.emailUnread), who: c.name || c.email || 'Unknown' });
+      }
+    }
+    return out.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+  }
+
   function renderBellPanel() {
-    const unread = (state.candidates || [])
-      .filter((c) => c.textUnread)
-      .sort((a, b) => String((b.textLast || {}).ts || '').localeCompare(String((a.textLast || {}).ts || '')));
-    const recent = (state.candidates || [])
-      .filter((c) => !c.textUnread && c.textLast && c.textLast.dir === 'in')
-      .sort((a, b) => String((b.textLast || {}).ts || '').localeCompare(String((a.textLast || {}).ts || '')))
-      .slice(0, 6);
-    const row = (c, isNew) => {
-      const last = c.textLast || {};
-      return `<button class="bell-row${isNew ? ' new' : ''}" data-bell-open="${esc(c.id)}">
-        <span class="avatar">${esc(convInitials(c.name, c.phone))}</span>
+    const items = bellItems();
+    const unread = items.filter((i) => i.unread);
+    const recent = items.filter((i) => !i.unread).slice(0, 6);
+    const row = (i) => `<button class="bell-row${i.unread ? ' new' : ''}" data-bell-open="${esc(i.c.id)}" data-bell-ch="${i.ch}">
+        <span class="avatar">${esc(convInitials(i.c.name, i.ch === 'text' ? i.c.phone : i.c.email))}</span>
         <span class="bell-main">
-          <span class="bell-top"><span class="bell-name">${esc(c.name || textPhoneOf(c) || 'Unknown')}</span><span class="bell-when">${last.ts ? timeAgo(last.ts) : ''}</span></span>
-          <span class="bell-text">${esc(last.text || '')}</span>
+          <span class="bell-top"><span class="bell-name">${esc(i.who)}</span><span class="bell-when">${i.ts ? timeAgo(i.ts) : ''}</span></span>
+          <span class="bell-text">${esc(i.text || '')}</span>
         </span>
+        <span class="act-tag ch-${i.ch === 'text' ? 'text' : 'email'}">${i.ch === 'text' ? 'Text' : 'Email'}</span>
       </button>`;
-    };
     $('#bellBody').innerHTML = unread.length || recent.length
-      ? `${unread.length ? `<div class="bell-sec">New</div>${unread.map((c) => row(c, true)).join('')}` : ''}
-         ${recent.length ? `<div class="bell-sec">Earlier</div>${recent.map((c) => row(c, false)).join('')}` : ''}`
-      : '<p class="bell-none">No replies yet. When someone texts back it lands here.</p>';
+      ? `${unread.length ? `<div class="bell-sec">New</div>${unread.map(row).join('')}` : ''}
+         ${recent.length ? `<div class="bell-sec">Earlier</div>${recent.map(row).join('')}` : ''}`
+      : '<p class="bell-none">No replies yet. When someone writes back — by text or by email — it lands here.</p>';
     $('#bellClear').hidden = !unread.length;
   }
 
@@ -2503,13 +2665,16 @@
       const r = e.target.closest('[data-bell-open]');
       if (!r) return;
       toggleBell(false);
-      show('texting');
-      openThread(r.dataset.bellOpen);
+      if (r.dataset.bellCh === 'email') { show('template'); openMail(r.dataset.bellOpen); }
+      else { show('texting'); openThread(r.dataset.bellOpen); }
     });
     $('#bellClear').addEventListener('click', async () => {
-      (state.candidates || []).forEach((c) => { c.textUnread = false; });
-      renderBell(); renderConvList();
-      try { await api('/api/texts/seen', { method: 'POST', body: { all: true } }); } catch {}
+      (state.candidates || []).forEach((c) => { c.textUnread = false; c.emailUnread = false; });
+      renderBell(); renderConvList(); renderMailList();
+      try {
+        await api('/api/texts/seen', { method: 'POST', body: { all: true } });
+        await api('/api/emails/seen', { method: 'POST', body: { all: true } });
+      } catch {}
     });
     document.addEventListener('click', (e) => {
       if ($('#bellPanel').hidden) return;
@@ -2907,6 +3072,8 @@
     mountBell();
     renderBell();
     renderConvList();
+    renderMailList();
+    $('#navEmailCount').textContent = mailUnreadCount() || '';
     // A thread left open stays live: a reply arriving while you are reading it
     // should appear, not wait for you to click away and back.
     if (openThreadId && !threadLoading) openThread(openThreadId, { markSeen: false });
@@ -2940,6 +3107,7 @@
     if (started) return;
     started = true;
     wireMessages();
+    wireMail();
     syncTimeZone();
     const hash = location.hash.replace('#', '');
     if (hash) {

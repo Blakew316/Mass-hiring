@@ -32,7 +32,7 @@
         <span class="nav-ico" data-icon="download" data-size="17"></span> Import
       </button>
       <button class="nav-item" data-view="template">
-        <span class="nav-ico" data-icon="doc" data-size="17"></span> Email Template
+        <span class="nav-ico" data-icon="mail" data-size="17"></span> Email <span class="nav-count" id="navEmailCount"></span>
       </button>
       <button class="nav-item" data-view="texting">
         <span class="nav-ico" data-icon="bubble" data-size="17"></span> Texting <span class="nav-count" id="navTextCount"></span>
@@ -371,13 +371,62 @@
     <section class="view dense" id="view-template">
       <header class="page-head">
         <div>
-          <h1>Email template</h1>
+          <h1>Email</h1>
         </div>
         <div class="head-actions">
           <button class="btn" id="resetTemplateBtn">Reset to default</button>
           <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
         </div>
       </header>
+
+      <div class="card messages-card">
+        <div class="card-head">
+          <h2><span class="card-ico tone-blue" data-icon="mail" data-size="15"></span>Inbox</h2>
+          <div class="msg-head-right">
+            <div class="search-wrap msg-search">
+              <span class="search-ico" data-icon="search" data-size="14"></span>
+              <input type="text" id="mailSearch" class="input search" placeholder="Search conversations…">
+            </div>
+          </div>
+        </div>
+        <div class="messenger">
+          <aside class="conv-col">
+            <div class="conv-tabs">
+              <button class="conv-tab on" data-mail-tab="replied">Replied</button>
+              <button class="conv-tab" data-mail-tab="unread">Unread <span class="conv-tab-n" id="mailUnreadN"></span></button>
+              <button class="conv-tab" data-mail-tab="all">All sent</button>
+            </div>
+            <ul class="conv-list" id="mailList"></ul>
+          </aside>
+          <section class="thread-col" id="mailThreadCol">
+            <div class="thread-empty" id="mailEmpty">
+              <span data-icon="mail" data-size="26"></span>
+              <p>Pick a conversation to read it and reply.</p>
+            </div>
+            <div class="thread-live" id="mailLive" hidden>
+              <header class="thread-head">
+                <div class="thread-who">
+                  <span class="avatar" id="mailAvatar"></span>
+                  <div>
+                    <div class="thread-name" id="mailName"></div>
+                    <div class="thread-sub" id="mailSub"></div>
+                  </div>
+                </div>
+                <div class="thread-head-actions">
+                  <a class="btn btn-sm" id="mailGmail" target="_blank" rel="noopener" hidden>Open in Gmail</a>
+                  <button class="btn btn-sm" id="mailOpenCandidate">Open candidate</button>
+                </div>
+              </header>
+              <div class="thread-body mail-body" id="mailBody"></div>
+              <form class="thread-compose" id="mailCompose">
+                <textarea id="mailInput" class="input textarea" rows="1" placeholder="Write a reply…" maxlength="8000"></textarea>
+                <button class="send-btn" type="submit" id="mailSend" title="Send"><span data-icon="send" data-size="15"></span></button>
+              </form>
+              <p class="thread-note" id="mailNote"></p>
+            </div>
+          </section>
+        </div>
+      </div>
 
       <div class="two-col template-cols">
         <div class="card">

@@ -21,7 +21,7 @@ const textQueue = require('./lib/text-queue');
 const phone = require('./lib/phone');
 const priority = require('./lib/priority');
 const crypto = require('crypto');
-const { renderEmail, renderText } = require('./lib/template');
+const { renderEmail, renderText, escapeHtml } = require('./lib/template');
 
 const app = express();
 // Exact-case routes only, so /API/... cannot reach a handler by a path the
@@ -168,13 +168,22 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     // Industry is derived, never stored — it is a view of role/company/history
     // and must not drift out of date behind a saved copy of itself.
     candidates: db.candidates.map((c) => {
-      const { textThread, ...rest } = c;
+      const { textThread, replies, ...rest } = c;
       const last = textThread && textThread.length ? textThread[textThread.length - 1] : null;
+      const real = (replies || []).filter((r) => !r.kind);
+      const lastReply = real[real.length - 1] || null;
       return {
         ...rest,
         industry: priority.industry(c).code,
         textCount: textThread ? textThread.length : 0,
         textLast: last ? { dir: last.dir, ts: last.ts, text: last.text.slice(0, 120) } : null,
+        // Email's conversation lives in Gmail, so what rides along here is only
+        // enough to list and sort it: how many real replies, and the last one.
+        emailReplies: real.length,
+        emailBounced: (replies || []).some((r) => r.kind === 'bounce'),
+        emailLast: lastReply
+          ? { ts: lastReply.date || c.lastReplyAt || '', text: String(lastReply.text || lastReply.snippet || '').slice(0, 160) }
+          : null,
       };
     }),
     industries: priority.INDUSTRY_LABELS,
@@ -1093,6 +1102,111 @@ app.post('/api/texts/queue/retry-failed', asyncRoute(async (_req, res) => {
   res.json({ ok: true, requeued: n, queue: textQueue.status(q, db.settings, await relayState()) });
 }));
 
+// One email conversation, read live from Gmail.
+app.get('/api/emails/thread', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === String((req.query && req.query.id) || ''));
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  const base = {
+    ok: true,
+    id: c.id,
+    name: c.name || '',
+    email: c.email || '',
+    role: c.role || '',
+    company: c.company || '',
+    status: c.status || 'new',
+    subject: c.lastSubject || '',
+    gmailUrl: c.gmailThreadId ? `https://mail.google.com/mail/u/0/#all/${c.gmailThreadId}` : '',
+  };
+  const g = await google.status(db.settings);
+  if (!g.connected) {
+    return res.json({ ...base, messages: [], unavailable: 'Connect Google in Settings to read and reply to email conversations here.' });
+  }
+  if (!c.gmailThreadId) {
+    return res.json({ ...base, messages: [], unavailable: 'Nothing has been emailed to this person yet.' });
+  }
+  try {
+    const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
+    res.json({ ...base, ...t, canReply: true });
+  } catch (err) {
+    if (err.gone) return res.json({ ...base, messages: [], unavailable: 'That conversation is no longer in Gmail.' });
+    res.json({
+      ...base,
+      messages: [],
+      unavailable: err.scope
+        ? 'Reading email needs the extra Gmail permission — Settings → Google → Reconnect and tick every box.'
+        : err.message,
+    });
+  }
+}));
+
+// Answer an email in its own thread. Gmail's threadId keeps it together on
+// our side; In-Reply-To/References are what keep it together in theirs.
+app.post('/api/emails/reply', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const body = String((req.body && req.body.body) || '').trim();
+  if (!body) return res.status(400).json({ error: 'Type a message first.' });
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === id);
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  if (!c.email) return res.status(409).json({ error: 'No email address on this candidate.' });
+  const g = await google.status(db.settings);
+  if (!g.connected) return res.status(409).json({ error: 'Connect Google in Settings to reply from here.' });
+  if (!c.gmailThreadId) return res.status(409).json({ error: 'Nothing has been emailed to this person yet.' });
+
+  let inReplyTo = c.messageId || '';
+  let subject = c.lastSubject || '';
+  try {
+    const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
+    if (t.lastMessageId) inReplyTo = t.lastMessageId;
+    if (t.lastSubject) subject = t.lastSubject;
+  } catch { /* fall back to what was stored when we last sent */ }
+  const re = /^re:/i.test(subject) ? subject : `Re: ${subject || 'Following up'}`;
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#141b4d;white-space:pre-wrap">${escapeHtml(body)}</div>`;
+
+  try {
+    const sent = await mailer.sendEmail(db.settings, {
+      to: c.email,
+      subject: re,
+      text: body,
+      html,
+      threadId: c.gmailThreadId,
+      inReplyTo: inReplyTo || undefined,
+      references: inReplyTo || undefined,
+    });
+    await store.update((fresh) => {
+      const f = fresh.candidates.find((x) => x.id === id);
+      if (!f) return;
+      // A reply is a contact, so the follow-up clock restarts from here — an
+      // automated nudge on top of a conversation already in progress reads as
+      // nobody being home.
+      f.lastEmailedAt = new Date().toISOString();
+      f.lastSubject = re;
+      if (sent.messageId) f.messageId = sent.messageId;
+      if (sent.threadId) f.gmailThreadId = sent.threadId;
+      f.emailUnread = false;
+    });
+    res.json({ ok: true, sent: true });
+  } catch (err) {
+    res.status(502).json({ error: err.message || 'Gmail refused the message.' });
+  }
+}));
+
+app.post('/api/emails/seen', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const all = Boolean(req.body && req.body.all);
+  let n = 0;
+  await store.update((db) => {
+    for (const c of db.candidates) {
+      if (!c.emailUnread) continue;
+      if (!all && c.id !== id) continue;
+      c.emailUnread = false; n += 1;
+    }
+    if (!n) return false;
+  });
+  res.json({ ok: true, cleared: n });
+}));
+
 // One conversation, both halves, oldest first.
 app.get('/api/texts/thread', asyncRoute(async (req, res) => {
   const db = await store.load();
@@ -1289,7 +1403,11 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
       if (fresh_real.length) {
         fc.lastReplyAt = fresh_real[fresh_real.length - 1].date || now;
         if (fc.status === 'emailed' || fc.status === 'bounced') { fc.status = 'replied'; fc.repliedAt = fc.repliedAt || now; }
-        if (newReal.length) announce.push({ c: fc, reply: newReal[newReal.length - 1] });
+        if (newReal.length) {
+          announce.push({ c: fc, reply: newReal[newReal.length - 1] });
+          // Lights the bell, and stays lit until the conversation is opened.
+          fc.emailUnread = true;
+        }
       } else if (bounced && fc.status === 'emailed') {
         fc.status = 'bounced';
       }
