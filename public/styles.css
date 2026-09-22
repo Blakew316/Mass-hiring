@@ -1020,11 +1020,30 @@ tr.row-muted { opacity: .55; }
 .bell:hover { border-color: #cfd8ea; color: var(--navy); background: var(--navy-tint); }
 .bell.lit { color: var(--blue); border-color: var(--blue-tint); background: var(--blue-tint); }
 .bell:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* It rings when something lands. Pivoting at the crown, where a bell hangs. */
+@keyframes bellRing {
+  0%, 100% { transform: rotate(0); }
+  12% { transform: rotate(-13deg); }
+  26% { transform: rotate(11deg); }
+  40% { transform: rotate(-8deg); }
+  54% { transform: rotate(6deg); }
+  68% { transform: rotate(-3deg); }
+  82% { transform: rotate(2deg); }
+}
+.bell.ring .ico { animation: bellRing .85s ease-in-out; transform-origin: 50% 16%; }
+@media (prefers-reduced-motion: reduce) { .bell.ring .ico { animation: none; } }
+/* content-box turned a "17px" badge into a 29px one — min-width, then padding,
+   then border, each added on top — and it sat over two fifths of the bell.
+   border-box means the number below is the size it actually renders at, and
+   the badge clips the corner of the button rather than the glyph in it. */
 .bell-n {
-  position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px;
-  padding: 0 4px; border-radius: 99px; background: var(--red); color: #fff;
-  font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center;
-  border: 2px solid var(--card); box-sizing: content-box;
+  position: absolute; top: -6px; right: -6px;
+  min-width: 17px; height: 17px; padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 99px; border: 2px solid var(--card);
+  background: var(--red); color: #fff;
+  font-size: 9.5px; font-weight: 700; line-height: 13px; text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .bell-panel {

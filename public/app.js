@@ -2580,8 +2580,9 @@
       const b = document.createElement('button');
       b.className = 'bell';
       b.type = 'button';
-      b.title = 'Replies';
-      b.innerHTML = `${icon('bubble', 17)}<span class="bell-n" hidden></span>`;
+      b.title = 'Notifications';
+      b.setAttribute('aria-label', 'Notifications');
+      b.innerHTML = `${icon('bell', 18)}<span class="bell-n" hidden></span>`;
       b.addEventListener('click', (e) => { e.stopPropagation(); toggleBell(); });
       row.appendChild(b);
     });
@@ -2591,13 +2592,26 @@
   // a reply is a reply whichever way it arrived.
   const allUnread = () => unreadCount() + mailUnreadCount();
 
+  // null until the first render, so a page load with unread waiting does not
+  // read as something having just arrived.
+  let lastBellCount = null;
+
   function renderBell() {
     const n = allUnread();
+    const arrived = lastBellCount !== null && n > lastBellCount;
+    lastBellCount = n;
     $$('.bell').forEach((b) => {
       const dot = b.querySelector('.bell-n');
       dot.textContent = n > 9 ? '9+' : String(n);
       dot.hidden = !n;
       b.classList.toggle('lit', Boolean(n));
+      if (arrived) {
+        // Restart the animation even if it is already running: two replies a
+        // second apart should ring twice, not once.
+        b.classList.remove('ring');
+        void b.offsetWidth;
+        b.classList.add('ring');
+      }
     });
     if (!$('#bellPanel').hidden) renderBellPanel();
   }
