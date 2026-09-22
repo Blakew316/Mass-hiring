@@ -460,7 +460,9 @@
     ];
     $('#textToday').innerHTML = items.map(([label, n]) => `
       <div class="today-cell"><div class="today-n">${Number(n).toLocaleString()}</div><div class="today-label">${label}</div></div>`).join('');
-    $('#textTodayNote').textContent = !relay.online
+    const note = $('#textTodayNote');
+    note.title = '';
+    note.textContent = !relay.online
       ? 'The Mac relay is offline, so nothing will send until it is back.'
       : q.pending
         ? `Sending about one every ${Math.round(((q.minGap || 45) + (q.maxGap || 150)) / 2)}s, ${q.startHour}:00–${q.endHour}:00 in each person's own timezone.`
@@ -516,7 +518,9 @@
       if (q.note) parts.push(q.note);
     }
     if (q.failed) parts.push(`${q.failed} failed — ${q.failures.map((f) => `${f.email}: ${f.error}`).slice(-3).join(' · ')}`);
-    $('#sendingMeta').textContent = parts.join(' · ');
+    const meta = parts.join(' · ');
+    $('#sendingMeta').textContent = meta;
+    $('#sendingMeta').title = meta;   // clamped to three lines; hover for the rest
     $('#retryFailedBtn').hidden = !q.failed;
     $('#retryFailedBtn').textContent = `Retry ${q.failed} failed`;
     $('#stopQueueBtn').hidden = !q.active;
@@ -802,7 +806,12 @@
     $('#candOverview').hidden = !overview;
     $('#candList').hidden = overview || !hasPeople;
     $('#candTableWrap').hidden = overview;
-    if (overview) { renderSegments(); $('#candidatesEmpty').style.display = 'none'; return; }
+    if (overview) {
+      renderSegments();
+      $('#candidatesEmpty').style.display = 'none';
+      $('#candCount').textContent = `${state.candidates.length.toLocaleString()} candidates`;
+      return;
+    }
 
     let rows = visibleCandidates();
     const ranking = sortBy === 'texting';

@@ -92,19 +92,6 @@
         </div>
       </div>
 
-      <div class="card sending-card" id="sendingCard" hidden>
-        <div class="card-head">
-          <h2>Sending in progress</h2>
-          <span class="badge tint-blue" id="sendingBadge"></span>
-        </div>
-        <div class="progress"><div class="progress-fill" id="sendingFill"></div></div>
-        <p class="muted sending-meta" id="sendingMeta"></p>
-        <div class="card-actions">
-          <button class="btn" id="retryFailedBtn" hidden>Retry failed</button>
-          <button class="btn btn-danger-ghost" id="stopQueueBtn">Stop sending</button>
-        </div>
-      </div>
-
       <div class="two-col">
         <div class="card">
           <div class="card-head">
@@ -129,12 +116,27 @@
         </div>
       </div>
 
-      <div class="two-col">
-        <div class="card">
-          <div class="card-head"><h2>Pipeline</h2></div>
-          <div id="pipeline" class="pipeline"></div>
+      <div class="card">
+        <div class="card-head"><h2>Pipeline</h2></div>
+        <div id="pipeline" class="pipeline"></div>
+      </div>
+
+      <!-- Running totals, not headlines. Small, and at the bottom where
+           something you glance at belongs. -->
+      <div class="two-col activity-strip">
+        <div class="card card-compact sending-card" id="sendingCard" hidden>
+          <div class="card-head">
+            <h2>Email sending</h2>
+            <span class="badge tint-blue" id="sendingBadge"></span>
+          </div>
+          <div class="progress"><div class="progress-fill" id="sendingFill"></div></div>
+          <p class="muted sending-meta" id="sendingMeta"></p>
+          <div class="card-actions">
+            <button class="btn btn-sm" id="retryFailedBtn" hidden>Retry failed</button>
+            <button class="btn btn-sm btn-danger-ghost" id="stopQueueBtn">Stop sending</button>
+          </div>
         </div>
-        <div class="card">
+        <div class="card card-compact">
           <div class="card-head">
             <h2>Texting today</h2>
             <span class="badge tint-blue" id="textTodayBadge"></span>
