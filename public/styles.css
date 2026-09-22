@@ -484,7 +484,11 @@ tr:hover .row-actions { opacity: 1; }
 .compose-to .to-more { color: var(--muted); font-size: 12px; padding: 3px 4px; }
 .progress { height: 8px; background: var(--navy-tint); border-radius: 99px; overflow: hidden; margin-top: 16px; }
 .progress-fill { height: 100%; width: 0; background: var(--blue); border-radius: 99px; transition: width 0.3s ease; }
+/* Nothing but a title and the button that does the thing, so it is one row —
+   a card with a head and an empty body underneath was all gap. */
 .send-card { margin-top: 0; }
+.send-card .card-head { margin-bottom: 0; }
+.send-row { display: flex; align-items: center; gap: 10px; }
 .sending-card .progress { margin-top: 4px; }
 .sending-meta { margin-top: 10px; font-size: 12.5px; }
 .email-all-btn:disabled { opacity: 0.45; }
