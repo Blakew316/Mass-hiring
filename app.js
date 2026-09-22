@@ -141,6 +141,24 @@ function followUpDueIds(db) {
 // Immediate sends (small selections) go out at most this many per request.
 const MAX_PER_REQUEST = 8;
 
+// The feed the dashboard tile draws from. It is one chronological list, but
+// the two channels run at wildly different volumes: a few thousand sent emails
+// produce opens all day, so a text reply from this morning falls off the end
+// within minutes and the tile looks as though texting never happens. The
+// window is therefore the most recent of everything PLUS the most recent
+// texting entries on top, which is what keeps the tile's Texting filter
+// showing something whenever there is anything to show.
+const FEED_WINDOW = 60;
+const TEXT_WINDOW = 25;
+function feedWindow(events) {
+  const feed = (events || [])
+    .filter((e) => store.FEED_TYPES.has(e.type))
+    .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+  const keep = new Map(feed.slice(0, FEED_WINDOW).map((e) => [e.id, e]));
+  for (const e of feed.filter((e) => store.EVENT_CHANNEL[e.type] === 'text').slice(0, TEXT_WINDOW)) keep.set(e.id, e);
+  return [...keep.values()].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+}
+
 // ---------- App state ----------
 app.get('/api/state', asyncRoute(async (_req, res) => {
   const db = await store.load();
@@ -151,7 +169,7 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     // and must not drift out of date behind a saved copy of itself.
     candidates: db.candidates.map((c) => ({ ...c, industry: priority.industry(c).code })),
     industries: priority.INDUSTRY_LABELS,
-    events: db.events.filter((e) => store.FEED_TYPES.has(e.type)).sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 60),
+    events: feedWindow(db.events),
     lastError: lastError ? lastError.message : '',
     template: db.template,
     followUp: { template: db.followUp, dueIds: followUpDueIds(db), ...followUpSettings(db.settings) },
@@ -956,13 +974,20 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
       await store.addEvent('text-read', `${who} read your text.`, c.id, patch.read).catch(() => {});
     }
     for (const r of patch.replies) {
-      await store.addEvent('text-replied', `${who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts).catch(() => {});
+      // STOP is the one reply that changes what you may legally do next, and
+      // as a plain "replied" line it read exactly like someone saying yes.
+      const stop = phone.optedOut(r.text);
+      if (stop) {
+        await store.addEvent('text-optout', `${who} replied STOP — blocked from texting.`, c.id, r.ts).catch(() => {});
+      } else {
+        await store.addEvent('text-replied', `${who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts).catch(() => {});
+      }
       try {
         await notify.pushToPhone(db.settings, {
-          title: `💬 ${who} replied`,
-          message: r.text.slice(0, 300),
+          title: stop ? `🛑 ${who} replied STOP` : `💬 ${who} replied`,
+          message: stop ? `Blocked from texting. Their message: ${r.text.slice(0, 260)}` : r.text.slice(0, 300),
           priority: 'high',
-          tags: 'speech_balloon',
+          tags: stop ? 'no_entry' : 'speech_balloon',
         });
       } catch {}
     }

@@ -16,6 +16,7 @@
   let addedFilter = '';
   let textedFilter = '';
   let rankFilter = '';
+  let feedChannel = readFeedChannel();  // 'all' | 'email' | 'text'
   let pendingImport = null;    // {headers, rows, mapping, source}
   let composeIds = [];
 
@@ -143,6 +144,12 @@
   document.addEventListener('click', (e) => {
     const go = e.target.closest('[data-goto]');
     if (go) show(go.dataset.goto);
+    const chip = e.target.closest('[data-feed]');
+    if (chip) {
+      feedChannel = chip.dataset.feed;
+      try { localStorage.setItem('feedChannel', feedChannel); } catch {}
+      renderFeed();
+    }
   });
 
   // ---------------- Dashboard ----------------
@@ -193,20 +200,7 @@
     renderChannels(t, emailOpened, s);
     renderTextToday(t);
 
-    // Candidate updates only: opens, replies, bookings, cancellations.
-    const icons = {
-      opened: ['eye', 'tint-blue'], replied: ['bubble', 'tint-mint'],
-      booked: ['calendar', 'tint-green'], canceled: ['xcircle', 'tint-red'],
-      'text-read': ['eye', 'tint-mint'], 'text-replied': ['bubble', 'tint-green'],
-    };
-    const list = state.events.filter((ev) => icons[ev.type]).slice(0, 15);
-    $('#activityList').innerHTML = list.length
-      ? list.map((ev) => {
-          const [ico, cls] = icons[ev.type];
-          return `<li><span class="act-ico ${cls}">${icon(ico, 14)}</span>
-            <div><div>${esc(ev.message)}</div><div class="act-time">${timeAgo(ev.ts)}</div></div></li>`;
-        }).join('')
-      : '<li class="empty-line">No updates yet — opens, replies, bookings and cancellations show up here.</li>';
+    renderFeed();
 
     // Setup checklist
     const st = state.settings;
@@ -446,6 +440,70 @@
   }
 
   // What the daily allowance has been spent on today, and what is left.
+  // ---------- Candidate updates ----------
+  // One chronological feed carrying both channels. Email outnumbers texting by
+  // orders of magnitude — a few thousand sent emails produce opens all day —
+  // so without a way to ask for one channel, every text reply is buried under
+  // opens within minutes of arriving. Bookings and cancellations are the
+  // outcome both channels are chasing, so they show under every filter.
+  const FEED_KIND = {
+    opened:         { ico: 'eye',      cls: 'tint-blue',  ch: 'email', tag: 'Email' },
+    replied:        { ico: 'mail',     cls: 'tint-mint',  ch: 'email', tag: 'Email' },
+    'text-read':    { ico: 'eye',      cls: 'tint-mint',  ch: 'text',  tag: 'Text' },
+    'text-replied': { ico: 'bubble',   cls: 'tint-green', ch: 'text',  tag: 'Text' },
+    'text-optout':  { ico: 'xcircle',  cls: 'tint-red',   ch: 'text',  tag: 'Text' },
+    texted:         { ico: 'send',     cls: 'tint-blue',  ch: 'text',  tag: 'Text' },
+    booked:         { ico: 'calendar', cls: 'tint-green', ch: 'both',  tag: '' },
+    canceled:       { ico: 'xcircle',  cls: 'tint-red',   ch: 'both',  tag: '' },
+  };
+
+  function readFeedChannel() {
+    try {
+      const v = localStorage.getItem('feedChannel');
+      return v === 'email' || v === 'text' ? v : 'all';
+    } catch { return 'all'; }
+  }
+
+  function feedEvents(channel) {
+    return (state.events || []).filter((ev) => {
+      const k = FEED_KIND[ev.type];
+      if (!k) return false;
+      return channel === 'all' || k.ch === 'both' || k.ch === channel;
+    });
+  }
+
+  function renderFeed() {
+    // The chip counts each channel's own updates. Bookings show under every
+    // filter but are counted only in All, so "Texting 2" never means "2, one
+    // of which is a booking".
+    const shown = feedEvents('all');
+    const own = (ch) => shown.filter((ev) => FEED_KIND[ev.type].ch === ch).length;
+    const counts = { all: shown.length, email: own('email'), text: own('text') };
+    // A filter that can only ever show what "All" already shows is noise, so
+    // the row appears once there is genuinely something to separate.
+    const worthFiltering = counts.email > 0 && counts.text > 0;
+    $('#feedFilters').innerHTML = worthFiltering
+      ? [['all', 'All'], ['email', 'Email'], ['text', 'Texting']].map(([k, label]) =>
+          `<button class="feed-chip${feedChannel === k ? ' on' : ''}" data-feed="${k}">${label}<span class="feed-n">${counts[k]}</span></button>`).join('')
+      : '';
+    if (!worthFiltering) feedChannel = 'all';
+
+    const list = feedEvents(feedChannel).slice(0, 15);
+    const empty = feedChannel === 'text'
+      ? 'No texting updates yet — reads, replies and opt-outs show up here.'
+      : feedChannel === 'email'
+        ? 'No email updates yet — opens and replies show up here.'
+        : 'No updates yet — opens, replies, texts, bookings and cancellations show up here.';
+    $('#activityList').innerHTML = list.length
+      ? list.map((ev) => {
+          const k = FEED_KIND[ev.type];
+          return `<li><span class="act-ico ${k.cls}">${icon(k.ico, 14)}</span>
+            <div><div>${esc(ev.message)}</div>
+              <div class="act-time">${k.tag ? `<span class="act-tag ch-${k.ch}">${k.tag}</span>` : ''}${timeAgo(ev.ts)}</div></div></li>`;
+        }).join('')
+      : `<li class="empty-line">${empty}</li>`;
+  }
+
   function renderTextToday(t) {
     const q = (state.texting && state.texting.queue) || {};
     const used = q.sentToday || 0;

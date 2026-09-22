@@ -208,7 +208,32 @@ button, input, select, textarea { font-family: var(--font); }
   width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
 }
-.activity .act-time { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.activity .act-time { color: var(--muted); font-size: 11.5px; margin-top: 3px; display: flex; align-items: center; gap: 7px; }
+
+/* Which channel an update came through. Email outnumbers texting by orders of
+   magnitude, so both the tag on each row and the filter above exist to stop a
+   text reply being indistinguishable from, and then buried under, email. */
+.act-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1.5px 6px; border-radius: 5px;
+  background: var(--navy-tint); color: var(--navy-soft);
+}
+.act-tag.ch-text { background: var(--green-tint); color: #1e8a50; }
+.act-tag.ch-email { background: var(--blue-tint); color: var(--blue-deep); }
+
+.feed-filters { display: flex; gap: 4px; }
+.feed-filters:empty { display: none; }
+.feed-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--card);
+  font-family: var(--font); font-size: 11.5px; font-weight: 600; color: var(--navy-soft);
+  cursor: pointer; transition: background .12s, border-color .12s, color .12s;
+}
+.feed-chip:hover { border-color: #cfd8ea; background: var(--navy-tint); }
+.feed-chip.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+.feed-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.feed-n { font-size: 10.5px; font-variant-numeric: tabular-nums; opacity: .7; }
 .empty-line { color: var(--muted); padding: 10px 0; }
 
 /* ---------------- Setup checklist ---------------- */
