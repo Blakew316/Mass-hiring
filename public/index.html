@@ -77,12 +77,14 @@
           <div class="stat-value" id="statTotal">0</div>
         </div>
         <div class="stat-card clickable" data-tile="emailed" role="button" tabindex="0">
-          <div class="stat-label">Emailed</div>
+          <div class="stat-label">Contacted</div>
           <div class="stat-value" id="statEmailed">0</div>
+          <div class="stat-split" id="statContactedSplit"></div>
         </div>
         <div class="stat-card clickable" data-tile="replied" role="button" tabindex="0">
           <div class="stat-label">Replied</div>
           <div class="stat-value" id="statReplied">0</div>
+          <div class="stat-split" id="statRepliedSplit"></div>
         </div>
         <div class="stat-card clickable" data-tile="booked" role="button" tabindex="0">
           <div class="stat-label">Interviews booked</div>
@@ -105,12 +107,40 @@
 
       <div class="two-col">
         <div class="card">
-          <div class="card-head"><h2>Pipeline</h2></div>
-          <div id="pipeline" class="pipeline"></div>
+          <div class="card-head">
+            <h2>Channels</h2>
+            <span class="muted small">reply rate, side by side</span>
+          </div>
+          <div class="channel-grid">
+            <div class="channel" id="chEmail">
+              <div class="channel-head"><span data-icon="mail" data-size="15"></span> Email</div>
+              <div class="funnel" id="emailFunnel"></div>
+            </div>
+            <div class="channel" id="chText">
+              <div class="channel-head"><span data-icon="bubble" data-size="15"></span> Texting <span class="badge" id="chTextRelay"></span></div>
+              <div class="funnel" id="textFunnel"></div>
+              <p class="muted small" id="textFunnelNote"></p>
+            </div>
+          </div>
         </div>
         <div class="card">
           <div class="card-head"><h2>Candidate updates</h2></div>
           <ul class="activity" id="activityList"><li class="empty-line">No updates yet — opens, replies, bookings and cancellations show up here.</li></ul>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <div class="card-head"><h2>Pipeline</h2></div>
+          <div id="pipeline" class="pipeline"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Texting today</h2>
+            <span class="badge tint-blue" id="textTodayBadge"></span>
+          </div>
+          <div id="textToday" class="today-grid"></div>
+          <p class="muted small" id="textTodayNote"></p>
         </div>
       </div>
 
@@ -125,7 +155,7 @@
       <header class="page-head">
         <div>
           <h1>Candidates</h1>
-          <p class="page-sub">Select people and send each a personal email from your work address.</p>
+          <p class="page-sub"><span id="candCount"></span> — pick a group, or filter down to exactly who you want.</p>
         </div>
         <div class="head-actions">
           <button class="btn" id="addCandidateBtn"><span data-icon="plus" data-size="15"></span> Add manually</button>
@@ -134,24 +164,84 @@
         </div>
       </header>
 
-      <div class="toolbar">
-        <div class="search-wrap"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…"></div>
-        <select id="roleFilter" class="input role-filter" title="Filter by the role someone currently holds"><option value="">All roles</option></select>
-        <select id="sortBy" class="input role-filter" title="How the list is ordered">
-          <option value="default">Order added</option>
-          <option value="texting">Best to text first</option>
-        </select>
-        <div class="filter-chips" id="filterChips">
-          <button class="chip active" data-filter="all">All</button>
-          <button class="chip" data-filter="new">Not contacted</button>
-          <button class="chip" data-filter="emailed">Emailed</button>
-          <button class="chip" data-filter="replied">Replied</button>
-          <button class="chip" data-filter="booked">Booked</button>
-          <button class="chip" data-filter="declined">Not interested</button>
-          <button class="chip" data-filter="bounced">Bounced</button>
+      <!-- The landing view: pick a group rather than scroll 2,800 rows. -->
+      <div id="candOverview">
+        <div class="search-wrap wide"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="overviewSearch" class="input search" placeholder="Search everyone by name, email, company or role…"></div>
+        <div class="segment-block">
+          <h2 class="segment-title">Where to start</h2>
+          <div class="segment-grid" id="segStart"></div>
+        </div>
+        <div class="segment-block">
+          <h2 class="segment-title">By industry</h2>
+          <div class="segment-grid" id="segIndustry"></div>
+        </div>
+        <div class="segment-block">
+          <h2 class="segment-title">By stage</h2>
+          <div class="segment-grid" id="segStage"></div>
+        </div>
+        <div class="segment-block">
+          <h2 class="segment-title">When they were added</h2>
+          <div class="segment-grid" id="segAdded"></div>
+        </div>
+        <div class="segment-block">
+          <h2 class="segment-title">Texting</h2>
+          <div class="segment-grid" id="segTexting"></div>
         </div>
       </div>
 
+      <!-- The focused view. -->
+      <div id="candList" hidden>
+        <div class="toolbar">
+          <button class="btn btn-ghost" id="backToOverview"><span data-icon="chevron" data-size="14"></span> All groups</button>
+          <div class="search-wrap"><span class="search-ico" data-icon="search" data-size="15"></span><input type="search" id="searchInput" class="input search" placeholder="Search name, email, role…"></div>
+          <select id="industryFilter" class="input role-filter" title="Industry they come from"><option value="">Any industry</option></select>
+          <select id="roleFilter" class="input role-filter" title="Filter by the role someone currently holds"><option value="">All roles</option></select>
+          <select id="addedFilter" class="input role-filter" title="When they were added">
+            <option value="">Added any time</option>
+            <option value="1">Added today</option>
+            <option value="7">Added this week</option>
+            <option value="30">Added this month</option>
+            <option value="90">Added in 90 days</option>
+            <option value="old">Added over 90 days ago</option>
+          </select>
+          <select id="textedFilter" class="input role-filter" title="When they were last texted">
+            <option value="">Texted or not</option>
+            <option value="never">Never texted</option>
+            <option value="ready">Ready to text</option>
+            <option value="1">Texted today</option>
+            <option value="7">Texted this week</option>
+            <option value="any">Texted at some point</option>
+            <option value="nonumber">No phone number</option>
+          </select>
+          <select id="rankFilter" class="input role-filter" title="Where they sit in the texting order">
+            <option value="">Any ranking</option>
+            <option value="50">Top 50 to text</option>
+            <option value="200">Top 200 to text</option>
+            <option value="500">Top 500 to text</option>
+            <option value="unranked">Not being texted</option>
+          </select>
+          <select id="sortBy" class="input role-filter" title="How the list is ordered">
+            <option value="default">Order added</option>
+            <option value="texting">Best to text first</option>
+            <option value="newest">Newest first</option>
+            <option value="name">Name A–Z</option>
+          </select>
+        </div>
+        <div class="toolbar">
+          <div class="filter-chips" id="filterChips">
+            <button class="chip active" data-filter="all">All</button>
+            <button class="chip" data-filter="new">Not contacted</button>
+            <button class="chip" data-filter="emailed">Emailed</button>
+            <button class="chip" data-filter="replied">Replied</button>
+            <button class="chip" data-filter="booked">Booked</button>
+            <button class="chip" data-filter="declined">Not interested</button>
+            <button class="chip" data-filter="bounced">Bounced</button>
+          </div>
+        </div>
+        <div class="active-filters" id="activeFilters" hidden></div>
+      </div>
+
+      <div id="candTableWrap" hidden>
       <div class="selection-bar" id="selectionBar" hidden>
         <span class="sel-count" id="selCount"></span>
         <button class="btn" id="selEmailBtn"><span data-icon="mail" data-size="15"></span> Email</button>
@@ -178,6 +268,7 @@
           <p>Connect a Google Sheet or upload a CSV to fill your pipeline.</p>
           <button class="btn btn-primary" data-goto="import">Import candidates</button>
         </div>
+      </div>
       </div>
     </section>
 

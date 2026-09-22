@@ -147,7 +147,10 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
   const lastError = db.events.find((e) => e.type === 'error' && Date.now() - new Date(e.ts).getTime() < 24 * 3600 * 1000);
   const sendingNow = await mailer.sendStatus(db.settings);
   res.json({
-    candidates: db.candidates,
+    // Industry is derived, never stored — it is a view of role/company/history
+    // and must not drift out of date behind a saved copy of itself.
+    candidates: db.candidates.map((c) => ({ ...c, industry: priority.industry(c).code })),
+    industries: priority.INDUSTRY_LABELS,
     events: db.events.filter((e) => store.FEED_TYPES.has(e.type)).sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 60),
     lastError: lastError ? lastError.message : '',
     template: db.template,

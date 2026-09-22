@@ -11,6 +11,11 @@
   let search = '';
   let roleFilter = '';          // exact current role someone holds, '' = every role
   let sortBy = 'default';       // 'texting' = the order to work down at 60/day
+  let candView = 'overview';    // 'overview' = pick a group; 'list' = the focused table
+  let industryFilter = '';
+  let addedFilter = '';
+  let textedFilter = '';
+  let rankFilter = '';
   let pendingImport = null;    // {headers, rows, mapping, source}
   let composeIds = [];
 
@@ -143,9 +148,25 @@
   // ---------------- Dashboard ----------------
   function renderDashboard() {
     const s = state.stats;
+    const all = state.candidates;
+    const textCount = (fn) => all.filter(fn).length;
+    const t = {
+      sent: textCount((c) => ['sent', 'delivered', 'read', 'replied'].includes(c.textStatus)),
+      delivered: textCount((c) => ['delivered', 'read', 'replied'].includes(c.textStatus)),
+      read: textCount((c) => ['read', 'replied'].includes(c.textStatus)),
+      replied: textCount((c) => c.textStatus === 'replied'),
+      dead: textCount((c) => c.textStatus === 'not-imessage'),
+    };
+    const emailOpened = textCount((c) => Boolean(c.openedAt));
+    const contacted = textCount((c) => Boolean(c.lastEmailedAt) || Boolean(c.lastTextedAt));
+
     $('#statTotal').textContent = s.total;
-    $('#statEmailed').textContent = s.emailed;
+    $('#statEmailed').textContent = contacted;
     $('#statReplied').textContent = s.replied;
+    // Both tiles used to be email-only, which made texting invisible on the
+    // page people actually look at.
+    $('#statContactedSplit').textContent = `${s.emailed.toLocaleString()} emailed · ${t.sent.toLocaleString()} texted`;
+    $('#statRepliedSplit').textContent = `${t.replied.toLocaleString()} by text`;
     $('#statBooked').textContent = state.calendly && state.calendly.syncEnabled ? upcomingInterviews().length : s.booked;
     $('#navCount').textContent = s.total || '';
     renderEmailAllButtons();
@@ -168,6 +189,9 @@
         <div class="pipe-track"><div class="pipe-fill" style="width:${(n / max) * 100}%;background:${color};opacity:.75"></div></div>
         <div class="pipe-count">${n}</div>
       </div>`).join('');
+
+    renderChannels(t, emailOpened, s);
+    renderTextToday(t);
 
     // Candidate updates only: opens, replies, bookings, cancellations.
     const icons = {
@@ -375,6 +399,74 @@
     return state.candidates.filter((c) => c.status === 'new').map((c) => c.id);
   }
 
+  // The two channels as funnels, drawn against the same scale so the shapes can
+  // be compared at a glance. Texting is the one that can show delivered and
+  // read at all — email has no equivalent — so the rows deliberately differ
+  // rather than being forced into a shared shape that flatters neither.
+  function renderChannels(t, emailOpened, s) {
+    const pct = (n, of) => (of ? `${Math.round((n / of) * 100)}%` : '—');
+    const funnel = (el, rows, top) => {
+      const base = Math.max(1, top);
+      $(el).innerHTML = rows.map(([label, n, color, note]) => `
+        <div class="funnel-row">
+          <div class="funnel-label">${label}</div>
+          <div class="funnel-track"><div class="funnel-fill" style="width:${Math.min(100, (n / base) * 100)}%;background:${color}"></div></div>
+          <div class="funnel-n">${n.toLocaleString()}</div>
+          <div class="funnel-pct">${note !== undefined ? note : pct(n, top)}</div>
+        </div>`).join('');
+    };
+
+    funnel('#emailFunnel', [
+      ['Sent', s.emailed, 'var(--blue)', ''],
+      ['Opened', emailOpened, 'var(--mint)'],
+      ['Replied', s.replied, 'var(--green)'],
+      ['Booked', s.booked, '#23a55a'],
+      ['Bounced', s.bounced || 0, 'var(--amber)'],
+    ], s.emailed);
+
+    funnel('#textFunnel', [
+      ['Sent', t.sent, 'var(--blue)', ''],
+      ['Delivered', t.delivered, 'var(--mint)'],
+      ['Read', t.read, 'var(--green)'],
+      ['Replied', t.replied, '#23a55a'],
+      ['No iMessage', t.dead, 'var(--amber)'],
+    ], t.sent);
+
+    const q = (state.texting && state.texting.queue) || {};
+    const relay = q.relay || {};
+    const chip = $('#chTextRelay');
+    chip.className = `badge ${relay.online ? 'tint-green' : 'tint-navy'}`;
+    chip.textContent = relay.online ? 'Mac online' : 'Mac offline';
+
+    // Read receipts are the one number here that is not what it looks like, so
+    // say why rather than letting a low figure read as poor performance.
+    $('#textFunnelNote').textContent = t.sent
+      ? `Read counts only people who have read receipts switched on, so the true figure is higher. ${t.replied ? `${pct(t.replied, t.sent)} have replied` : 'No replies yet'}${s.emailed ? `, against ${pct(s.replied, s.emailed)} by email` : ''}.`
+      : 'Nothing texted yet.';
+  }
+
+  // What the daily allowance has been spent on today, and what is left.
+  function renderTextToday(t) {
+    const q = (state.texting && state.texting.queue) || {};
+    const used = q.sentToday || 0;
+    const cap = q.dailyLimit || 0;
+    $('#textTodayBadge').textContent = cap ? `${used} of ${cap} used` : 'not set up';
+    const relay = q.relay || {};
+    const items = [
+      ['Sent today', used],
+      ['Left today', Math.max(0, cap - used)],
+      ['Waiting in the queue', q.pending || 0],
+      ['Replied to a text', t.replied],
+    ];
+    $('#textToday').innerHTML = items.map(([label, n]) => `
+      <div class="today-cell"><div class="today-n">${Number(n).toLocaleString()}</div><div class="today-label">${label}</div></div>`).join('');
+    $('#textTodayNote').textContent = !relay.online
+      ? 'The Mac relay is offline, so nothing will send until it is back.'
+      : q.pending
+        ? `Sending about one every ${Math.round(((q.minGap || 45) + (q.maxGap || 150)) / 2)}s, ${q.startHour}:00–${q.endHour}:00 in each person's own timezone.`
+        : 'Nothing queued. Pick people on the Candidates page, or text the top of the order from the Texting page.';
+  }
+
   function renderSendingCard() {
     const q = state.queue || {};
     const card = $('#sendingCard');
@@ -483,13 +575,13 @@
   const roleKey = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
   function visibleCandidates() {
-    const q = search.toLowerCase();
+    const q = search.toLowerCase().trim();
     return state.candidates.filter((c) => {
       if (filter !== 'all' && c.status !== filter) return false;
       if (roleFilter === '__none' && roleKey(c.role)) return false;
-      if (roleFilter && roleFilter !== '__none' && roleKey(c.role) !== roleFilter) return false;
+      if (!matchesFilters(c)) return false;
       if (!q) return true;
-      return [c.name, c.firstName, c.lastName, c.email, c.role, c.company, c.pastRoles]
+      return [c.name, c.firstName, c.lastName, c.email, c.role, c.company, c.pastRoles, c.phone, c.location]
         .some((f) => String(f || '').toLowerCase().includes(q));
     });
   }
@@ -525,9 +617,197 @@
   const textPriorityOf = (id) => ((state.texting && state.texting.priority && state.texting.priority.order) || {})[id] || null;
   const textBlockedOf = (id) => ((state.texting && state.texting.priority && state.texting.priority.blocked) || {})[id] || '';
 
+  // ---------------- Candidates: overview and filters ----------------
+  // 2,800 rows is not a list anybody reads. The page opens on groups worth
+  // looking at, each with a real count, and picking one drops into the table
+  // already filtered — so the long list is somewhere you arrive on purpose
+  // rather than the first thing you have to get past.
+  const DAY = 864e5;
+  const daysSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / DAY : Infinity);
+  const industryLabel = (code) => ((state.industries || {})[code] || 'Other');
+
+  function matchesFilters(c) {
+    if (industryFilter && (c.industry || 'other') !== industryFilter) return false;
+    if (roleFilter && roleFilter !== '__none' && roleKey(c.role) !== roleFilter) return false;
+
+    if (addedFilter === 'old') { if (daysSince(c.addedAt) <= 90) return false; }
+    else if (addedFilter && daysSince(c.addedAt) > Number(addedFilter)) return false;
+
+    if (textedFilter) {
+      const textable = Boolean(textPhoneOf(c));
+      if (textedFilter === 'nonumber') { if (textable) return false; }
+      else if (textedFilter === 'never') { if (c.lastTextedAt) return false; }
+      else if (textedFilter === 'ready') { if (!textPriorityOf(c.id)) return false; }
+      else if (textedFilter === 'any') { if (!c.lastTextedAt) return false; }
+      else if (daysSince(c.lastTextedAt) > Number(textedFilter)) return false;
+    }
+
+    if (rankFilter) {
+      const pri = textPriorityOf(c.id);
+      if (rankFilter === 'unranked') { if (pri) return false; }
+      else if (!pri || pri.rank > Number(rankFilter)) return false;
+    }
+    return true;
+  }
+
+  // Jump from a group straight into the table with that filter applied.
+  function openSegment(patch, { label = '' } = {}) {
+    // Every group is a fresh start, not a narrowing of whatever was last set.
+    filter = 'all'; industryFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; roleFilter = '';
+    if (patch.status !== undefined) filter = patch.status;
+    if (patch.industry !== undefined) industryFilter = patch.industry;
+    if (patch.added !== undefined) addedFilter = patch.added;
+    if (patch.texted !== undefined) textedFilter = patch.texted;
+    if (patch.rank !== undefined) rankFilter = patch.rank;
+    if (patch.sort !== undefined) sortBy = patch.sort;
+    search = '';
+    selected.clear();
+    candView = 'list';
+    syncFilterControls();
+    renderCandidates();
+    if (label) toast(`Showing ${label}.`);
+  }
+
+  function syncFilterControls() {
+    $('#industryFilter').value = industryFilter;
+    $('#addedFilter').value = addedFilter;
+    $('#textedFilter').value = textedFilter;
+    $('#rankFilter').value = rankFilter;
+    $('#sortBy').value = sortBy;
+    $('#searchInput').value = search;
+    $$('#filterChips .chip').forEach((ch) => ch.classList.toggle('active', ch.dataset.filter === filter));
+  }
+
+  function renderSegments() {
+    if (!state.candidates.length) return;
+    const all = state.candidates;
+    const pri = (state.texting && state.texting.priority) || { order: {} };
+    const ranked = Object.keys(pri.order || {}).length;
+    const card = (label, n, sub, patch) => ({ label, n, sub, patch });
+
+    const cards = (el, items) => {
+      $(el).innerHTML = items.filter((i) => i.n > 0).map((i) => `
+        <button class="segment" data-seg='${esc(JSON.stringify(i.patch))}' data-label="${esc(i.label)}">
+          <span class="segment-n">${i.n.toLocaleString()}</span>
+          <span class="segment-label">${esc(i.label)}</span>
+          ${i.sub ? `<span class="segment-sub">${esc(i.sub)}</span>` : ''}
+        </button>`).join('') || '<p class="muted">Nothing here yet.</p>';
+    };
+
+    const count = (fn) => all.filter(fn).length;
+
+    cards('#segStart', [
+      card('Everyone', all.length, 'the whole list, unfiltered', {}),
+      card('Best to text next', Math.min(ranked, 50), 'the top of the order', { rank: '50', sort: 'texting' }),
+      card('Replied to you', count((c) => c.status === 'replied'), 'waiting on you', { status: 'replied' }),
+      card('Interviews booked', count((c) => c.status === 'booked'), '', { status: 'booked' }),
+      card('Ready to text', ranked, 'have a number and are eligible', { texted: 'ready', sort: 'texting' }),
+      card('Never contacted', count((c) => c.status === 'new'), '', { status: 'new' }),
+      card('Missing a phone number', count((c) => !textPhoneOf(c)), 'cannot be texted yet', { texted: 'nonumber' }),
+    ]);
+
+    const byIndustry = {};
+    for (const c of all) { const k = c.industry || 'other'; byIndustry[k] = (byIndustry[k] || 0) + 1; }
+    cards('#segIndustry', Object.entries(byIndustry)
+      .sort((a, b) => b[1] - a[1])
+      .map(([code, n]) => card(industryLabel(code), n, '', { industry: code })));
+
+    cards('#segStage', Object.entries(STATUS)
+      .map(([k, v]) => card(v.label, count((c) => c.status === k), '', { status: k })));
+
+    cards('#segAdded', [
+      card('Today', count((c) => daysSince(c.addedAt) <= 1), '', { added: '1', sort: 'newest' }),
+      card('This week', count((c) => daysSince(c.addedAt) <= 7), '', { added: '7', sort: 'newest' }),
+      card('This month', count((c) => daysSince(c.addedAt) <= 30), '', { added: '30', sort: 'newest' }),
+      card('Last 90 days', count((c) => daysSince(c.addedAt) <= 90), '', { added: '90', sort: 'newest' }),
+      card('Older than 90 days', count((c) => daysSince(c.addedAt) > 90), '', { added: 'old' }),
+    ]);
+
+    cards('#segTexting', [
+      card('Texted today', count((c) => daysSince(c.lastTextedAt) <= 1), '', { texted: '1' }),
+      card('Texted this week', count((c) => daysSince(c.lastTextedAt) <= 7), '', { texted: '7' }),
+      card('Texted at some point', count((c) => Boolean(c.lastTextedAt)), '', { texted: 'any' }),
+      card('Replied to a text', count((c) => c.textStatus === 'replied'), '', { texted: 'any' }),
+      card('Read your text', count((c) => c.textStatus === 'read'), 'but has not replied', { texted: 'any' }),
+      card('No iMessage account', count((c) => c.textStatus === 'not-imessage'), 'unreachable this way', { texted: 'any' }),
+      card('Never texted', count((c) => !c.lastTextedAt && textPhoneOf(c)), 'and has a number', { texted: 'never' }),
+    ]);
+
+    // The industry menu in the focused view mirrors what actually exists.
+    const sel = $('#industryFilter');
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">Any industry</option>' + Object.entries(byIndustry)
+      .sort((a, b) => b[1] - a[1])
+      .map(([code, n]) => `<option value="${esc(code)}">${esc(industryLabel(code))} (${n})</option>`).join('');
+    sel.value = keep;
+  }
+
+  function renderActiveFilters() {
+    const bits = [];
+    if (filter !== 'all') bits.push([`Stage: ${(STATUS[filter] || {}).label || filter}`, () => { filter = 'all'; }]);
+    if (industryFilter) bits.push([`Industry: ${industryLabel(industryFilter)}`, () => { industryFilter = ''; }]);
+    if (roleFilter) bits.push([`Role: ${roleFilter}`, () => { roleFilter = ''; }]);
+    if (addedFilter) bits.push([`Added: ${$('#addedFilter').selectedOptions[0].textContent}`, () => { addedFilter = ''; }]);
+    if (textedFilter) bits.push([`Texting: ${$('#textedFilter').selectedOptions[0].textContent}`, () => { textedFilter = ''; }]);
+    if (rankFilter) bits.push([`Ranking: ${$('#rankFilter').selectedOptions[0].textContent}`, () => { rankFilter = ''; }]);
+    if (search) bits.push([`Search: “${search}”`, () => { search = ''; }]);
+    const el = $('#activeFilters');
+    el.hidden = bits.length === 0;
+    clearFilterActions = bits.map(([, fn]) => fn);
+    el.innerHTML = bits.map(([text], i) => `<button class="filter-tag" data-clear="${i}">${esc(text)} <span aria-hidden="true">×</span></button>`).join('')
+      + (bits.length > 1 ? '<button class="btn-link" data-clear="all">Clear all</button>' : '');
+  }
+  let clearFilterActions = [];
+
+  $('#activeFilters').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-clear]');
+    if (!b) return;
+    if (b.dataset.clear === 'all') { filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; search = ''; }
+    else clearFilterActions[Number(b.dataset.clear)]();
+    syncFilterControls();
+    renderCandidates();
+  });
+
+  $$('.segment-grid').forEach((grid) => grid.addEventListener('click', (e) => {
+    const b = e.target.closest('.segment');
+    if (!b) return;
+    openSegment(JSON.parse(b.dataset.seg), { label: b.dataset.label.toLowerCase() });
+  }));
+
+  $('#backToOverview').addEventListener('click', () => {
+    candView = 'overview';
+    selected.clear();
+    renderCandidates();
+  });
+
+  $('#overviewSearch').addEventListener('input', (e) => {
+    const v = e.target.value;
+    if (!v.trim()) return;
+    search = v;
+    candView = 'list';
+    syncFilterControls();
+    renderCandidates();
+    setTimeout(() => { const el = $('#searchInput'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 30);
+    e.target.value = '';
+  });
+
+  for (const [id, set] of [['#industryFilter', (v) => { industryFilter = v; }], ['#addedFilter', (v) => { addedFilter = v; }],
+    ['#textedFilter', (v) => { textedFilter = v; }], ['#rankFilter', (v) => { rankFilter = v; }]]) {
+    $(id).addEventListener('change', (e) => { set(e.target.value); selected.clear(); renderCandidates(); });
+  }
+
   function renderCandidates() {
+    const hasPeople = state.candidates.length > 0;
+    const overview = candView === 'overview' && hasPeople;
+    $('#candOverview').hidden = !overview;
+    $('#candList').hidden = overview || !hasPeople;
+    $('#candTableWrap').hidden = overview;
+    if (overview) { renderSegments(); $('#candidatesEmpty').style.display = 'none'; return; }
+
     let rows = visibleCandidates();
     const ranking = sortBy === 'texting';
+    if (sortBy === 'newest') rows = [...rows].sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')));
+    else if (sortBy === 'name') rows = [...rows].sort((a, b) => String(a.name || a.email).localeCompare(String(b.name || b.email)));
     if (ranking) {
       // Ranked people first in their own order, then everyone who cannot be
       // texted — they are still listed, because "why is this person not here"
@@ -576,7 +856,23 @@
       </tr>`;
     }).join('');
     updateSendButton();
+    renderActiveFilters();
     $('#checkAll').checked = rows.length > 0 && rows.every((c) => selected.has(c.id));
+    const empty = $('#candidatesEmpty');
+    if (!rows.length && state.candidates.length) {
+      empty.style.display = 'block';
+      empty.innerHTML = `<h3>Nobody matches those filters</h3>
+        <p>${state.candidates.length.toLocaleString()} people are in the list — none of them fit this combination.</p>
+        <button class="btn btn-primary" id="emptyClear">Clear the filters</button>`;
+      const btn = $('#emptyClear');
+      if (btn) btn.addEventListener('click', () => {
+        filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; search = '';
+        syncFilterControls(); renderCandidates();
+      });
+    }
+    $('#candCount').textContent = rows.length === state.candidates.length
+      ? `${rows.length.toLocaleString()} candidates`
+      : `${rows.length.toLocaleString()} of ${state.candidates.length.toLocaleString()}`;
   }
 
   // What can actually be done with the current tick-boxes. Texting is offered
@@ -641,6 +937,13 @@
     renderCandidates();
   });
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; renderCandidates(); });
+  // Arriving on the tab starts at the overview; it is a landing page, not a
+  // filter that persists from whatever was last looked at.
+  $$('.nav-item[data-view="candidates"]').forEach((b) => b.addEventListener('click', () => {
+    if (candView === 'list' && !search && filter === 'all' && !industryFilter && !addedFilter && !textedFilter && !rankFilter) {
+      candView = 'overview'; renderCandidates();
+    }
+  }));
   $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; selected.clear(); renderCandidates(); });
   $('#sortBy').addEventListener('change', (e) => { sortBy = e.target.value; renderCandidates(); });
   $('#filterChips').addEventListener('click', (e) => {
