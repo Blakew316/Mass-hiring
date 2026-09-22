@@ -17,8 +17,10 @@ const queue = require('./lib/queue');
 const apollo = require('./lib/apollo');
 const attachments = require('./lib/attachments');
 const address = require('./lib/email-address');
+const textQueue = require('./lib/text-queue');
+const phone = require('./lib/phone');
 const crypto = require('crypto');
-const { renderEmail } = require('./lib/template');
+const { renderEmail, renderText } = require('./lib/template');
 
 const app = express();
 // Exact-case routes only, so /API/... cannot reach a handler by a path the
@@ -79,6 +81,12 @@ function maskedSettings(s, fromAddress) {
     calendlySigningKey: s.calendlySigningKey ? '••••••••' : '',
     calendlyToken: s.calendlyToken ? '••••••••' : '',
     apolloApiKey: s.apolloApiKey ? '••••••••' : '',
+    relayToken: s.relayToken ? '••••••••' : '',
+    // Texting pace, shown already clamped for the same reason as the email pace.
+    ...textQueue.normalizeTextSettings({
+      textDailyLimit: s.textDailyLimit, textMinGap: s.textMinGap, textMaxGap: s.textMaxGap,
+      textStartHour: s.textStartHour, textEndHour: s.textEndHour,
+    }),
   };
 }
 
@@ -137,6 +145,12 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
     maxImmediate: MAX_PER_REQUEST,
     interviews: db.interviews || [],
     apollo: { configured: Boolean(db.settings.apolloApiKey), maxPerPull: apollo.MAX_PER_PULL, batch: apollo.ENRICH_BATCH },
+    texting: {
+      template: db.textTemplate,
+      withPhone: db.candidates.filter((c) => phone.normalize(c.phone)).length,
+      queue: textQueue.status(await textQueue.loadQ(), db.settings, await storage.getJson('relay').catch(() => null)),
+      tokenSet: Boolean(db.settings.relayToken || (process.env.RELAY_TOKEN || '').trim()),
+    },
     calendly: {
       syncEnabled: Boolean(db.settings.calendlyToken),
       webhook: Boolean(db.settings.calendlySigningKey),
@@ -150,18 +164,26 @@ app.get('/api/state', asyncRoute(async (_req, res) => {
 // Numeric settings are stored within the range the app honours, and the
 // caller is told what was adjusted, so a typed 100/min never silently becomes
 // a different number on the dashboard.
+const TEXT_NUMERIC = ['textDailyLimit', 'textMinGap', 'textMaxGap', 'textStartHour', 'textEndHour'];
 const NUMERIC_SETTINGS = {
   ...Object.fromEntries(['dailyLimit', 'perMinute'].map((k) => [k, null])),   // ranges live in lib/queue.js
+  ...Object.fromEntries(TEXT_NUMERIC.map((k) => [k, 'text'])),                // ranges live in lib/text-queue.js
   followUpDays: [1, 30],
   maxFollowUps: [0, 5],
 };
-const SETTING_LABELS = { dailyLimit: 'Daily send limit', perMinute: 'Emails per minute', followUpDays: 'Follow up after (days)', maxFollowUps: 'Follow-ups per person' };
+const SETTING_LABELS = { dailyLimit: 'Daily send limit', perMinute: 'Emails per minute', followUpDays: 'Follow up after (days)', maxFollowUps: 'Follow-ups per person',
+  textDailyLimit: 'Texts per day', textMinGap: 'Shortest gap between texts', textMaxGap: 'Longest gap between texts', textStartHour: 'Start texting at', textEndHour: 'Stop texting at' };
 // Why a number was changed, in words that match the setting.
 const SETTING_REASONS = {
   dailyLimit: 'that is the most Google allows this account in a day',
   perMinute: 'that is the most the Gmail API allows in a minute',
   followUpDays: 'follow-ups can wait between 1 and 30 days',
   maxFollowUps: 'between 0 and 5 follow-ups per person',
+  textDailyLimit: `Apple disables iMessage on accounts that send far more than this to strangers, so the cap is ${textQueue.MAX_DAILY} a day`,
+  textMinGap: 'the gap between texts is measured in seconds',
+  textMaxGap: 'the gap between texts is measured in seconds, and cannot be shorter than the shortest gap',
+  textStartHour: 'texting hours are whole hours of the recipient\u2019s own day',
+  textEndHour: 'texting hours are whole hours of the recipient\u2019s own day',
 };
 
 app.post('/api/settings', asyncRoute(async (req, res) => {
@@ -169,7 +191,8 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
   const before = { ...db.settings };
   const sender = (await mailer.sendStatus(db.settings)).from;
   const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
-    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone'];
+    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone',
+    ...TEXT_NUMERIC, 'textSunday'];
   const adjusted = [];
   for (const k of allowed) {
     if (!(k in req.body) || req.body[k] === '••••••••') continue;
@@ -177,9 +200,11 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
     let val = typeof v === 'boolean' ? v : String(v ?? '').trim();
     if (k in NUMERIC_SETTINGS && val !== '') {
       const range = NUMERIC_SETTINGS[k];
-      const stored = range
-        ? (Number.isFinite(Number(val)) ? String(Math.min(range[1], Math.max(range[0], Math.round(Number(val))))) : '')
-        : queue.normalizePaceSettings({ [k]: val }, sender)[k];
+      const stored = range === 'text'
+        ? textQueue.normalizeTextSettings({ [k]: val })[k]
+        : range
+          ? (Number.isFinite(Number(val)) ? String(Math.min(range[1], Math.max(range[0], Math.round(Number(val))))) : '')
+          : queue.normalizePaceSettings({ [k]: val }, sender)[k];
       if (stored !== val) adjusted.push({ key: k, label: SETTING_LABELS[k] || k, from: val, to: stored, reason: SETTING_REASONS[k] || '' });
       val = stored;
     }
@@ -730,6 +755,250 @@ app.post('/api/queue/run', asyncRoute(async (_req, res) => {
 }));
 
 // ---------- Open tracking pixel (public; token is signed) ----------
+// ---------- Texting: iMessage through the Mac Studio relay ----------
+// The dashboard cannot send an iMessage — only a Mac can. So a small daemon on
+// the Mac Studio (see relay/) polls these routes, claims one message at a time,
+// sends it through BlueBubbles and reports what happened. Netlify never calls
+// the Mac: the Mac always calls us, which is why none of this needs the Mac to
+// be reachable from the internet.
+//
+// /api/relay/* is authenticated by the relay's bearer token, not by the
+// dashboard password — see lib/auth.js.
+
+// The relay's own record: last check-in, what it reported about itself.
+const relayState = () => storage.getJson('relay').catch(() => null);
+
+// Text funnel order, so a later signal never moves a candidate backwards
+// (a delivery receipt arriving after a reply must not undo the reply).
+const TEXT_RANK = { '': 0, failed: 0, 'not-imessage': 1, sent: 2, delivered: 3, read: 4, replied: 5 };
+const advanceText = (c, next) => { if ((TEXT_RANK[next] || 0) >= (TEXT_RANK[c.textStatus || ''] || 0)) c.textStatus = next; };
+
+// Candidates indexed by their number in E.164, so an inbound message can be
+// matched back to a person. Numbers that do not belong to anyone in the list
+// are ignored — this is what keeps the owner's personal iMessages out of the CRM.
+function byPhone(db) {
+  const m = new Map();
+  for (const c of db.candidates) {
+    const p = phone.normalize(c.phone);
+    if (p && !m.has(p)) m.set(p, c);
+  }
+  return m;
+}
+
+app.post('/api/relay/hello', asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  await storage.updateJson('relay', (cur) => ({
+    ...(cur || {}),
+    lastSeenAt: new Date().toISOString(),
+    host: String(b.host || '').slice(0, 80),
+    version: String(b.version || '').slice(0, 24),
+    bluebubbles: Boolean(b.bluebubbles),
+    backend: String(b.backend || 'applescript').slice(0, 20),
+    error: String(b.error || '').slice(0, 300),
+  }));
+  const db = await store.load();
+  const l = textQueue.limits(db.settings);
+  res.json({ ok: true, pollMs: 5000, helloMs: 30000, limits: { startHour: l.startHour, endHour: l.endHour, dailyLimit: l.dailyLimit } });
+}));
+
+app.post('/api/relay/claim', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  let out = { job: null, reason: 'empty' };
+  await textQueue.updateQ((q) => {
+    out = textQueue.claim(q, db, { render: (tpl, c) => renderText(tpl || db.textTemplate, c, db.settings) });
+    // A poll that found nothing to do writes nothing: the relay polls every few
+    // seconds, and rewriting the record each time would be pure churn.
+    if (!out.changed) return false;
+  });
+  res.json({ job: out.job || null, reason: out.reason, until: out.until || null });
+}));
+
+app.post('/api/relay/report', asyncRoute(async (req, res) => {
+  const { jobId, status, error } = req.body || {};
+  let out = { ok: false, reason: 'unknown-or-expired-job' };
+  await textQueue.updateQ((q) => {
+    out = textQueue.report(q, { jobId: String(jobId || ''), status: String(status || ''), error: String(error || '').slice(0, 300) });
+    if (!out.ok) return false;
+  });
+  if (!out.ok) return res.status(409).json(out);
+  if (out.candidateId) {
+    await store.update((db) => {
+      const c = db.candidates.find((x) => x.id === out.candidateId);
+      if (!c) return;
+      if (out.status === 'sent') { c.lastTextedAt = new Date().toISOString(); advanceText(c, 'sent'); }
+      else if (out.status === 'not-imessage') c.textStatus = 'not-imessage';
+      else c.textStatus = 'failed';
+    });
+  }
+  res.json(out);
+}));
+
+// Delivery receipts, read receipts and inbound replies, read off the Mac's own
+// Messages database. Only events for numbers already in the candidate list are
+// acted on; anything else is silently dropped.
+app.post('/api/relay/events', asyncRoute(async (req, res) => {
+  const raw = Array.isArray(req.body && req.body.events) ? req.body.events.slice(0, 200) : [];
+  const db = await store.load();
+  const index = byPhone(db);
+  const seen = { applied: 0, unknown: 0, optOut: 0, replies: [] };
+  const optOuts = [];
+  const touched = new Map();   // candidate id -> mutation to apply
+
+  for (const e of raw) {
+    const p = phone.normalize(e && e.phone);
+    const c = p ? index.get(p) : null;
+    if (!c) { seen.unknown += 1; continue; }
+    const kind = String((e && e.kind) || '');
+    const ts = e && e.ts && !Number.isNaN(new Date(e.ts).getTime()) ? new Date(e.ts).toISOString() : new Date().toISOString();
+    const text = String((e && e.text) || '').slice(0, 2000);
+    const patch = touched.get(c.id) || { id: c.id, replies: [] };
+    if (kind === 'delivered') patch.delivered = ts;
+    else if (kind === 'read') patch.read = ts;
+    else if (kind === 'undelivered') patch.undelivered = ts;
+    else if (kind === 'reply') {
+      patch.replied = ts;
+      patch.replies.push({ ts, text });
+      if (phone.optedOut(text)) { patch.optOut = true; optOuts.push(p); }
+    } else continue;
+    touched.set(c.id, patch);
+    seen.applied += 1;
+  }
+
+  if (touched.size) {
+    await store.update((fresh) => {
+      for (const patch of touched.values()) {
+        const c = fresh.candidates.find((x) => x.id === patch.id);
+        if (!c) continue;
+        // Messages accepts a send and only then marks it failed, so this can
+        // arrive after we already recorded "sent" — it has to be able to undo
+        // that, which the usual forward-only rule would not allow. A receipt
+        // that already proved delivery still wins.
+        if (patch.undelivered && (TEXT_RANK[c.textStatus || ''] || 0) <= TEXT_RANK.sent) c.textStatus = 'not-imessage';
+        if (patch.delivered) { c.textDeliveredAt = c.textDeliveredAt || patch.delivered; advanceText(c, 'delivered'); }
+        if (patch.read) { c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
+        if (patch.replied) {
+          c.textRepliedAt = c.textRepliedAt || patch.replied;
+          advanceText(c, 'replied');
+          c.textReplies = [...(c.textReplies || []), ...patch.replies].slice(-20);
+          // A text reply is the same pipeline signal as an email reply.
+          if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
+          c.repliedAt = c.repliedAt || patch.replied;
+        }
+        if (patch.optOut) c.status = 'declined';
+      }
+    });
+  }
+
+  // Anyone who asked us to stop is blocked at the queue, not just on their record.
+  if (optOuts.length) {
+    await textQueue.updateQ((q) => { let any = false; for (const p of optOuts) any = textQueue.addOptOut(q, p) || any; if (!any) return false; });
+    seen.optOut = optOuts.length;
+  }
+
+  // The feed and the phone push, for real replies only.
+  for (const patch of touched.values()) {
+    const c = db.candidates.find((x) => x.id === patch.id);
+    if (!c) continue;
+    const who = c.name || phone.display(phone.normalize(c.phone));
+    if (patch.read && !patch.replied) {
+      await store.addEvent('text-read', `${who} read your text.`, c.id, patch.read).catch(() => {});
+    }
+    for (const r of patch.replies) {
+      await store.addEvent('text-replied', `${who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts).catch(() => {});
+      try {
+        await notify.pushToPhone(db.settings, {
+          title: `💬 ${who} replied`,
+          message: r.text.slice(0, 300),
+          priority: 'high',
+          tags: 'speech_balloon',
+        });
+      } catch {}
+    }
+  }
+  res.json({ ok: true, ...seen });
+}));
+
+// ---------- Texting: the dashboard's own routes ----------
+app.post('/api/texts/template', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  db.textTemplate = { body: String((req.body && req.body.body) || '').slice(0, 2000) };
+  await store.save(db);
+  res.json({ ok: true, textTemplate: db.textTemplate });
+}));
+
+app.post('/api/texts/template/reset', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  db.textTemplate = structuredClone(store.DEFAULT_TEXT_TEMPLATE);
+  await store.save(db);
+  res.json({ ok: true, textTemplate: db.textTemplate });
+}));
+
+app.post('/api/texts/preview', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === (req.body && req.body.id))
+    || db.candidates.find((x) => phone.normalize(x.phone))
+    || { name: 'Sam Rivera', role: 'Account Executive', company: 'Acme Payments', phone: '+15551234567' };
+  const body = renderText(db.textTemplate, c, db.settings);
+  res.json({ body, chars: body.length, to: phone.display(phone.normalize(c.phone)) || '', name: c.name || '' });
+}));
+
+app.post('/api/texts/queue', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const ids = Array.isArray(req.body && req.body.ids) && req.body.ids.length
+    ? req.body.ids
+    : db.candidates.filter((c) => phone.normalize(c.phone) && !c.lastTextedAt && c.status !== 'declined' && c.status !== 'booked').map((c) => c.id);
+  let result = { added: 0, skipped: {} };
+  await textQueue.updateQ((q) => {
+    result = textQueue.enqueue(q, db, ids, db.textTemplate);
+    if (!result.added) return false;
+  });
+  const q = await textQueue.loadQ();
+  res.json({ ...result, queue: textQueue.status(q, db.settings, await relayState()) });
+}));
+
+app.delete('/api/texts/queue', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  const q = await textQueue.updateQ((f) => { textQueue.clearQueue(f); });
+  res.json({ ok: true, queue: textQueue.status(q, db.settings, await relayState()) });
+}));
+
+app.post('/api/texts/queue/retry-failed', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  let n = 0;
+  const q = await textQueue.updateQ((f) => { n = textQueue.retryFailed(f, db); if (!n) return false; });
+  res.json({ ok: true, requeued: n, queue: textQueue.status(q, db.settings, await relayState()) });
+}));
+
+app.post('/api/texts/optout', asyncRoute(async (req, res) => {
+  const p = phone.normalize(req.body && req.body.phone);
+  if (!p) return res.status(400).json({ error: 'That does not look like a phone number.' });
+  await textQueue.updateQ((q) => { if (!textQueue.addOptOut(q, p)) return false; });
+  await store.update((db) => {
+    const c = db.candidates.find((x) => phone.normalize(x.phone) === p);
+    if (c) c.status = 'declined';
+  });
+  res.json({ ok: true, phone: phone.display(p) });
+}));
+
+// The shared secret for the Mac. Generated here rather than typed, shown in
+// full only to a signed-in dashboard so it can be copied into the relay's
+// config once, and never sent anywhere else.
+app.get('/api/texts/relay-token', asyncRoute(async (_req, res) => {
+  const db = await store.load();
+  res.json({
+    token: db.settings.relayToken || '',
+    envOverride: Boolean((process.env.RELAY_TOKEN || '').trim()),
+    baseUrl: google.baseUrl(),
+  });
+}));
+
+app.post('/api/texts/relay-token', asyncRoute(async (_req, res) => {
+  const token = crypto.randomBytes(32).toString('base64url');
+  await store.update((db) => { db.settings.relayToken = token; });
+  auth.forgetRelaySecret();
+  res.json({ ok: true, token, baseUrl: google.baseUrl(), envOverride: Boolean((process.env.RELAY_TOKEN || '').trim()) });
+}));
+
 app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
   const db = await store.load();
   const id = tracking.verify(db.settings, req.params.token);

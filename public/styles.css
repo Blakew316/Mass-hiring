@@ -514,3 +514,59 @@ tr:hover .row-actions { opacity: 1; }
 .redirect-row .btn-small { padding: 6px 10px; font-size: 12px; flex: none; }
 .redirect-box .hint { margin-top: 8px; }
 .redirect-box .hint.warn-text { color: #6d4c00; }
+
+/* ---------- Texting ---------- */
+.text-stats { margin-bottom: 18px; }
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px 16px;
+  margin-bottom: 4px;
+}
+
+.relay-steps { margin: 4px 0 18px; }
+.steps { margin: 0 0 8px; padding-left: 20px; color: var(--ink-soft); font-size: 14px; line-height: 1.75; }
+.steps li { margin-bottom: 2px; }
+.steps code, .relay-steps code {
+  background: var(--surface-sunk); border-radius: 5px;
+  padding: 1px 6px; font-size: 12.5px;
+}
+
+/* The message preview, shaped like the bubble it will actually arrive in. */
+.imessage-preview {
+  background: var(--surface-sunk);
+  border-radius: var(--radius);
+  padding: 18px 16px;
+  display: flex;
+  justify-content: flex-end;
+  min-height: 96px;
+}
+.imessage-bubble {
+  background: linear-gradient(#20b2fb, #1088e8);
+  color: #fff;
+  border-radius: 19px;
+  padding: 9px 14px;
+  max-width: 78%;
+  font-size: 14.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 1px 2px rgba(16, 136, 232, .3);
+}
+.imessage-bubble:empty::after { content: 'Nothing to preview yet'; opacity: .75; }
+
+/* Where a candidate stands in the text funnel, in the candidates table. */
+.text-pip { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; white-space: nowrap; }
+.text-pip .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--line); }
+.text-pip.is-sent      .dot { background: var(--blue); }
+.text-pip.is-delivered .dot { background: var(--mint, #34c98a); }
+.text-pip.is-read      .dot { background: var(--green, #23a55a); }
+.text-pip.is-replied   .dot { background: var(--green, #23a55a); box-shadow: 0 0 0 3px var(--green-tint); }
+.text-pip.is-failed    .dot,
+.text-pip.is-none      .dot { background: var(--amber); }
+
+/* Is the Mac actually there? */
+.relay-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.relay-dot.on  { background: #23a55a; box-shadow: 0 0 0 3px var(--green-tint); }
+.relay-dot.off { background: var(--red); }
