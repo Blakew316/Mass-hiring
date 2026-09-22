@@ -75,7 +75,32 @@ sed -e "s|__NODE__|$NODE|g" \
 launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
 launchctl kickstart -k "gui/$UID/$LABEL" 2>/dev/null || true
 
+# Put the on/off command somewhere the shell will find it, without sudo.
+BINDIR=""
+for d in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
+  if [ -d "$d" ] && [ -w "$d" ]; then BINDIR="$d"; break; fi
+done
+if [ -z "$BINDIR" ]; then
+  BINDIR="$HOME/.local/bin"
+  mkdir -p "$BINDIR"
+fi
+ln -sf "$DIR/wprelay" "$BINDIR/wprelay"
+
 say "Installed and running. It starts automatically when you log in."
+echo
+say "Turning texting on and off"
+echo "  wprelay on        turn texting on"
+echo "  wprelay off       turn texting off"
+echo "  wprelay status    is it running and healthy"
+echo "  wprelay log       watch what it is doing"
+echo
+echo "These work over SSH too, from your MacBook at the office."
+case ":$PATH:" in
+  *":$BINDIR:"*) ;;
+  *) echo
+     echo "NOTE: $BINDIR is not on your PATH. Add it once:"
+     echo "  echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.zshrc && source ~/.zshrc" ;;
+esac
 echo
 echo "  Watch it:    tail -f \"$LOG\""
 echo "  Stop it:     launchctl bootout gui/$UID/$LABEL"

@@ -121,11 +121,24 @@ have to make that trade.
 ## Everyday use
 
 ```bash
-tail -f ~/Library/Logs/wp-relay.log                 # watch it
-launchctl bootout gui/$UID/com.wholesalepayments.wprelay    # stop
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.wholesalepayments.wprelay.plist   # start
-open -e ~/.wp-relay/config.json                     # settings
+wprelay on        # turn texting on
+wprelay off       # turn texting off
+wprelay status    # is it running, and is it healthy
+wprelay log       # watch what it is doing
+wprelay restart   # after changing the config
 ```
+
+**These work over SSH**, so texting can be switched on from a laptop at the
+office. One condition: somebody has to be logged in at the Mac Studio itself.
+Sending an iMessage means driving Messages.app, and Messages only exists inside
+a logged-in desktop session — which is why `wprelay` always talks to the
+background service rather than starting the relay in your shell. A relay
+started from an SSH shell has no desktop session and every send fails with a
+permission error that looks like a bug. Turn on automatic login and this is
+never a problem.
+
+Settings live in `~/.wp-relay/config.json` (`open -e ~/.wp-relay/config.json`);
+run `wprelay restart` after changing them.
 
 Set `"dryRun": true` in the config to watch the whole pipeline run — claiming,
 pacing, reporting — with the messages only written to the log instead of sent.
