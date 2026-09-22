@@ -9,6 +9,19 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<script>
+/* Runs before the first paint, so a dark-mode load never flashes white on its
+   way there. The remembered choice wins; with none, follow the OS. */
+(function () {
+  var dark = false;
+  try {
+    var saved = localStorage.getItem('wp-theme');
+    dark = saved ? saved === 'dark'
+                 : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  } catch (e) { /* private mode, no storage — light it is */ }
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+})();
+</script>
 <script src="/icons.js"></script>
 <script src="/xlsx-lite.js"></script>
 </head>

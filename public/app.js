@@ -2542,6 +2542,54 @@
     $('#mailOpenCandidate').addEventListener('click', () => { if (openMailId) openCandidate(openMailId); });
   }
 
+  // ---------------- Light and dark ----------------
+  // The attribute is already set by the inline script in <head>; this only
+  // reads it back and lets you change it. Kept in localStorage rather than on
+  // the server because it is a property of the screen you are sitting at, not
+  // of the account — the same login on a phone at night wants its own answer.
+  const THEME_KEY = 'wp-theme';
+  const isDark = () => document.documentElement.getAttribute('data-theme') === 'dark';
+
+  function setTheme(dark) {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light'); } catch (e) { /* no storage */ }
+    $$('.theme-switch').forEach((sw) => sw.setAttribute('aria-checked', String(dark)));
+  }
+
+  function mountTheme() {
+    $$('.head-actions').forEach((row) => {
+      if (row.querySelector('.theme-switch')) return;
+      const sw = document.createElement('button');
+      sw.className = 'theme-switch';
+      sw.type = 'button';
+      sw.setAttribute('role', 'switch');
+      sw.setAttribute('aria-checked', String(isDark()));
+      sw.setAttribute('aria-label', 'Dark mode');
+      sw.title = 'Light / dark';
+      sw.innerHTML = `<span class="theme-knob">
+          <span class="theme-ico theme-sun">${icon('sun', 16)}</span>
+          <span class="theme-ico theme-moon">${icon('moon', 15)}</span>
+        </span>`;
+      sw.addEventListener('click', () => setTheme(!isDark()));
+      row.appendChild(sw);
+    });
+  }
+
+  // Only while no choice has been made: if you flip your Mac to dark at sunset,
+  // the CRM follows. The moment you touch the switch, it stops listening.
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const follow = (e) => {
+      let saved = null;
+      try { saved = localStorage.getItem(THEME_KEY); } catch (err) { /* no storage */ }
+      if (saved) return;
+      document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+      $$('.theme-switch').forEach((sw) => sw.setAttribute('aria-checked', String(e.matches)));
+    };
+    if (mq.addEventListener) mq.addEventListener('change', follow);
+    else if (mq.addListener) mq.addListener(follow);
+  }
+
   // ---------------- The bell ----------------
   // One button, injected into every page's header rather than copied into six
   // of them, so a reply is visible from wherever you happen to be standing.
@@ -3046,6 +3094,7 @@
     renderCandidates();
     renderApollo();
     renderTexting();
+    mountTheme();
     mountBell();
     renderBell();
     renderConvList();
