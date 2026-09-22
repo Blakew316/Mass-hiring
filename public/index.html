@@ -62,7 +62,6 @@
       <header class="page-head">
         <div>
           <h1>Dashboard</h1>
-          <p class="page-sub">Your hiring outreach at a glance.</p>
         </div>
         <div class="head-actions">
           <button class="btn" data-goto="import">Import candidates</button>
@@ -96,7 +95,6 @@
         <div class="card">
           <div class="card-head">
             <h2>Channels</h2>
-            <span class="muted small">reply rate, side by side</span>
           </div>
           <div class="channel-grid">
             <div class="channel" id="chEmail">
@@ -106,7 +104,6 @@
             <div class="channel" id="chText">
               <div class="channel-head"><span data-icon="bubble" data-size="15"></span> Texting <span class="badge" id="chTextRelay"></span></div>
               <div class="funnel" id="textFunnel"></div>
-              <p class="muted small" id="textFunnelNote"></p>
             </div>
           </div>
         </div>
@@ -160,7 +157,6 @@
       <header class="page-head">
         <div>
           <h1>Candidates</h1>
-          <p class="page-sub"><span id="candCount"></span> — pick a group, or filter down to exactly who you want.</p>
         </div>
         <div class="head-actions">
           <button class="btn" id="addCandidateBtn"><span data-icon="plus" data-size="15"></span> Add manually</button>
@@ -282,7 +278,6 @@
       <header class="page-head">
         <div>
           <h1>Import</h1>
-          <p class="page-sub">Pull potential hires in from a Google Sheet, any spreadsheet or CSV file, or a paste.</p>
         </div>
       </header>
 
@@ -292,7 +287,6 @@
             <h2><span class="card-ico tone-green" data-icon="sheet" data-size="15"></span>Google Sheet</h2>
             <span class="badge tint-green">recommended</span>
           </div>
-          <p class="muted">Paste the link to your sheet — first row should be headers (Name, Email, Role…). Private sheets work once Google is connected in Settings; otherwise share the sheet as “Anyone with the link”.</p>
           <div class="field-row">
             <input type="text" id="sheetUrl" class="input" placeholder="https://docs.google.com/spreadsheets/d/…">
             <button class="btn btn-primary" id="fetchSheetBtn"><span data-icon="sheet" data-size="15"></span> Fetch</button>
@@ -302,7 +296,6 @@
 
         <div class="card">
           <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="upload" data-size="15"></span>Upload a file</h2></div>
-          <p class="muted">CSV, TSV, TXT or Excel (.xlsx) — from Excel, Numbers, Google Sheets or any CRM export. Columns are recognised automatically, even without a header row.</p>
           <label class="dropzone" id="dropzone">
             <input type="file" id="csvFile" accept=".csv,.tsv,.txt,.xlsx,text/csv,text/tab-separated-values,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
             <span class="drop-ico" data-icon="upload" data-size="18"></span>
@@ -324,7 +317,6 @@
           <h2><span class="card-ico tone-navy" data-icon="search" data-size="15"></span>Find candidates with Apollo</h2>
           <span class="badge tint-blue" id="apolloStatus">not set up</span>
         </div>
-        <p class="muted">Searches Apollo's database and adds who it finds straight to your list, with their role, employer, location and previous jobs. Searching is free; each email address Apollo reveals costs one credit.</p>
         <div class="grid-2">
           <div><label class="label">Job titles</label><input type="text" id="apolloTitles" class="input" placeholder="account executive, outside sales representative"></div>
           <div><label class="label">Locations</label><input type="text" id="apolloLocations" class="input" placeholder="United States"></div>
@@ -370,7 +362,6 @@
       <header class="page-head">
         <div>
           <h1>Email template</h1>
-          <p class="page-sub">The default outreach email. It’s personalized per candidate, and your Calendly link is added at the end automatically.</p>
         </div>
         <div class="head-actions">
           <button class="btn" id="resetTemplateBtn">Reset to default</button>
@@ -428,7 +419,6 @@
             <h2><span class="card-ico tone-green" data-icon="reply" data-size="15"></span>Follow-up email</h2>
             <span class="badge tint-mint" id="followUpDueBadge"></span>
           </div>
-          <p class="muted">A second note to people who were emailed but never replied or booked. It goes out as a <strong>reply in the same conversation</strong> (subject becomes <em>Re:</em> the original), without the attachment, after the wait set in Settings.</p>
           <label class="label">Subject</label>
           <input type="text" id="fuSubject" class="input">
           <label class="label">Body</label>
@@ -452,7 +442,6 @@
             </div>
             <div class="email-body" id="fuPvBody"></div>
           </div>
-          <p class="muted small" id="fuHint"></p>
           <div class="card-actions">
             <button class="btn btn-primary follow-up-btn" id="tplFollowUpBtn"><span data-icon="reply" data-size="15"></span> Follow up</button>
           </div>
@@ -464,7 +453,6 @@
           <h2><span class="card-ico tone-green" data-icon="send" data-size="15"></span>Send</h2>
           <span class="badge tint-blue" id="sendCountBadge"></span>
         </div>
-        <p class="muted">Sends this email to everyone not contacted yet — each person gets their own copy with their name filled in, your booking button and your signature. It goes out in small batches, so keep this tab open until the progress bar finishes.</p>
         <div class="card-actions">
           <button class="btn btn-primary email-all-btn" id="tplSendAllBtn">Email all not-contacted candidates</button>
         </div>
@@ -476,7 +464,6 @@
       <header class="page-head">
         <div>
           <h1>Texting</h1>
-          <p class="page-sub">iMessage sent from your Mac Studio, tracked the same way as email — with delivery and read receipts email can’t give you.</p>
         </div>
         <div class="head-actions">
           <button class="btn" id="textStopBtn" hidden>Stop texting</button>
@@ -510,7 +497,6 @@
             <h2><span class="card-ico tone-blue" data-icon="bubble" data-size="15"></span>Mac relay</h2>
             <span class="badge" id="relayChip">checking…</span>
           </div>
-          <p class="muted">Apple has no server-side iMessage API, so a small service on your Mac Studio drives Messages directly. It calls out to this dashboard, so nothing has to reach <em>into</em> your Mac and there are no ports to open.</p>
           <details class="relay-steps">
             <summary>Setting it up on the Mac — three steps</summary>
             <ol class="steps">
@@ -531,7 +517,6 @@
 
         <div class="card">
           <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="calendar" data-size="15"></span>Pace &amp; hours</h2></div>
-          <p class="muted">Apple disables iMessage on accounts that blast strangers, so this is capped well below where that starts. Texts only go out during daytime hours <strong>where the person lives</strong> — politer, and what the TCPA requires.</p>
           <div class="field-grid">
             <div>
               <label class="label" for="txDailyLimit">Texts per day</label>
@@ -596,7 +581,6 @@
       <header class="page-head">
         <div>
           <h1>Settings</h1>
-          <p class="page-sub">Connect your accounts. Everything you enter is saved on the server and follows you across browsers and devices.</p>
         </div>
         <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
       </header>
@@ -607,7 +591,6 @@
             <h2><span class="card-ico tone-green" data-icon="mail" data-size="15"></span>Google — Sheets &amp; Gmail</h2>
             <span class="badge" id="googleBadge">not connected</span>
           </div>
-          <p class="muted">Connect your work Google account to import <strong>private</strong> sheets, send through the official Gmail API, and have your <strong>existing Gmail signature</strong> added to every email automatically.</p>
           <label class="label">From name <span class="muted small">(what recipients see instead of the address)</span></label>
           <input type="text" id="setFromName" class="input" placeholder="e.g. Blake Woodruff">
           <label class="label">OAuth Client ID</label>
@@ -635,7 +618,6 @@
             <h2><span class="card-ico tone-blue" data-icon="lock" data-size="15"></span>Gmail App Password</h2>
             <span class="badge tint-blue">easy alternative</span>
           </div>
-          <p class="muted">No Google Cloud setup needed: create an App Password at myaccount.google.com/apppasswords and email sends from your work Gmail over SMTP. Gmail does not attach your signature to SMTP sends — connect Google (left) if you want it included.</p>
           <label class="label">Work email</label>
           <input type="email" id="setSmtpUser" class="input" placeholder="you@company.com">
           <label class="label">App password</label>
@@ -656,7 +638,6 @@
 
         <div class="card">
           <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
-          <p class="muted">Large sends go out in the background at this pace. Google allows about 2,000 messages per account per rolling 24 hours (500 on free Gmail) and about 60 sends a minute — those are Google's ceilings, so higher numbers are capped to them. The defaults leave headroom for your normal email.</p>
           <div class="grid-2">
             <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"><div class="hint" id="dailyLimitHint">Up to 2,000 (Google Workspace). When it is reached the queue pauses and resumes by itself as the 24-hour window frees up.</div></div>
             <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="60" placeholder="30"><div class="hint" id="perMinuteHint">Up to 60 (Gmail's API quota). Several emails are sent in parallel each minute to keep this pace.</div></div>
@@ -668,7 +649,6 @@
 
         <div class="card" id="apolloSettingsCard">
           <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="search" data-size="15"></span>Apollo (candidate search)</h2></div>
-          <p class="muted">Lets the Import page pull new candidates from Apollo. Get a key from <a href="https://app.apollo.io/#/settings/integrations/api" target="_blank" rel="noopener">Apollo → Settings → Integrations → API</a> (press <strong>Connect</strong>, then copy it), paste it here and press <strong>Save settings</strong> above.</p>
           <label class="label">Apollo API key</label>
           <input type="password" id="setApolloApiKey" class="input" placeholder="paste your Apollo API key">
           <div class="hint">Searching costs nothing. Revealing an email costs one Apollo credit, and the Import page always shows how many a batch will use before you confirm.</div>
@@ -676,7 +656,6 @@
 
         <div class="card">
           <div class="card-head"><h2><span class="card-ico tone-green" data-icon="alert" data-size="15"></span>Phone notifications</h2></div>
-          <p class="muted">Install the free <strong>ntfy</strong> app (App Store / Play Store), subscribe to a topic of your choosing, and enter the same topic here.</p>
           <label class="label">ntfy topic</label>
           <div class="field-row">
             <input type="text" id="setNtfyTopic" class="input" placeholder="e.g. blake-hiring-alerts-8241">

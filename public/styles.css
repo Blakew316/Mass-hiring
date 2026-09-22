@@ -127,9 +127,10 @@ button, input, select, textarea { font-family: var(--font); }
 .view.active { display: block; animation: fadeUp 0.22s ease; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+/* The heading is a single line now that the subtitles are gone, so it centres
+   against the buttons instead of hanging above them. */
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .page-head h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: var(--navy); }
-.page-sub { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; max-width: 560px; }
 .head-actions { display: flex; gap: 10px; flex-shrink: 0; }
 
 /* ---------------- Cards ---------------- */
@@ -442,6 +443,11 @@ tr:hover .row-actions { opacity: 1; }
 .email-signature { padding: 0 16px 18px; font-size: 13px; line-height: 1.5; }
 .email-signature img { max-width: 100%; height: auto; }
 .email-signature[hidden] { display: none; }
+
+/* With the descriptions gone the Mac relay card holds only a token field, so
+   stretching it to match Pace & hours left a card that was mostly empty. Each
+   one is its own height here instead. */
+#view-texting .template-cols { align-items: start; }
 
 /* ---------------- Settings ---------------- */
 /* Six cards of very different heights. A two-column grid rows them up, so a
@@ -811,7 +817,6 @@ tr.row-muted { opacity: .55; }
   font-variant-numeric: tabular-nums;
 }
 .segment-label { font-size: 13.5px; font-weight: 600; color: var(--ink); margin-top: 3px; }
-.segment-sub { font-size: 12px; color: var(--muted); line-height: 1.4; margin-top: 1px; }
 
 /* The per-group colour, set once and used by the edge, the icon and the hover. */
 .segment.tone-navy  { --seg: var(--navy-soft); --seg-tint: var(--navy-tint); }

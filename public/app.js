@@ -431,12 +431,6 @@
     const chip = $('#chTextRelay');
     chip.className = `badge ${relay.online ? 'tint-green' : 'tint-navy'}`;
     chip.textContent = relay.online ? 'Mac online' : 'Mac offline';
-
-    // Read receipts are the one number here that is not what it looks like, so
-    // say why rather than letting a low figure read as poor performance.
-    $('#textFunnelNote').textContent = t.sent
-      ? `Read counts only people who have read receipts switched on, so the true figure is higher. ${t.replied ? `${pct(t.replied, t.sent)} have replied` : 'No replies yet'}${s.emailed ? `, against ${pct(s.replied, s.emailed)} by email` : ''}.`
-      : 'Nothing texted yet.';
   }
 
   // What the daily allowance has been spent on today, and what is left.
@@ -524,7 +518,7 @@
       ? 'The Mac relay is offline, so nothing will send until it is back.'
       : q.pending
         ? `Sending about one every ${Math.round(((q.minGap || 45) + (q.maxGap || 150)) / 2)}s, ${q.startHour}:00–${q.endHour}:00 in each person's own timezone.`
-        : 'Nothing queued. Pick people on the Candidates page, or text the top of the order from the Texting page.';
+        : '';
   }
 
   function renderSendingCard() {
@@ -745,7 +739,7 @@
     const all = state.candidates;
     const pri = (state.texting && state.texting.priority) || { order: {} };
     const ranked = Object.keys(pri.order || {}).length;
-    const card = (label, n, sub, patch, ico = 'users', tone = 'navy') => ({ label, n, sub, patch, ico, tone });
+    const card = (label, n, patch, ico = 'users', tone = 'navy') => ({ label, n, patch, ico, tone });
 
     // Each tile carries an icon and a colour so the groups are distinguishable
     // at a glance and read as something to press, rather than as white panels
@@ -756,20 +750,19 @@
           <span class="segment-ico">${icon(i.ico, 16)}</span>
           <span class="segment-n">${i.n.toLocaleString()}</span>
           <span class="segment-label">${esc(i.label)}</span>
-          ${i.sub ? `<span class="segment-sub">${esc(i.sub)}</span>` : ''}
         </button>`).join('') || '<p class="muted">Nothing here yet.</p>';
     };
 
     const count = (fn) => all.filter(fn).length;
 
     cards('#segStart', [
-      card('Everyone', all.length, 'the whole list, unfiltered', {}, 'users', 'navy'),
-      card('Best to text next', Math.min(ranked, 50), 'the top of the order', { rank: '50', sort: 'texting' }, 'send', 'blue'),
-      card('Replied to you', count((c) => c.status === 'replied'), 'waiting on you', { status: 'replied' }, 'reply', 'mint'),
-      card('Interviews booked', count((c) => c.status === 'booked'), '', { status: 'booked' }, 'calendar', 'green'),
-      card('Ready to text', ranked, 'have a number and are eligible', { texted: 'ready', sort: 'texting' }, 'bubble', 'blue'),
-      card('Never contacted', count((c) => c.status === 'new'), '', { status: 'new' }, 'circle', 'navy'),
-      card('Missing a phone number', count((c) => !textPhoneOf(c)), 'cannot be texted yet', { texted: 'nonumber' }, 'alert', 'amber'),
+      card('Everyone', all.length, {}, 'users', 'navy'),
+      card('Best to text next', Math.min(ranked, 50), { rank: '50', sort: 'texting' }, 'send', 'blue'),
+      card('Replied to you', count((c) => c.status === 'replied'), { status: 'replied' }, 'reply', 'mint'),
+      card('Interviews booked', count((c) => c.status === 'booked'), { status: 'booked' }, 'calendar', 'green'),
+      card('Ready to text', ranked, { texted: 'ready', sort: 'texting' }, 'bubble', 'blue'),
+      card('Never contacted', count((c) => c.status === 'new'), { status: 'new' }, 'circle', 'navy'),
+      card('Missing a phone number', count((c) => !textPhoneOf(c)), { texted: 'nonumber' }, 'alert', 'amber'),
     ]);
 
     const byIndustry = {};
@@ -788,31 +781,31 @@
     };
     cards('#segIndustry', Object.entries(byIndustry)
       .sort((a, b) => b[1] - a[1])
-      .map(([code, n]) => card(industryLabel(code), n, '', { industry: code }, INDUSTRY_ICO[code] || 'grid', INDUSTRY_TONE[code] || 'navy')));
+      .map(([code, n]) => card(industryLabel(code), n, { industry: code }, INDUSTRY_ICO[code] || 'grid', INDUSTRY_TONE[code] || 'navy')));
 
     // Stage tiles borrow the colours the status badges already use everywhere
     // else, so a stage means the same colour wherever it appears.
     const STAGE_TONE = { new: 'navy', emailed: 'blue', replied: 'mint', booked: 'green', declined: 'red', bounced: 'amber' };
     const STAGE_ICO = { new: 'circle', emailed: 'mail', replied: 'reply', booked: 'calendar', declined: 'xcircle', bounced: 'alert' };
     cards('#segStage', Object.entries(STATUS)
-      .map(([k, v]) => card(v.label, count((c) => c.status === k), '', { status: k }, STAGE_ICO[k] || 'circle', STAGE_TONE[k] || 'navy')));
+      .map(([k, v]) => card(v.label, count((c) => c.status === k), { status: k }, STAGE_ICO[k] || 'circle', STAGE_TONE[k] || 'navy')));
 
     cards('#segAdded', [
-      card('Today', count((c) => daysSince(c.addedAt) <= 1), '', { added: '1', sort: 'newest' }, 'calendar', 'green'),
-      card('This week', count((c) => daysSince(c.addedAt) <= 7), '', { added: '7', sort: 'newest' }, 'calendar', 'mint'),
-      card('This month', count((c) => daysSince(c.addedAt) <= 30), '', { added: '30', sort: 'newest' }, 'calendar', 'blue'),
-      card('Last 90 days', count((c) => daysSince(c.addedAt) <= 90), '', { added: '90', sort: 'newest' }, 'calendar', 'navy'),
-      card('Older than 90 days', count((c) => daysSince(c.addedAt) > 90), '', { added: 'old' }, 'calendar', 'navy'),
+      card('Today', count((c) => daysSince(c.addedAt) <= 1), { added: '1', sort: 'newest' }, 'calendar', 'green'),
+      card('This week', count((c) => daysSince(c.addedAt) <= 7), { added: '7', sort: 'newest' }, 'calendar', 'mint'),
+      card('This month', count((c) => daysSince(c.addedAt) <= 30), { added: '30', sort: 'newest' }, 'calendar', 'blue'),
+      card('Last 90 days', count((c) => daysSince(c.addedAt) <= 90), { added: '90', sort: 'newest' }, 'calendar', 'navy'),
+      card('Older than 90 days', count((c) => daysSince(c.addedAt) > 90), { added: 'old' }, 'calendar', 'navy'),
     ]);
 
     cards('#segTexting', [
-      card('Texted today', count((c) => daysSince(c.lastTextedAt) <= 1), '', { texted: '1' }, 'send', 'blue'),
-      card('Texted this week', count((c) => daysSince(c.lastTextedAt) <= 7), '', { texted: '7' }, 'send', 'blue'),
-      card('Texted at some point', count((c) => Boolean(c.lastTextedAt)), '', { texted: 'any' }, 'bubble', 'navy'),
-      card('Replied to a text', count((c) => c.textStatus === 'replied'), '', { texted: 'any' }, 'reply', 'green'),
-      card('Read your text', count((c) => c.textStatus === 'read'), 'but has not replied', { texted: 'any' }, 'eye', 'mint'),
-      card('No iMessage account', count((c) => c.textStatus === 'not-imessage'), 'unreachable this way', { texted: 'any' }, 'xcircle', 'amber'),
-      card('Never texted', count((c) => !c.lastTextedAt && textPhoneOf(c)), 'and has a number', { texted: 'never' }, 'circle', 'navy'),
+      card('Texted today', count((c) => daysSince(c.lastTextedAt) <= 1), { texted: '1' }, 'send', 'blue'),
+      card('Texted this week', count((c) => daysSince(c.lastTextedAt) <= 7), { texted: '7' }, 'send', 'blue'),
+      card('Texted at some point', count((c) => Boolean(c.lastTextedAt)), { texted: 'any' }, 'bubble', 'navy'),
+      card('Replied to a text', count((c) => c.textStatus === 'replied'), { texted: 'any' }, 'reply', 'green'),
+      card('Read your text', count((c) => c.textStatus === 'read'), { texted: 'any' }, 'eye', 'mint'),
+      card('No iMessage account', count((c) => c.textStatus === 'not-imessage'), { texted: 'any' }, 'xcircle', 'amber'),
+      card('Never texted', count((c) => !c.lastTextedAt && textPhoneOf(c)), { texted: 'never' }, 'circle', 'navy'),
     ]);
 
     // The industry menu in the focused view mirrors what actually exists.
@@ -887,7 +880,6 @@
     if (overview) {
       renderSegments();
       $('#candidatesEmpty').style.display = 'none';
-      $('#candCount').textContent = `${state.candidates.length.toLocaleString()} candidates`;
       return;
     }
 
@@ -957,9 +949,6 @@
         syncFilterControls(); renderCandidates();
       });
     }
-    $('#candCount').textContent = rows.length === state.candidates.length
-      ? `${rows.length.toLocaleString()} candidates`
-      : `${rows.length.toLocaleString()} of ${state.candidates.length.toLocaleString()}`;
   }
 
   // What can actually be done with the current tick-boxes. Texting is offered
@@ -2078,7 +2067,6 @@
     $('#fuPvSubject').textContent = fillClient($('#fuSubject').value, cand);
     $('#fuPvBody').innerHTML = esc(fillClient($('#fuBody').value, cand)).split('\n').join('<br>');
     const fu = state.followUp || { days: 3, max: 2 };
-    $('#fuHint').textContent = `Goes to people who were emailed at least ${fu.days} day${fu.days === 1 ? '' : 's'} ago and have not replied or booked, at most ${fu.max} time${fu.max === 1 ? '' : 's'} each (change this in Settings → Sending pace). The Calendly button and your signature are added like any other email.`;
   }
   const debouncedFollowUpPreview = debounce(renderFollowUpPreview, 200);
   ['#fuSubject', '#fuBody'].forEach((sel) => $(sel).addEventListener('input', () => { setFollowUpDirty(true); debouncedFollowUpPreview(); }));
@@ -2355,7 +2343,7 @@
     chip.className = `badge ${chars > 480 ? 'tint-amber' : 'tint-blue'}`;
     $('#txPreviewHint').textContent = chars > 480
       ? 'Long messages read as a broadcast. Under about 300 characters gets far more replies.'
-      : `Shown as ${esc(who.name || 'a candidate')} would see it, with your booking link added automatically.`;
+      : '';
   }
 
   function renderTextSendingCard() {
