@@ -544,6 +544,7 @@
         </select></td>
         <td>${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
         <td><div class="row-actions">
+          <button class="icon-btn act-edit" title="Edit details (name, phone, role…)">${icon('doc', 16)}</button>
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
           ${c.status === 'emailed' ? `<button class="icon-btn act-followup" title="Follow up (reply in the same conversation)">${icon('reply', 16)}</button>` : ''}
           <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
@@ -570,6 +571,10 @@
       updateSendButton();
       return;
     }
+    if (e.target.closest('.act-edit')) { openCandidate(cand); return; }
+    // The Text column is the fastest way in for the thing people actually
+    // want: putting a number on someone who has none.
+    if (e.target.closest('.add-number')) { openCandidate(cand, { focus: 'phone' }); return; }
     if (e.target.closest('.act-email')) { openCompose([id]); return; }
     if (e.target.closest('.act-followup')) { openCompose([id], null, { followUp: true }); return; }
     if (e.target.closest('.act-delete')) {
@@ -614,20 +619,80 @@
     openCompose(uncontactedIds(), { subject: $('#tplSubject').value, body: $('#tplBody').value }));
 
   // Add-candidate modal
-  $('#addCandidateBtn').addEventListener('click', () => { $('#addModal').hidden = false; });
+  // ---------------- Add / edit one candidate ----------------
+  // One modal does both. Editing is how a number gets onto the 400-odd people
+  // who arrived from a list with no phone column.
+  let editingId = null;
+  const CAND_FIELDS = {
+    '#addFirst': 'firstName', '#addLast': 'lastName', '#addEmail': 'email', '#addPhone': 'phone',
+    '#addRole': 'role', '#addCompany': 'company', '#addLocation': 'location', '#addNotes': 'notes',
+  };
+
+  function openCandidate(c = null, { focus = '' } = {}) {
+    editingId = c ? c.id : null;
+    const first = c ? (c.firstName || (c.name || '').split(' ')[0] || '') : '';
+    const last = c ? (c.lastName || (c.name || '').split(' ').slice(1).join(' ')) : '';
+    $('#addFirst').value = first;
+    $('#addLast').value = last;
+    $('#addEmail').value = c ? (c.email || '') : '';
+    $('#addPhone').value = c ? (c.phone || '') : '';
+    $('#addRole').value = c ? (c.role || '') : '';
+    $('#addCompany').value = c ? (c.company || '') : '';
+    $('#addLocation').value = c ? (c.location || '') : '';
+    $('#addNotes').value = c ? (c.notes || '') : '';
+    $('#addModalTitle').textContent = c ? `Edit ${c.name || c.email}` : 'Add candidate';
+    $('#addSaveBtn').textContent = c ? 'Save changes' : 'Add candidate';
+    $('#addModal').hidden = false;
+    checkPhoneField();
+    const el = focus === 'phone' ? $('#addPhone') : $('#addFirst');
+    setTimeout(() => { el.focus(); el.select(); }, 40);
+  }
+
+  // Say, as it is typed, whether this number can actually be texted — the
+  // same rule the server and the queue use, so there are no surprises later.
+  function checkPhoneField() {
+    const raw = $('#addPhone').value.trim();
+    const hint = $('#addPhoneHint');
+    const input = $('#addPhone');
+    input.classList.remove('bad', 'good');
+    if (!raw) {
+      hint.textContent = 'US and Canadian numbers in any format. Leave blank if you only have an email.';
+      hint.className = 'hint';
+      return;
+    }
+    const e164 = textPhoneOf({ phone: raw });
+    if (e164) {
+      input.classList.add('good');
+      hint.textContent = `Textable — will be saved as ${prettyPhone(e164)}.`;
+      hint.className = 'hint good';
+    } else {
+      input.classList.add('bad');
+      hint.textContent = 'Not a number we can text. Needs 10 digits (or +country code) — check for a missing digit.';
+      hint.className = 'hint bad';
+    }
+  }
+  $('#addPhone').addEventListener('input', checkPhoneField);
+
+  $('#addCandidateBtn').addEventListener('click', () => openCandidate(null));
+
   $('#addSaveBtn').addEventListener('click', async () => {
+    const btn = $('#addSaveBtn');
+    const body = {};
+    for (const [sel, field] of Object.entries(CAND_FIELDS)) body[field] = $(sel).value.trim();
+    body.name = `${body.firstName} ${body.lastName}`.trim();
+    btn.disabled = true;
     try {
-      await api('/api/candidates', { method: 'POST', body: {
-        firstName: $('#addFirst').value, lastName: $('#addLast').value,
-        name: `${$('#addFirst').value} ${$('#addLast').value}`.trim(),
-        email: $('#addEmail').value, role: $('#addRole').value, location: $('#addLocation').value,
-        company: $('#addCompany').value, notes: $('#addNotes').value,
-      }});
-      ['#addFirst', '#addLast', '#addEmail', '#addRole', '#addCompany', '#addLocation', '#addNotes'].forEach((s) => ($(s).value = ''));
+      if (editingId) await api(`/api/candidates/${editingId}`, { method: 'PATCH', body });
+      else await api('/api/candidates', { method: 'POST', body });
       $('#addModal').hidden = true;
-      toast('Candidate added.');
+      const textable = textPhoneOf({ phone: body.phone });
+      toast(editingId
+        ? `Saved.${body.phone && textable ? ` ${prettyPhone(textable)} is ready to text.` : ''}`
+        : 'Candidate added.');
+      editingId = null;
       await refresh();
     } catch (err) { oops(err); }
+    finally { btn.disabled = false; }
   });
 
   // ---------------- Compose & send ----------------
@@ -1668,8 +1733,8 @@
     // A number we cannot dial is worth saying so, not hiding behind a dash.
     if (!phone) {
       return raw
-        ? `<span class="text-pip is-none" title="${esc(raw)} is not a number we can text"><i class="dot"></i>bad number</span>`
-        : '<span class="muted">—</span>';
+        ? `<button class="text-pip is-none add-number" title="${esc(raw)} is not a number we can text — click to fix it"><i class="dot"></i>bad number</button>`
+        : '<button class="text-pip add-number" title="Add a mobile number">+ add number</button>';
     }
     const st = TEXT_STATUS[c.textStatus];
     if (!st) return `<span class="text-pip"><i class="dot"></i>${esc(prettyPhone(phone))}</span>`;

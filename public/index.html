@@ -621,13 +621,16 @@
 <!-- ===== Add candidate modal ===== -->
 <div class="modal-backdrop" id="addModal" hidden>
   <div class="modal modal-sm">
-    <div class="modal-head"><h2>Add candidate</h2><button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button></div>
+    <div class="modal-head"><h2 id="addModalTitle">Add candidate</h2><button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button></div>
     <div class="modal-body">
       <div class="grid-2">
         <div><label class="label">First name</label><input class="input" id="addFirst"></div>
         <div><label class="label">Last name</label><input class="input" id="addLast"></div>
       </div>
       <label class="label">Email *</label><input class="input" id="addEmail" type="email">
+      <label class="label" for="addPhone">Mobile number <span class="muted small">— needed to text them</span></label>
+      <input class="input" id="addPhone" type="tel" inputmode="tel" placeholder="(617) 235-0142" autocomplete="off">
+      <div class="hint" id="addPhoneHint">US and Canadian numbers in any format. Leave blank if you only have an email.</div>
       <div class="grid-2">
         <div><label class="label">Role</label><input class="input" id="addRole"></div>
         <div><label class="label">Company</label><input class="input" id="addCompany"></div>
