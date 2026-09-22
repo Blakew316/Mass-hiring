@@ -24,6 +24,7 @@ const os = require('os');
 
 const state = require('./lib/state');
 const receipts = require('./lib/receipts');
+const { AppleScript } = require('./lib/applescript');
 const { BlueBubbles, toDate, addressOf, textOf, isFromMe } = require('./lib/bluebubbles');
 
 const VERSION = '1.0.0';
@@ -43,6 +44,9 @@ function loadConfig() {
     process.exit(1);
   }
   const cfg = {
+    // "applescript" drives Messages.app directly and needs nothing installed.
+    // "bluebubbles" talks to a BlueBubbles server, for anyone already running one.
+    backend: String(raw.backend || 'applescript').toLowerCase(),
     crmUrl: String(raw.crmUrl || '').replace(/\/+$/, ''),
     relayToken: String(raw.relayToken || ''),
     bluebubblesUrl: String(raw.bluebubblesUrl || 'http://localhost:1234'),
@@ -52,7 +56,12 @@ function loadConfig() {
     helloMs: Number(raw.helloMs) || 30000,
     dryRun: Boolean(raw.dryRun),
   };
-  const missing = ['crmUrl', 'relayToken', 'bluebubblesPassword'].filter((k) => !cfg[k]);
+  if (!['applescript', 'bluebubbles'].includes(cfg.backend)) {
+    console.error(`${CONFIG_PATH}: "backend" must be "applescript" or "bluebubbles" (got ${JSON.stringify(cfg.backend)}).`);
+    process.exit(1);
+  }
+  const needed = ['crmUrl', 'relayToken'].concat(cfg.backend === 'bluebubbles' ? ['bluebubblesPassword'] : []);
+  const missing = needed.filter((k) => !cfg[k]);
   if (missing.length) {
     console.error(`${CONFIG_PATH} is missing: ${missing.join(', ')}`);
     process.exit(1);
@@ -86,16 +95,22 @@ class Crm {
 // ---- main ----
 async function main() {
   const cfg = loadConfig();
-  const bb = new BlueBubbles({ url: cfg.bluebubblesUrl, password: cfg.bluebubblesPassword, log });
+  const usingBB = cfg.backend === 'bluebubbles';
+  const bb = usingBB
+    ? new BlueBubbles({ url: cfg.bluebubblesUrl, password: cfg.bluebubblesPassword, log })
+    : new AppleScript({ log });
   const crm = new Crm(cfg);
   let st = state.load();
 
   log(`wp-relay ${VERSION} starting`);
-  log(`  CRM         ${cfg.crmUrl}`);
-  log(`  BlueBubbles ${cfg.bluebubblesUrl}`);
-  log(`  state       ${state.FILE}`);
+  log(`  CRM      ${cfg.crmUrl}`);
+  log(`  sending  ${usingBB ? `BlueBubbles at ${cfg.bluebubblesUrl}` : 'Messages.app via AppleScript'}`);
+  log(`  state    ${state.FILE}`);
   if (cfg.dryRun) log('  DRY RUN — messages will be logged, not sent');
-  if (!receipts.available()) log('  note: chat.db is not readable, so delivery and read receipts are off (grant Full Disk Access to your terminal or to node — see README)');
+  if (!receipts.available()) {
+    log('  note: the Messages database is not readable, so delivery receipts, read receipts and replies are all off.');
+    log('        Grant Full Disk Access to whatever runs the relay — see README. Sending still works.');
+  }
 
   let lastError = '';
   let stopping = false;
@@ -196,6 +211,11 @@ async function main() {
         const handle = normalizePhone(r.handle);
         if (!handle || !state.known(st, handle)) continue;     // not one of ours
         if (r.fromMe) {
+          // Messages accepts the send and only then marks the row failed, which
+          // is how a number with no iMessage account actually shows up.
+          if (r.failed && mark('undelivered', r.guid, Date.now())) {
+            events.push({ kind: 'undelivered', phone: handle, ts: (r.sentAt || new Date()).toISOString() });
+          }
           if (r.deliveredAt && mark('delivered', r.guid, Date.now())) events.push({ kind: 'delivered', phone: handle, ts: r.deliveredAt.toISOString() });
           if (r.readAt && mark('read', r.guid, Date.now())) events.push({ kind: 'read', phone: handle, ts: r.readAt.toISOString() });
         } else if (r.text && mark('reply', r.guid, Date.now())) {
@@ -204,8 +224,10 @@ async function main() {
       }
     }
 
-    // BlueBubbles decodes message bodies that chat.db stores in attributedBody,
-    // so replies are picked up here too; the guid keeps them from doubling up.
+    // With BlueBubbles in use its message list is polled as well, since it
+    // decodes bodies the database stores in a packed form. On the AppleScript
+    // backend recentMessages() is empty and this loop does nothing — the
+    // decoding is done locally instead (see lib/attributedbody.js).
     try {
       for (const m of await bb.recentMessages(50)) {
         if (isFromMe(m)) continue;
@@ -245,9 +267,10 @@ async function main() {
     return setInterval(tick, ms);
   };
 
+  const backendName = usingBB ? 'BlueBubbles' : 'Messages';
   let bbOk = false;
-  try { await bb.ping(); bbOk = true; log('BlueBubbles answered — ready'); }
-  catch (err) { log(`BlueBubbles is not answering: ${err.message}`); }
+  try { await bb.ping(); bbOk = true; log(`${backendName} answered — ready`); }
+  catch (err) { log(`${backendName} is not answering: ${err.message}`); }
 
   await flushPending().catch((err) => { if (err.fatal) { log(`FATAL: ${err.message}`); process.exit(1); } });
 
@@ -257,7 +280,8 @@ async function main() {
       host: os.hostname(),
       version: VERSION,
       bluebubbles: bbOk,
-      error: bbOk ? '' : 'BlueBubbles is not answering on this Mac.',
+      backend: cfg.backend,
+      error: bbOk ? '' : `${backendName} is not answering on this Mac.`,
     });
   });
 

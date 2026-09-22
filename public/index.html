@@ -401,14 +401,14 @@
             <h2>Mac relay</h2>
             <span class="badge" id="relayChip">checking…</span>
           </div>
-          <p class="muted">Apple has no server-side iMessage API, so the sending is done by a small service on your Mac Studio. It calls out to this dashboard — nothing has to reach <em>into</em> your Mac, so there are no ports to open.</p>
+          <p class="muted">Apple has no server-side iMessage API, so the sending is done by a small service on your Mac Studio that drives Messages directly — nothing extra to install. It calls out to this dashboard, so nothing has to reach <em>into</em> your Mac and there are no ports to open.</p>
           <div class="relay-steps">
             <ol class="steps">
-              <li>Install the <strong>BlueBubbles Server</strong> app on the Mac Studio and set a password in it.</li>
               <li>Generate a relay token below and copy it.</li>
               <li>On the Mac: <code>cd Mass-hiring/relay &amp;&amp; ./install.sh</code>, paste the token into the config it creates, then run it again.</li>
+              <li>Grant the two macOS permissions it asks for: <strong>Automation</strong>, so it can tell Messages to send, and <strong>Full Disk Access</strong>, so it can read delivery receipts, read receipts and replies.</li>
             </ol>
-            <p class="muted small">Step-by-step instructions, including the Full Disk Access step that turns on read receipts, are in <code>relay/README.md</code>.</p>
+            <p class="muted small">Without Automation nothing sends; without Full Disk Access texts go out but nothing comes back. Full instructions are in <code>relay/README.md</code>.</p>
           </div>
           <label class="label">Relay token</label>
           <div class="field-row">

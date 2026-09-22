@@ -12,8 +12,9 @@ const { execFile } = require('child_process');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const attributedBody = require('./attributedbody');
 
-const SQLITE = '/usr/bin/sqlite3';
+const SQLITE = process.env.WP_RELAY_SQLITE || '/usr/bin/sqlite3';
 const CHAT_DB = process.env.WP_RELAY_CHATDB || path.join(os.homedir(), 'Library', 'Messages', 'chat.db');
 
 const run = (args, timeoutMs) => new Promise((resolve, reject) => {
@@ -36,14 +37,22 @@ function available() {
   try { return fs.existsSync(SQLITE) && fs.existsSync(CHAT_DB); } catch { return false; }
 }
 
-// Everything newer than `sinceRowId`, oldest first. `text` is read too, but it
-// is NULL on recent macOS for messages whose body lives in attributedBody —
-// reply text comes from BlueBubbles for that reason; this is only a fallback.
+// Everything newer than `sinceRowId`, oldest first.
+//
+// `text` is NULL on recent macOS for messages whose body was written into
+// `attributedBody` instead, so that column is fetched as hex and decoded — but
+// only for inbound messages that need it, since it is a blob and this runs
+// every twenty seconds.
+//
+// `error` is what catches a number with no iMessage account: the send appears
+// to succeed and then Messages marks the row failed a moment later.
 async function since(sinceRowId = 0, limit = 500, timeoutMs = 10000) {
   const sql = `SELECT m.ROWID AS rowid, m.guid AS guid, h.id AS handle,
-       m.is_from_me AS fromMe, m.is_delivered AS delivered,
+       m.is_from_me AS fromMe, m.is_delivered AS delivered, m.error AS error, m.service AS service,
        m.date AS dateSent, m.date_delivered AS dateDelivered, m.date_read AS dateRead,
-       m.text AS text
+       m.text AS text,
+       CASE WHEN m.is_from_me = 0 AND (m.text IS NULL OR m.text = '')
+            THEN hex(m.attributedBody) ELSE NULL END AS bodyHex
   FROM message m LEFT JOIN handle h ON m.handle_id = h.ROWID
   WHERE m.ROWID > ${Number(sinceRowId) || 0}
   ORDER BY m.ROWID ASC LIMIT ${Number(limit) || 500};`;
@@ -57,10 +66,12 @@ async function since(sinceRowId = 0, limit = 500, timeoutMs = 10000) {
     handle: String(r.handle || ''),
     fromMe: Number(r.fromMe) === 1,
     delivered: Number(r.delivered) === 1,
+    failed: Number(r.error) !== 0 && r.error != null,
+    service: String(r.service || ''),
     sentAt: appleDate(r.dateSent),
     deliveredAt: appleDate(r.dateDelivered),
     readAt: appleDate(r.dateRead),
-    text: r.text == null ? '' : String(r.text),
+    text: r.text != null && String(r.text).trim() ? String(r.text) : attributedBody.fromHex(r.bodyHex),
   }));
 }
 

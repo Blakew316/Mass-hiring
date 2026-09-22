@@ -27,7 +27,7 @@ if [ ! -f "$CONFIG" ]; then
   cp "$DIR/config.example.json" "$CONFIG"
   chmod 600 "$CONFIG"
   say "Created $CONFIG"
-  echo "Fill in your relay token and BlueBubbles password, then run this script again:"
+  echo "Paste in your relay token (dashboard -> Texting -> Generate), then run this again:"
   echo "  open -e \"$CONFIG\""
   exit 0
 fi
@@ -52,8 +52,14 @@ echo "  Stop it:     launchctl bootout gui/$UID/$LABEL"
 echo "  Start it:    launchctl bootstrap gui/$UID \"$PLIST\""
 echo "  Settings:    open -e \"$CONFIG\""
 echo
-say "One more thing — Full Disk Access"
-echo "Delivery and read receipts are read from the Messages database, which macOS"
-echo "protects. Grant Full Disk Access to Node so the relay can read it:"
-echo "  System Settings → Privacy & Security → Full Disk Access → + → $NODE"
-echo "(Texting still works without this; you just will not see delivered/read.)"
+say "Two macOS permissions to grant"
+echo
+echo "1. Automation — lets the relay tell Messages to send. Nothing sends without it."
+echo "   System Settings → Privacy & Security → Automation → enable Messages"
+echo "   for your terminal (or for node). macOS usually prompts on the first send."
+echo
+echo "2. Full Disk Access — lets the relay read the Messages database, which is where"
+echo "   delivery receipts, read receipts AND replies all come from."
+echo "   System Settings → Privacy & Security → Full Disk Access → + → $NODE"
+echo
+echo "Without #1 nothing sends. Without #2 texts go out but nothing comes back."

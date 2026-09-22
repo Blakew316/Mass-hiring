@@ -38,27 +38,7 @@ not a candidate. Both halves have to agree before a message is recorded.
 
 ## Setup
 
-### 1. Install BlueBubbles on the Mac Studio
-
-[BlueBubbles](https://bluebubbles.app) is a free, open-source server that exposes
-iMessage over a local API. Download the **Server** app, install it, and in its
-settings:
-
-- set a **server password** (you will paste it into the relay config)
-- leave the port at **1234** unless you have a reason to change it
-- grant it **Full Disk Access** and **Accessibility** when macOS asks — it cannot
-  work without them
-
-Check it is up: `curl "http://localhost:1234/api/v1/ping?password=YOUR_PASSWORD"`
-should answer `pong`.
-
-### 2. Get a relay token from the dashboard
-
-In the CRM: **Texting → Mac relay → Generate token**. Copy it. It is shown in full
-once and is a separate secret from your dashboard password — it unlocks the relay
-routes and nothing else.
-
-### 3. Install the relay
+### 1. Install the relay
 
 ```bash
 cd /path/to/Mass-hiring/relay
@@ -66,27 +46,36 @@ cd /path/to/Mass-hiring/relay
 open -e ~/.wp-relay/config.json
 ```
 
-Fill in `relayToken` and `bluebubblesPassword`, then:
+Paste in the relay token (dashboard → **Texting → Mac relay → Generate**), then:
 
 ```bash
 ./install.sh          # second run installs and starts the service
 tail -f ~/Library/Logs/wp-relay.log
 ```
 
-You should see `BlueBubbles answered — ready`, and within half a minute the Texting
-page in the dashboard shows the Mac as **online**.
+Nothing else needs installing. The relay drives **Messages.app**, which is already
+on this Mac.
 
-### 4. Grant Node Full Disk Access
+### 2. Allow it to control Messages
 
-Delivery and read receipts come from the Messages database, which macOS protects:
+The first send will fail until macOS is told this is allowed:
+
+**System Settings → Privacy & Security → Automation →** find whatever runs the
+relay (your terminal, or `node`) **→ turn on Messages.**
+
+macOS usually prompts for this the first time. If you miss the prompt the log
+says exactly this, and nothing sends until it is granted.
+
+### 3. Grant Full Disk Access
 
 **System Settings → Privacy & Security → Full Disk Access → + →** add your `node`
 binary (`which node` tells you where it is).
 
-Texting works without this. You just will not see *delivered* or *read* — only
-*sent* and *replied*.
+This one matters more than it sounds. The relay reads the Messages database for
+**delivery receipts, read receipts and replies** — all three. Without it you can
+send, and you will see nothing come back.
 
-### 5. Keep the Mac awake and logged in
+### 4. Keep the Mac awake and logged in
 
 The relay runs as a LaunchAgent, so it only runs while the user is logged in:
 
@@ -95,6 +84,18 @@ The relay runs as a LaunchAgent, so it only runs while the user is logged in:
   display is off. Or from the terminal: `sudo pmset -a sleep 0 disablesleep 1`
 
 The display can sleep. The Mac cannot.
+
+### Optional: BlueBubbles instead
+
+The relay can send through a [BlueBubbles](https://bluebubbles.app) server rather
+than Messages.app, if you already run one. Set `"backend": "bluebubbles"` in the
+config and fill in `bluebubblesUrl` and `bluebubblesPassword`.
+
+There is no advantage for this use, and one real obstacle: Homebrew disabled the
+BlueBubbles cask on 2026-09-01 because the app is no longer code-signed, so
+installing it means overriding Gatekeeper on an unsigned app that then wants full
+access to your message database. The AppleScript backend exists so you do not
+have to make that trade.
 
 ---
 
@@ -120,7 +121,7 @@ no open ports, no tunnel, no static IP and no router changes, and why it keeps
 working on any network you move the Mac to.
 
 ```
-every  5s   ask for one message → send it → report the outcome
+every  5s   ask for one message → send it through Messages → report the outcome
 every 20s   look for receipts and replies → report them
 every 30s   check in, so the dashboard can show the Mac as online
 ```
@@ -141,9 +142,11 @@ CRM takes the message back after three minutes and hands it out again.
 
 | What you see | What it means |
 |---|---|
-| `BlueBubbles is not answering` | The BlueBubbles server app is not running, the port is wrong, or the password does not match. |
+| `macOS has not granted permission to control Messages` | Step 2 — Automation permission. Nothing sends until it is granted. |
+| `No iMessage account is signed in` | Open Messages on the Mac and sign in with the Apple ID you are using for this. |
 | `The CRM rejected the relay token` | Generate a new token on the Texting page and paste it into `config.json`. |
-| `could not read chat.db` | Node does not have Full Disk Access — see step 4. Sending still works. |
+| `the Messages database is not readable` | Step 3 — Full Disk Access. Sending still works; receipts and replies do not. |
 | Dashboard shows the Mac offline | The Mac slept, logged out, or lost the network. `tail` the log. |
-| `Not reachable on iMessage` on a candidate | That number has no iMessage account. Only a real SMS provider can reach them. |
-| Replies arrive with no text | A macOS quirk where the message body is stored in a format the database does not expose directly. The relay reads those through BlueBubbles instead — make sure it is running. |
+| `No iMessage` on a candidate | Messages accepted the send and then rejected it — that number has no iMessage account. Only a real SMS provider can reach them. |
+| Texts send but nothing ever comes back | Almost always Full Disk Access. Check the first few lines of the log. |
+| `BlueBubbles is not answering` | Only on the optional BlueBubbles backend: the server app is not running, or the port or password is wrong. |

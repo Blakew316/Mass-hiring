@@ -793,6 +793,7 @@ app.post('/api/relay/hello', asyncRoute(async (req, res) => {
     host: String(b.host || '').slice(0, 80),
     version: String(b.version || '').slice(0, 24),
     bluebubbles: Boolean(b.bluebubbles),
+    backend: String(b.backend || 'applescript').slice(0, 20),
     error: String(b.error || '').slice(0, 300),
   }));
   const db = await store.load();
@@ -853,6 +854,7 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
     const patch = touched.get(c.id) || { id: c.id, replies: [] };
     if (kind === 'delivered') patch.delivered = ts;
     else if (kind === 'read') patch.read = ts;
+    else if (kind === 'undelivered') patch.undelivered = ts;
     else if (kind === 'reply') {
       patch.replied = ts;
       patch.replies.push({ ts, text });
@@ -867,6 +869,11 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
       for (const patch of touched.values()) {
         const c = fresh.candidates.find((x) => x.id === patch.id);
         if (!c) continue;
+        // Messages accepts a send and only then marks it failed, so this can
+        // arrive after we already recorded "sent" — it has to be able to undo
+        // that, which the usual forward-only rule would not allow. A receipt
+        // that already proved delivery still wins.
+        if (patch.undelivered && (TEXT_RANK[c.textStatus || ''] || 0) <= TEXT_RANK.sent) c.textStatus = 'not-imessage';
         if (patch.delivered) { c.textDeliveredAt = c.textDeliveredAt || patch.delivered; advanceText(c, 'delivered'); }
         if (patch.read) { c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
         if (patch.replied) {

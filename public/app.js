@@ -1702,7 +1702,7 @@
     const chip = $('#relayChip');
     if (r.online) {
       chip.className = 'badge tint-green';
-      chip.innerHTML = `<i class="relay-dot on"></i>${esc(r.host || 'Mac')} online${r.bluebubbles === false ? ' · BlueBubbles not answering' : ''}`;
+      chip.innerHTML = `<i class="relay-dot on"></i>${esc(r.host || 'Mac')} online${r.bluebubbles === false ? ` · ${r.backend === 'bluebubbles' ? 'BlueBubbles' : 'Messages'} not answering` : ''}`;
     } else if (r.lastSeenAt) {
       chip.className = 'badge tint-amber';
       chip.innerHTML = `<i class="relay-dot off"></i>last seen ${timeAgo(r.lastSeenAt)}`;
