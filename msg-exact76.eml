@@ -1,0 +1,28 @@
+From: a@x.com
+To: b@x.com
+Subject: x
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mix_88851b0fa4e06b66"
+
+--mix_88851b0fa4e06b66
+Content-Type: multipart/alternative; boundary="alt_315fff2c7ce80bff"
+
+--alt_315fff2c7ce80bff
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: base64
+
+eQ==
+--alt_315fff2c7ce80bff
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: base64
+
+eg==
+--alt_315fff2c7ce80bff--
+--mix_88851b0fa4e06b66
+Content-Type: application/octet-stream; name="f.bin"
+Content-Disposition: attachment; filename="f.bin"
+Content-Transfer-Encoding: base64
+
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+--mix_88851b0fa4e06b66--

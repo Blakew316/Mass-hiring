@@ -1,0 +1,17 @@
+From: a@x.com
+To: b@x.com
+Subject: Plain ASCII
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="alt_83f72cfa4fc5118e"
+
+--alt_83f72cfa4fc5118e
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: base64
+
+eQ==
+--alt_83f72cfa4fc5118e
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: base64
+
+eg==
+--alt_83f72cfa4fc5118e--
