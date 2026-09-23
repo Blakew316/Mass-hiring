@@ -2,27 +2,27 @@ From: a@x.com
 To: b@x.com
 Subject: x
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="mix_129ebaa3c518b0be"
+Content-Type: multipart/mixed; boundary="mix_8c33b22c4e740f87"
 
---mix_129ebaa3c518b0be
-Content-Type: multipart/alternative; boundary="alt_904cee5145c8ddb7"
+--mix_8c33b22c4e740f87
+Content-Type: multipart/alternative; boundary="alt_2d24760e3fa9b03e"
 
---alt_904cee5145c8ddb7
+--alt_2d24760e3fa9b03e
 Content-Type: text/plain; charset="UTF-8"
 Content-Transfer-Encoding: base64
 
 eQ==
---alt_904cee5145c8ddb7
+--alt_2d24760e3fa9b03e
 Content-Type: text/html; charset="UTF-8"
 Content-Transfer-Encoding: base64
 
 eg==
---alt_904cee5145c8ddb7--
---mix_129ebaa3c518b0be
+--alt_2d24760e3fa9b03e--
+--mix_8c33b22c4e740f87
 Content-Type: application/octet-stream; name="f.bin"
 Content-Disposition: attachment; filename="f.bin"
 Content-Transfer-Encoding: base64
 
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
---mix_129ebaa3c518b0be--
+--mix_8c33b22c4e740f87--

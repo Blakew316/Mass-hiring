@@ -173,7 +173,7 @@
   }
 
   function mountConnection() {
-    $$('.head-actions').forEach((row) => {
+    $$('.head-chrome').forEach((row) => {
       if (row.querySelector('.conn-lost')) return;
       const el = document.createElement('button');
       el.className = 'conn-lost';
@@ -181,7 +181,7 @@
       el.hidden = true;
       el.innerHTML = '<span class="conn-dot"></span><span class="conn-text">Offline</span>';
       el.addEventListener('click', () => poll());
-      // leftmost, so it never shifts the bell and the theme switch around
+      // leftmost of the three, so it never shifts the bell and the switch
       row.prepend(el);
     });
   }
@@ -2863,7 +2863,7 @@
   }
 
   function mountTheme() {
-    $$('.head-actions').forEach((row) => {
+    $$('.head-chrome').forEach((row) => {
       if (row.querySelector('.theme-switch')) return;
       const sw = document.createElement('button');
       sw.className = 'theme-switch';
@@ -2900,7 +2900,7 @@
   // One button, injected into every page's header rather than copied into six
   // of them, so a reply is visible from wherever you happen to be standing.
   function mountBell() {
-    $$('.head-actions').forEach((row) => {
+    $$('.head-chrome').forEach((row) => {
       if (row.querySelector('.bell')) return;
       const b = document.createElement('button');
       b.className = 'bell';
@@ -3043,7 +3043,7 @@
     // The funnel strip that used to sit here said exactly what the dashboard's
     // Channels card says, on a page that is now only conversations.
     const n = textableIds().length;
-    $('#navTextCount').textContent = n ? String(n) : '';
+    setNavCount('#navTextCount', n || 0);
     const btn = $('#textSendAllBtn');
     btn.textContent = n ? `Text ${n} with a number` : 'Nobody left to text';
     btn.disabled = n === 0;
@@ -3712,9 +3712,17 @@
 
   // The counts beside the nav items are visible from every page, so they are
   // cheap by construction and always run.
+  // The sidebar has room for "3,514"; a tab-bar badge has room for about four
+  // characters, and the phone stylesheet shows the short form instead. Written
+  // here rather than shortened in CSS because CSS cannot do arithmetic.
+  function setNavCount(sel, n) {
+    const el = $(sel);
+    el.textContent = n ? n.toLocaleString() : '';
+    el.dataset.short = n ? (n > 999 ? '999+' : String(n)) : '';
+  }
   function renderNavCounts() {
-    $('#navCount').textContent = ((state.stats && state.stats.total) || '').toLocaleString();
-    $('#navEmailCount').textContent = mailUnreadCount() || '';
+    setNavCount('#navCount', (state.stats && state.stats.total) || 0);
+    setNavCount('#navEmailCount', mailUnreadCount() || 0);
   }
 
   function renderAll() {

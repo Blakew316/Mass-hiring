@@ -253,7 +253,14 @@ button, input, select, textarea { font-family: var(--font); }
    against the buttons instead of hanging above them. */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .page-head h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: var(--navy); }
-.head-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* margin-left: auto, not space-between on the parent: with the chrome split
+   into its own row there are three children, and space-between would leave the
+   page's buttons stranded in the middle of the header. */
+.head-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: auto; }
+/* The theme switch, the bell and the offline marker. Their own row rather than
+   the tail of .head-actions, so the page's buttons and the page's chrome can
+   be laid out separately — which is what a phone needs. */
+.head-chrome { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
 /* ---------------- Cards ---------------- */
 .card {

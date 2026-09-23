@@ -179,22 +179,37 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .nav-item:active { opacity: .55; }
   /* The count rides on the icon as a badge rather than sitting after the
      label, where at 10px it would push the word off its own tab. */
+  /* The count rides on the icon as a badge. It shows the short form — the
+     element's own text is "3,514", which is right in the sidebar and four
+     characters too wide here, where it was being cut in half. */
   .nav-count {
     position: absolute;
-    top: 2px;
+    top: 1px;
     left: 50%;
-    margin-left: 4px;
+    transform: translateX(-2px);
     min-width: 16px;
+    max-width: 30px;
     padding: 0 4px;
     border-radius: 99px;
     background: var(--red);
     color: #fff;
-    font-size: 9.5px;
+    font-size: 0;
     font-weight: 700;
     line-height: 16px;
     text-align: center;
+    overflow: hidden;
   }
+  .nav-count::after { content: attr(data-short); font-size: 9.5px; }
   .nav-count:empty { display: none; }
+  /* The badge sits over the icon's shoulder and must not be clipped by the
+     cell; the label below it is what needed clipping, and it has its own. */
+  .nav-item { overflow: visible; }
+  .nav-item::after {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* ---- cards ----
      Early in the file on purpose: the specific card rules further down have
@@ -206,6 +221,10 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
      A large title that shrinks to a compact one as you scroll, the way an
      iOS navigation bar does. The class is toggled by an IntersectionObserver
      watching a sentinel, so nothing runs on the scroll itself. */
+  /* Two rows, laid out rather than left to wrap: the title and the chrome that
+     belongs to every page on the first, the page's own buttons underneath.
+     Wrapping put the bell on a line of its own whenever a page had a wide
+     primary button, which read as a mistake. */
   .page-head {
     position: sticky;
     top: 0;
@@ -213,10 +232,21 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     margin: 0 -16px 12px;
     padding: 10px 16px 8px;
     background: var(--bg);
-    flex-wrap: wrap;
-    row-gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title chrome"
+      "acts  acts";
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 10px;
     transition: box-shadow .2s, padding .2s;
   }
+  .page-head > div:first-child { grid-area: title; min-width: 0; }
+  .head-chrome { grid-area: chrome; }
+  .head-actions { grid-area: acts; margin-left: 0; }
+  /* Nothing to lay out on a page whose header is just a title. */
+  .head-actions:empty { display: none; }
   .page-head h1 {
     font-size: 30px;
     line-height: 1.15;
@@ -228,12 +258,9 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   }
   .main.scrolled .page-head h1 { font-size: 19px; }
   .head-actions { flex-wrap: wrap; row-gap: 8px; gap: 8px; }
-  /* The header's buttons wrap under the title and each take a full half,
-     rather than three of them squeezing onto one 358px line. */
+  /* The header's buttons share the row under the title rather than three of
+     them squeezing onto one 358px line. */
   .head-actions .btn { flex: 1 1 140px; justify-content: center; }
-  .head-actions .bell,
-  .head-actions .theme-switch,
-  .head-actions .conn-lost { flex: 0 0 auto; }
 
   /* ---- everything you can type into ----
      16px exactly. Below it WebKit zooms the page on focus and leaves it

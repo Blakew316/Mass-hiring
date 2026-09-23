@@ -2,16 +2,16 @@ From: a@x.com
 To: b@x.com
 Subject: Plain ASCII
 MIME-Version: 1.0
-Content-Type: multipart/alternative; boundary="alt_d6f0a98ffcf00a4a"
+Content-Type: multipart/alternative; boundary="alt_b36e86a54df07f5b"
 
---alt_d6f0a98ffcf00a4a
+--alt_b36e86a54df07f5b
 Content-Type: text/plain; charset="UTF-8"
 Content-Transfer-Encoding: base64
 
 eQ==
---alt_d6f0a98ffcf00a4a
+--alt_b36e86a54df07f5b
 Content-Type: text/html; charset="UTF-8"
 Content-Transfer-Encoding: base64
 
 eg==
---alt_d6f0a98ffcf00a4a--
+--alt_b36e86a54df07f5b--
