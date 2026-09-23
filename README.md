@@ -100,16 +100,21 @@ Matching is by email first (any address the person has booked with before counts
 
 ## Teams
 
-Everything in this app belongs to exactly one team: its candidates, templates, settings, Gmail connection, Calendly registration, text threads and history. Signing in means choosing a team and entering its PIN, and from that point nothing another team owns is reachable — not by the dashboard, not by a candidate id typed into a URL, not by a cached response.
+Everything in this app belongs to exactly one team: its candidates, templates, settings, Gmail connection, Calendly registration, text threads and history. Signing in means choosing a team and entering its **four-digit PIN**, and from that point nothing another team owns is reachable — not by the dashboard, not by a candidate id typed into a URL, not by a cached response.
 
 - **The first team.** Everything stored before teams existed belongs to **Team Maverick**, which is adopted automatically on first run. Its data is not moved anywhere: it keeps the storage keys it has always had.
 - **A new team starts empty.** No candidates, no history, no interviews, no attachments, no connections, a blank sender name, and its own tracking secret. It gets generic starter copy for the outreach email and text — generic meaning it names nobody and no company — and the setup checklist says the template still needs writing, because it does.
-- **Making one.** *Start a new team* on the sign-in screen, or the Team card in Settings. Both ask for the **admin password**, which is what `APP_PASSWORD` now is: it does not sign you in anywhere, it is what lets you create and delete teams. Team Maverick has no PIN of its own yet, so it still signs in with `APP_PASSWORD` until you give it one in Settings.
+- **Making one.** *Start a new team* on the sign-in screen, or the Team card in Settings. Both ask for the **admin password**, which is what `APP_PASSWORD` now is: it does not sign you in anywhere, it is what lets you create and delete teams. Team Maverick has no PIN of its own yet, so it still signs in with `APP_PASSWORD` until you give it four digits in Settings.
+- **The PIN.** Exactly four digits, so it can be handed to a team and tapped on a phone. Four of the same digit and runs like 1234 are refused — they are the first thing anybody guessing would try. What actually protects four digits is the lockout below, which is why it is written to storage rather than kept in one server's memory.
 - **Switching.** The team's name sits in the header of every page. Tap it to sign out and pick another.
 
 ## Protecting the dashboard
 
-Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in: a team, then that team's PIN. Sessions last 30 days. *Sign out* ends this browser's session only; *Sign out on every device* in the Team card ends all of them, for that team alone. Five wrong PINs lock the address they came from for 15 minutes, and sustained guessing at one team slows every answer down — but it can never lock that team out of its own dashboard. A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
+Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in: a team, then that team's four-digit PIN. Sessions last 30 days. *Sign out* ends this browser's session only; *Sign out on every device* in the Team card ends all of them, for that team alone.
+
+Five wrong PINs from one address lock that address for 15 minutes, counted across every team and **kept in storage**, so the count survives a cold start or a request landing on a different instance — without that, a four-digit PIN would hand out a fresh allowance every few minutes. Coming back and guessing again re-locks it immediately. Sustained guessing at one team also lengthens the pause before every answer, but never denies one: team names are listed on the sign-in screen, so a team-wide lock would let anyone read a name off it and keep that team out of its own dashboard all day.
+
+A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
 
 ## 3. Calendly + phone notifications
 

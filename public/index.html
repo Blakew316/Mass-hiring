@@ -629,7 +629,7 @@
             <label class="label">Sign-in PIN</label>
             <div class="hint" id="teamPinHint"></div>
             <input type="password" id="teamPinCurrent" class="input" data-no-dirty placeholder="Current PIN (or the admin password)" autocomplete="current-password">
-            <input type="password" id="teamPinNew" class="input" data-no-dirty placeholder="New PIN (6 or more characters)" autocomplete="new-password">
+            <input type="password" id="teamPinNew" class="input pin-field" data-no-dirty inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="New 4-digit PIN" autocomplete="new-password">
             <button class="btn btn-sm" id="teamPinBtn" type="button">Change PIN</button>
             <div class="settings-sep"></div>
             <button class="btn btn-ghost btn-sm" id="teamSignOutAllBtn" type="button">Sign out on every device</button>
@@ -642,8 +642,8 @@
             <div class="hint">A second team gets its own everything, starting empty. Nothing here is shared with it.</div>
             <label class="label">Team name</label>
             <input type="text" id="addTeamName" class="input" data-no-dirty placeholder="e.g. Team Ranger" maxlength="40">
-            <label class="label">Their PIN</label>
-            <input type="password" id="addTeamPin" class="input" data-no-dirty placeholder="6 or more characters" autocomplete="new-password">
+            <label class="label">Their 4-digit PIN</label>
+            <input type="password" id="addTeamPin" class="input pin-field" data-no-dirty inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="e.g. 7418" autocomplete="new-password">
             <label class="label">Admin password</label>
             <input type="password" id="addTeamAdmin" class="input" data-no-dirty placeholder="APP_PASSWORD" autocomplete="off">
             <button class="btn btn-sm" id="addTeamBtn" type="button">Create team</button>
@@ -1046,6 +1046,10 @@
          one team: a choice of one is not a choice. -->
     <div class="team-picker" id="teamPicker" hidden role="radiogroup" aria-label="Team"></div>
     <input type="password" id="loginPassword" class="input" placeholder="PIN" autocomplete="current-password" autofocus>
+    <!-- app.js turns this into a four-digit number pad once every team signs
+         in with a PIN of its own. It cannot be capped before then: Team
+         Maverick still signs in with the admin password, which is not four
+         digits, and a maxlength would lock its own owner out. -->
     <button type="submit" class="btn btn-primary login-btn" id="loginBtn">Sign in</button>
     <div class="hint" id="loginError"></div>
     <button type="button" class="login-alt" id="newTeamLink">Start a new team</button>
@@ -1056,8 +1060,8 @@
     <h2>New team</h2>
     <p class="muted">A new team starts empty — its own candidates, templates and connections, and nothing carried over from anyone else.</p>
     <input type="text" id="newTeamName" class="input" placeholder="Team name" autocomplete="off" maxlength="40">
-    <input type="password" id="newTeamPin" class="input" placeholder="Choose a PIN (6 or more characters)" autocomplete="new-password">
-    <input type="password" id="newTeamPin2" class="input" placeholder="Type the PIN again" autocomplete="new-password">
+    <input type="password" id="newTeamPin" class="input pin-field" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="Choose a 4-digit PIN" autocomplete="new-password">
+    <input type="password" id="newTeamPin2" class="input pin-field" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="Type the PIN again" autocomplete="new-password">
     <input type="password" id="newTeamAdmin" class="input" placeholder="Admin password" autocomplete="off">
     <div class="hint">The admin password is <code>APP_PASSWORD</code> from Netlify. It is what stops anyone with the link making themselves a team.</div>
     <button type="submit" class="btn btn-primary login-btn" id="newTeamBtn">Create team</button>

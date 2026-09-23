@@ -731,6 +731,14 @@ tr:hover .row-actions { opacity: 1; }
 .team-chip-ico { display: flex; opacity: 0.75; flex: none; }
 .team-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Four digits, spaced out so they read as a PIN and not as a word. */
+.pin-field {
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;   /* the last letter's trailing space, given back */
+  font-variant-numeric: tabular-nums;
+}
+.pin-field::placeholder { letter-spacing: normal; text-indent: 0; }
+
 /* A field with its own button beside it (the team name and Rename). */
 .row-inline { display: flex; gap: 8px; align-items: center; }
 .row-inline .input { flex: 1; min-width: 0; }

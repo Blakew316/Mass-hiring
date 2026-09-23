@@ -68,14 +68,15 @@ app.get('/api/auth/status', asyncRoute(async (req, res) => {
     authed: Boolean(team),
     team: teamName(team),
     teams: await teams.publicList(),
+    numericPins: teams.allPinsNumeric(await teams.all()),
   });
 }));
 
 // The sign-in screen needs the names to choose between. Names are not secrets
 // — the PIN is — and a list you cannot see is a list you cannot sign in from.
 app.get('/api/teams', asyncRoute(async (_req, res) => {
-  if (auth.setupRequired()) return res.json({ teams: [] });
-  res.json({ teams: await teams.publicList() });
+  if (auth.setupRequired()) return res.json({ teams: [], numericPins: false });
+  res.json({ teams: await teams.publicList(), numericPins: teams.allPinsNumeric(await teams.all()) });
 }));
 
 app.post('/api/login', asyncRoute(async (req, res) => {
@@ -97,17 +98,17 @@ app.post('/api/login', asyncRoute(async (req, res) => {
   // rather than make someone reinstall the app to sign in.
   if (!teamId && list.length === 1) teamId = list[0].id;
   const pin = req.body.pin != null ? req.body.pin : req.body.password;
-  const locked = auth.loginLockedFor(req, teamId);
+  const locked = await auth.loginLockedFor(req, teamId);
   if (locked) {
     return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(locked / 60)} min.` });
   }
   const team = list.find((t) => t.id === teamId) || null;
   if (!team || !teams.verifyPin(team, pin)) {
-    auth.recordLoginFailure(req, teamId);
+    await auth.recordLoginFailure(req, teamId);
     await auth.failDelay(req, teamId);
     return res.status(401).json({ error: team ? 'That PIN is not right.' : 'Choose your team.' });
   }
-  auth.clearLoginFailures(req, teamId);
+  await auth.clearLoginFailures(req, teamId);
   auth.setSessionCookie(req, res, team);
   res.json({ ok: true, team: teamPublic(team) });
 }));
@@ -138,18 +139,18 @@ async function requireAdmin(req, res, given) {
     res.status(403).json({ error: 'Set an APP_PASSWORD before making teams — without one there is nothing to stop anyone making them.' });
     return false;
   }
-  const locked = auth.loginLockedFor(req, auth.ADMIN_BUCKET);
+  const locked = await auth.loginLockedFor(req, auth.ADMIN_BUCKET);
   if (locked) {
     res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(locked / 60)} min.` });
     return false;
   }
   if (!auth.checkAdminPassword(given)) {
-    auth.recordLoginFailure(req, auth.ADMIN_BUCKET);
+    await auth.recordLoginFailure(req, auth.ADMIN_BUCKET);
     await auth.failDelay(req, auth.ADMIN_BUCKET);
     res.status(401).json({ error: 'That admin password is not right.' });
     return false;
   }
-  auth.clearLoginFailures(req, auth.ADMIN_BUCKET);
+  await auth.clearLoginFailures(req, auth.ADMIN_BUCKET);
   return true;
 }
 
@@ -182,15 +183,15 @@ app.post('/api/teams/rename', asyncRoute(async (req, res) => {
 // Changing the PIN needs the current one — or the admin password, which is
 // the way back in for a team that has forgotten theirs.
 app.post('/api/teams/pin', asyncRoute(async (req, res) => {
-  const next = teams.checkPinLength(req.body.pin);
+  const next = teams.checkPin(req.body.pin);
   const current = req.body.current;
   const ok = teams.verifyPin(req.team, current) || auth.checkAdminPassword(current);
   if (!ok) {
-    auth.recordLoginFailure(req, req.team.id);
+    await auth.recordLoginFailure(req, req.team.id);
     await auth.failDelay(req, req.team.id);
     return res.status(401).json({ error: 'That is not the current PIN (the admin password works too).' });
   }
-  auth.clearLoginFailures(req, req.team.id);
+  await auth.clearLoginFailures(req, req.team.id);
   const team = await teams.edit(req.team.id, (t) => { t.pin = teams.pinRecord(next); });
   // The PIN changed, so every cookie signed under the old arrangement goes
   // with it — including, deliberately, the one in this browser.

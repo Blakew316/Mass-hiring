@@ -96,6 +96,11 @@
   // that signs out of one and into another is not left looking at the first
   // one's leftovers.
   let knownTeams = [];         // [{ id, name }] — what the picker offers
+  // Whether every team signs in with a four-digit PIN. False while any of them
+  // still signs in with the admin password, which is not four digits — capping
+  // the field then would lock that team's own owner out. It says nothing about
+  // WHICH team, only about the list as a whole.
+  let numericPins = false;
   // The timers outlive a sign-out, so they ask before doing anything: a phone
   // left on the sign-in screen overnight must not spend the night polling as
   // a signed-out user.
@@ -172,8 +177,26 @@
   async function loadTeams() {
     const r = await api('/api/teams');
     knownTeams = r.teams || [];
+    numericPins = Boolean(r.numericPins);
     renderTeamPicker();
     return knownTeams;
+  }
+
+  // A number pad instead of a keyboard, and no room for a fifth digit — but
+  // only once there is nothing left to sign in with except four digits.
+  function applyPinField() {
+    const el = $('#loginPassword');
+    if (numericPins) {
+      el.setAttribute('inputmode', 'numeric');
+      el.setAttribute('pattern', '[0-9]*');
+      el.setAttribute('maxlength', '4');
+      el.classList.add('pin-field');
+    } else {
+      el.removeAttribute('inputmode');
+      el.removeAttribute('pattern');
+      el.removeAttribute('maxlength');
+      el.classList.remove('pin-field');
+    }
   }
 
   function renderTeamPicker() {
@@ -192,6 +215,7 @@
     // exactly as simple as it was before teams existed.
     const many = knownTeams.length > 1;
     wrap.hidden = !many;
+    applyPinField();
     $('#loginIntro').textContent = many
       ? 'Choose your team, then enter its PIN.'
       : `Enter the PIN for ${knownTeams[0].name}.`;
@@ -3501,8 +3525,8 @@
     const nameField = $('#teamName');
     if (!teamNameDirty && document.activeElement !== nameField) nameField.value = currentTeam.name;
     $('#teamPinHint').textContent = currentTeam.usesAppPassword
-      ? 'This team still signs in with the APP_PASSWORD environment variable, the way the dashboard always did. Setting a PIN here gives it one of its own.'
-      : 'Changing the PIN signs every device out of this team, including this one.';
+      ? 'This team still signs in with the APP_PASSWORD environment variable, the way the dashboard always did. Give it four digits of its own here — after that the admin password only creates and deletes teams.'
+      : 'Four digits. Changing it signs every device out of this team, including this one.';
     const sel = $('#deleteTeamSelect');
     if (document.activeElement !== sel) {
       sel.innerHTML = knownTeams.map((t) =>
@@ -4196,6 +4220,7 @@
       const a = await api('/api/auth/status');
       if (a.setupRequired) { $('#setupScreen').hidden = false; return; }
       knownTeams = a.teams || [];
+      numericPins = Boolean(a.numericPins);
       authRequired = Boolean(a.required);
       if (a.required && !a.authed) { renderTeamPicker(); showLogin(); return; }
       setTeam(a.team);
