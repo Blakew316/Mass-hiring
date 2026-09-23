@@ -179,27 +179,32 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .nav-item:active { opacity: .55; }
   /* The count rides on the icon as a badge rather than sitting after the
      label, where at 10px it would push the word off its own tab. */
-  /* The count rides on the icon as a badge. It shows the short form — the
-     element's own text is "3,514", which is right in the sidebar and four
-     characters too wide here, where it was being cut in half. */
+  /* Anchored to the corner and grown leftwards, the way a badge on an app icon
+     is. A one-digit count sits clear of the icon entirely; a four-digit one
+     reaches back across its top corner and is still whole. Anchoring it to the
+     middle instead, as it was, put the number over the icon and then off the
+     side of the tab.
+
+     It draws data-short, not its own text: the element says "3,514" for the
+     sidebar and the badge wants "3514". */
   .nav-count {
     position: absolute;
-    top: 1px;
-    left: 50%;
-    transform: translateX(-2px);
-    min-width: 16px;
-    max-width: 30px;
-    padding: 0 4px;
+    top: 2px;
+    right: 6px;
+    left: auto;
+    transform: none;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4.5px;
     border-radius: 99px;
     background: var(--red);
     color: #fff;
     font-size: 0;
     font-weight: 700;
-    line-height: 16px;
+    line-height: 15px;
     text-align: center;
-    overflow: hidden;
   }
-  .nav-count::after { content: attr(data-short); font-size: 9.5px; }
+  .nav-count::after { content: attr(data-short); font-size: 9px; letter-spacing: -0.01em; }
   .nav-count:empty { display: none; }
   /* The badge sits over the icon's shoulder and must not be clipped by the
      cell; the label below it is what needed clipping, and it has its own. */

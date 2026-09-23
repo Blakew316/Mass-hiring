@@ -3754,13 +3754,13 @@
 
   // The counts beside the nav items are visible from every page, so they are
   // cheap by construction and always run.
-  // The sidebar has room for "3,514"; a tab-bar badge has room for about four
-  // characters, and the phone stylesheet shows the short form instead. Written
-  // here rather than shortened in CSS because CSS cannot do arithmetic.
+  // The whole number, in the badge as well as the sidebar — it fits, and a
+  // number you cannot read is not worth drawing. Only a five-figure count is
+  // wider than a tab, and that is the only one shortened.
   function setNavCount(sel, n) {
     const el = $(sel);
     el.textContent = n ? n.toLocaleString() : '';
-    el.dataset.short = n ? (n > 999 ? '999+' : String(n)) : '';
+    el.dataset.short = n ? (n > 9999 ? '9,999+' : n.toLocaleString()) : '';
   }
   function renderNavCounts() {
     setNavCount('#navCount', (state.stats && state.stats.total) || 0);
