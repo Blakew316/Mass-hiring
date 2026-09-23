@@ -211,8 +211,12 @@
   const oops = (err) => toast(err.message || String(err), true);
 
   // ---------------- Navigation ----------------
+  // The page you are on lives in the address bar. Back used to leave the site
+  // entirely, a reload always dumped you on the Dashboard however deep into
+  // Texting you were, and there was no way to send somebody a link to a page.
   let currentView = 'dashboard';
-  function show(view) {
+  function show(view, { record = true } = {}) {
+    if (!$(`#view-${view}`)) return;
     currentView = view;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
@@ -222,7 +226,18 @@
     // The editors moved to Settings; Email and Texting are conversations only.
     if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); }
     if (view === 'texting') renderTexting();
+    if (record && location.hash !== `#${view}`) history.pushState({ view }, '', `#${view}`);
   }
+  const viewInAddressBar = () => {
+    const want = location.hash.replace('#', '').split('?')[0];
+    return want && $(`#view-${want}`) ? want : 'dashboard';
+  };
+  window.addEventListener('popstate', (e) => {
+    show((e.state && e.state.view) || viewInAddressBar(), { record: false });
+  });
+  // Typing a page into the address bar, or following a link to #texting from
+  // outside, changes the hash without reloading and without a popstate.
+  window.addEventListener('hashchange', () => show(viewInAddressBar(), { record: false }));
   $$('.nav-item').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
   document.addEventListener('click', (e) => {
     const go = e.target.closest('[data-goto]');
@@ -3447,13 +3462,15 @@
     syncTimeZone();
     const hash = location.hash.replace('#', '');
     if (hash) {
-      const [view, query] = hash.split('?');
-      if ($(`#view-${view}`)) show(view);
+      const [, query] = hash.split('?');
+      show(viewInAddressBar(), { record: false });
       const params = new URLSearchParams(query || '');
       if (params.get('connected')) toast('Google connected — you can now import private sheets and send Gmail.');
       if (params.get('error')) toast(`Google sign-in problem: ${params.get('error')}`, true);
-      history.replaceState(null, '', location.pathname);
     }
+    // Keep the page, drop the one-shot Google sign-in parameters, and give the
+    // first entry a state object so Back from the second page works.
+    history.replaceState({ view: currentView }, '', `#${currentView}`);
     // Polling a tab nobody is looking at buys nothing and costs a function
     // call every 30 seconds for as long as it stays open. Coming back to the
     // tab refreshes straight away, so it is also fresher than waiting out the
