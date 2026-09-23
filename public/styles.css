@@ -18,7 +18,10 @@
   --green: #2fbe70;
   --mint: #56d68e;
   --ink: #1f2430;
-  --muted: #7a8194;
+  /* 3.89:1 on white before, which is under the 4.5:1 floor — and this is the
+     colour of every timestamp, every hint and every secondary line in the app,
+     at 10.5 to 12.5 pixels. 5.02:1 now, and 4.56:1 on the sunk panels. */
+  --muted: #686f82;
   --line: #e7eaf1;
   --bg: #e8eaf0;
   --card: #ffffff;
@@ -47,6 +50,9 @@
   --drop-line: #c9d6ea;
   --drop-bg: #fbfdff;
   --bubble-in: #e8eaef;        /* their side of a conversation */
+  /* And ours. These were literals inside two gradient rules, so the dark block
+     had nothing to move and the bubbles stayed lit for a light background. */
+  --bubble-out-top: #20b2fb; --bubble-out-bottom: #1088e8;
   --tint-hover-blue: #e2f0fd;
   --tint-hover-green: #dcf3e7;
   --ok-ink: #145a32;   --ok-line: #cdeedb;
@@ -98,9 +104,12 @@
   --card: #1b1e26;
   --surface: #1b1e26;
   --surface-sunk: #16181f;
-  --line: #2a2e3a;
-  --line-strong: #3d4354;
-  --dot: #3a4052;
+  /* Nearly the whole layout is built from 1px borders, and at #2a2e3a they were
+     1.23:1 against a card — on a phone the sections ran into one another. */
+  --line: #343a49;
+  --line-strong: #454c61;
+  /* An unticked box has to read as empty, not as absent. */
+  --dot: #454c61;
 
   /* Apple's dark-mode system colours. They are lighter than their light
      counterparts on purpose: a saturated mid-tone that reads as vivid on
@@ -123,6 +132,7 @@
   --drop-line: #3d4354;
   --drop-bg: #191c24;
   --bubble-in: #2b303c;        /* their side of a conversation */
+  --bubble-out-top: #2a9df4; --bubble-out-bottom: #0a6fd0;
   --tint-hover-blue: #1b3350;
   --tint-hover-green: #1b4028;
   --ok-ink: #5fe08c;   --ok-line: #24503a;
@@ -537,7 +547,9 @@ tr:hover .row-actions { opacity: 1; }
 .token-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 .token {
   border: none; cursor: pointer;
-  background: var(--green-tint); color: #1e8a50;
+  /* --green-ink, not the literal it was: in dark mode --green-tint becomes
+     #14301f and this chip was 3.26:1 dark-green-on-dark-green. */
+  background: var(--green-tint); color: var(--green-ink);
   font-size: 11.5px; font-weight: 650;
   padding: 4px 10px; border-radius: 99px;
   transition: background 0.15s;
@@ -609,7 +621,6 @@ tr:hover .row-actions { opacity: 1; }
 .compose-to .to-more { color: var(--muted); font-size: 12px; padding: 3px 4px; }
 .progress { height: 8px; background: var(--navy-tint); border-radius: 99px; overflow: hidden; margin-top: 16px; }
 .progress-fill { height: 100%; width: 0; background: var(--blue); border-radius: 99px; transition: width 0.3s ease; }
-/* Nothing but a title and the button that does the thing{ margin-top: 0; }
 .sending-card .progress { margin-top: 4px; }
 .sending-meta { margin-top: 10px; font-size: 12.5px; }
 .email-all-btn:disabled { opacity: 0.45; }
@@ -732,9 +743,6 @@ tr:hover .row-actions { opacity: 1; }
 .redirect-box .hint.warn-text { color: var(--warn-ink); }
 
 /* ---------- Texting ---------- */
-/* The texting funnel: five numbers, not four, and they were bare divs inside a
-   four-column grid — the fifth wrapped onto its own line with no card around
-   any of them. Five columns, card chrome{ grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
 
 .field-grid {
   display: grid;
@@ -774,7 +782,7 @@ tr:hover .row-actions { opacity: 1; }
   min-height: 84px;
 }
 .imessage-bubble {
-  background: linear-gradient(#20b2fb, #1088e8);
+  background: linear-gradient(var(--bubble-out-top), var(--bubble-out-bottom));
   color: #fff;
   border-radius: 19px;
   padding: 9px 14px;
@@ -855,38 +863,6 @@ tr.row-muted { opacity: .55; }
 /* ---------- Candidates: the overview ---------- */
 .search-wrap.wide { width: 100%; max-width: none; margin-bottom: 22px; }
 .search-wrap.wide .search { width: 100%; }
-
-/* Each tile is a button, so it has to look like one. The page background is
-   nearly white, so a white panel with a hairline border disappears into it —
-   these get a coloured edge{
-  /* Overridden by the tone class; here so a tile without one still renders. */
-  --seg: var(--navy-soft);
-  --seg-tint: var(--navy-tint);
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  text-align: left;
-  padding: 15px 16px 14px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  cursor: pointer;
-  font: inherit;
-  overflow: hidden;
-  transition: border-color .16s, box-shadow .16s, transform .12s;
-}
-/* The colour of the group{
-  content: '';
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--seg);
-  opacity: .9;
-}
-
-/* The per-group colour, set once and used by the edge{ --seg: var(--navy-soft); --seg-tint: var(--navy-tint); }
 
 /* The filters currently in force, each one removable. */
 .active-filters[hidden] { display: none !important; }
@@ -1044,7 +1020,7 @@ tr.row-muted { opacity: .55; }
   white-space: pre-wrap; word-break: break-word;
 }
 .msg.in .bubble { background: var(--bubble-in); color: var(--ink); border-bottom-left-radius: 5px; }
-.msg.out .bubble { background: linear-gradient(#20b2fb, #1088e8); color: #fff; border-bottom-right-radius: 5px; }
+.msg.out .bubble { background: linear-gradient(var(--bubble-out-top), var(--bubble-out-bottom)); color: #fff; border-bottom-right-radius: 5px; }
 .msg.pending .bubble { opacity: .6; }
 .msg-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
 
