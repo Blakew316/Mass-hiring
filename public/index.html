@@ -136,6 +136,13 @@
       </button>
     </nav>
     <div class="sidebar-foot">
+      <!-- Which team you are looking at. It travels with .sidebar-foot when
+           app.js moves that block into Settings on a phone, so the answer is
+           never more than one tap away on either shape of screen. -->
+      <div class="team-chip" id="teamChip" hidden>
+        <span class="team-chip-ico" data-icon="users" data-size="13"></span>
+        <span class="team-chip-name" id="teamChipName"></span>
+      </div>
       <div class="account" id="connPill">
         <span class="account-dot"></span>
         <div class="account-text">
@@ -143,7 +150,7 @@
           <span class="account-email" id="connText"></span>
         </div>
       </div>
-      <button class="btn btn-ghost signout" id="signOutBtn" hidden title="Signs out on every device"><span data-icon="logout" data-size="14"></span> Sign out</button>
+      <button class="btn btn-ghost signout" id="signOutBtn" hidden title="Signs out of this browser — other devices on this team stay signed in"><span data-icon="logout" data-size="14"></span> Sign out</button>
     </div>
   </aside>
 
@@ -605,6 +612,51 @@
              out have nowhere to be. app.js moves the real elements in here
              rather than making a second copy that could disagree. -->
         <div class="settings-account" id="settingsAccount"></div>
+
+        <h2 class="settings-title">Team</h2>
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-navy" data-icon="users" data-size="15"></span>This team</h2>
+              <span class="badge" id="teamBadge">—</span>
+            </div>
+            <div class="hint" id="teamWhose">Everything on this dashboard — candidates, templates, connections, history — belongs to this team and is not visible to any other.</div>
+            <label class="label">Team name</label>
+            <div class="row-inline">
+              <input type="text" id="teamName" class="input" data-no-dirty placeholder="Team name" maxlength="40">
+              <button class="btn btn-sm" id="teamRenameBtn" type="button">Rename</button>
+            </div>
+            <label class="label">Sign-in PIN</label>
+            <div class="hint" id="teamPinHint"></div>
+            <input type="password" id="teamPinCurrent" class="input" data-no-dirty placeholder="Current PIN (or the admin password)" autocomplete="current-password">
+            <input type="password" id="teamPinNew" class="input" data-no-dirty placeholder="New PIN (6 or more characters)" autocomplete="new-password">
+            <button class="btn btn-sm" id="teamPinBtn" type="button">Change PIN</button>
+            <div class="settings-sep"></div>
+            <button class="btn btn-ghost btn-sm" id="teamSignOutAllBtn" type="button">Sign out on every device</button>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2><span class="card-ico tone-blue" data-icon="plus" data-size="15"></span>Another team</h2>
+            </div>
+            <div class="hint">A second team gets its own everything, starting empty. Nothing here is shared with it.</div>
+            <label class="label">Team name</label>
+            <input type="text" id="addTeamName" class="input" data-no-dirty placeholder="e.g. Team Ranger" maxlength="40">
+            <label class="label">Their PIN</label>
+            <input type="password" id="addTeamPin" class="input" data-no-dirty placeholder="6 or more characters" autocomplete="new-password">
+            <label class="label">Admin password</label>
+            <input type="password" id="addTeamAdmin" class="input" data-no-dirty placeholder="APP_PASSWORD" autocomplete="off">
+            <button class="btn btn-sm" id="addTeamBtn" type="button">Create team</button>
+            <div class="settings-sep"></div>
+            <div class="hint">Deleting a team erases its candidates, templates, connections and history for good.</div>
+            <label class="label">Delete a team</label>
+            <select id="deleteTeamSelect" class="input"></select>
+            <input type="text" id="deleteTeamConfirm" class="input" data-no-dirty placeholder="Type the team's name to confirm" autocomplete="off">
+            <input type="password" id="deleteTeamAdmin" class="input" data-no-dirty placeholder="Admin password" autocomplete="off">
+            <button class="btn btn-ghost btn-sm danger" id="deleteTeamBtn" type="button">Delete team</button>
+          </div>
+        </div>
+
         <h2 class="settings-title">Accounts &amp; connections</h2>
         <div class="settings-grid">
           <div class="card">
@@ -613,7 +665,7 @@
               <span class="badge" id="googleBadge">not connected</span>
             </div>
             <label class="label">From name <span class="muted small">(what recipients see instead of the address)</span></label>
-            <input type="text" id="setFromName" class="input" placeholder="e.g. Blake Woodruff">
+            <input type="text" id="setFromName" class="input" placeholder="the name recipients should see">
             <label class="label">OAuth Client ID</label>
             <input type="text" id="setGoogleClientId" class="input" placeholder="xxxxx.apps.googleusercontent.com">
             <label class="label">OAuth Client Secret</label>
@@ -970,26 +1022,47 @@
 <div class="login-screen" id="setupScreen" hidden>
   <div class="login-card setup-card-gate">
     <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
-    <h2>Lock the dashboard first</h2>
-    <p class="muted">This site is public, and the app can send email from your account, so it won't run until a password is set.</p>
+    <h2>Set the admin password first</h2>
+    <p class="muted">This site is public, and the app can send email from your account, so it won't run until an admin password is set. It is what lets you create and delete teams — each team then signs in with a PIN of its own.</p>
     <ol class="setup-steps">
       <li>Netlify → <strong>Project configuration → Environment variables → Add a variable</strong> <span class="muted small">(called “Site configuration” in the older UI)</span></li>
       <li>Key <code>APP_PASSWORD</code>, value = a strong password → Save</li>
       <li><strong>Deploys → Trigger deploy → Deploy site</strong>, then reload this page</li>
+      <li>Sign in, or use <strong>Start a new team</strong> on the sign-in screen</li>
     </ol>
     <button type="button" class="btn btn-primary login-btn" onclick="location.reload()">I’ve set it — reload</button>
   </div>
 </div>
 
 <!-- ===== Sign-in (shown only when APP_PASSWORD is set) ===== -->
+<!-- Two cards in one screen: sign in to a team, or make a new one. Only ever
+     one of them is on show. -->
 <div class="login-screen" id="loginScreen" hidden>
   <form class="login-card" id="loginForm">
     <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
     <h2>Hiring CRM</h2>
-    <p class="muted">Enter the dashboard password to continue.</p>
-    <input type="password" id="loginPassword" class="input" placeholder="Password" autocomplete="current-password" autofocus>
+    <p class="muted" id="loginIntro">Enter your team's PIN to continue.</p>
+    <!-- Filled in from /api/auth/status. Hidden entirely while there is only
+         one team: a choice of one is not a choice. -->
+    <div class="team-picker" id="teamPicker" hidden role="radiogroup" aria-label="Team"></div>
+    <input type="password" id="loginPassword" class="input" placeholder="PIN" autocomplete="current-password" autofocus>
     <button type="submit" class="btn btn-primary login-btn" id="loginBtn">Sign in</button>
     <div class="hint" id="loginError"></div>
+    <button type="button" class="login-alt" id="newTeamLink">Start a new team</button>
+  </form>
+
+  <form class="login-card" id="newTeamForm" hidden>
+    <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
+    <h2>New team</h2>
+    <p class="muted">A new team starts empty — its own candidates, templates and connections, and nothing carried over from anyone else.</p>
+    <input type="text" id="newTeamName" class="input" placeholder="Team name" autocomplete="off" maxlength="40">
+    <input type="password" id="newTeamPin" class="input" placeholder="Choose a PIN (6 or more characters)" autocomplete="new-password">
+    <input type="password" id="newTeamPin2" class="input" placeholder="Type the PIN again" autocomplete="new-password">
+    <input type="password" id="newTeamAdmin" class="input" placeholder="Admin password" autocomplete="off">
+    <div class="hint">The admin password is <code>APP_PASSWORD</code> from Netlify. It is what stops anyone with the link making themselves a team.</div>
+    <button type="submit" class="btn btn-primary login-btn" id="newTeamBtn">Create team</button>
+    <div class="hint" id="newTeamError"></div>
+    <button type="button" class="login-alt" id="backToLogin">Back to sign in</button>
   </form>
 </div>
 

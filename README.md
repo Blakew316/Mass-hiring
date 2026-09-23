@@ -98,9 +98,18 @@ With a Calendly personal access token saved in Settings, the app pulls your sche
 
 Matching is by email first (any address the person has booked with before counts), then by full name when the name is unique in your list — people often book with a work address when the sheet has their personal one. A booking the app still cannot place shows **Link to candidate** in the tile: type part of the name or email, click the person, and the address is remembered for next time.
 
+## Teams
+
+Everything in this app belongs to exactly one team: its candidates, templates, settings, Gmail connection, Calendly registration, text threads and history. Signing in means choosing a team and entering its PIN, and from that point nothing another team owns is reachable — not by the dashboard, not by a candidate id typed into a URL, not by a cached response.
+
+- **The first team.** Everything stored before teams existed belongs to **Team Maverick**, which is adopted automatically on first run. Its data is not moved anywhere: it keeps the storage keys it has always had.
+- **A new team starts empty.** No candidates, no history, no interviews, no attachments, no connections, a blank sender name, and its own tracking secret. It gets generic starter copy for the outreach email and text — generic meaning it names nobody and no company — and the setup checklist says the template still needs writing, because it does.
+- **Making one.** *Start a new team* on the sign-in screen, or the Team card in Settings. Both ask for the **admin password**, which is what `APP_PASSWORD` now is: it does not sign you in anywhere, it is what lets you create and delete teams. Team Maverick has no PIN of its own yet, so it still signs in with `APP_PASSWORD` until you give it one in Settings.
+- **Switching.** The team's name sits in the header of every page. Tap it to sign out and pick another.
+
 ## Protecting the dashboard
 
-Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in (sessions last 30 days; *Sign out* revokes every device; five wrong passwords lock that address for 15 minutes). A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
+Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in: a team, then that team's PIN. Sessions last 30 days. *Sign out* ends this browser's session only; *Sign out on every device* in the Team card ends all of them, for that team alone. Five wrong PINs lock the address they came from for 15 minutes, and sustained guessing at one team slows every answer down — but it can never lock that team out of its own dashboard. A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
 
 ## 3. Calendly + phone notifications
 

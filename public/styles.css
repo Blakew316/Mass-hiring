@@ -650,8 +650,13 @@ tr:hover .row-actions { opacity: 1; }
 .login-screen {
   position: fixed; inset: 0; z-index: 60;
   background: var(--bg);
-  display: flex; align-items: center; justify-content: center; padding: 20px;
+  /* flex-start plus margin:auto rather than align-items:center, so a card
+     taller than the screen — the new-team one is, on a small phone with the
+     keyboard up — scrolls instead of being clipped at both ends. */
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 20px; overflow-y: auto;
 }
+.login-card { margin: auto; }
 .login-screen[hidden] { display: none; }
 .login-card {
   background: var(--card); border: 1px solid var(--line); border-radius: 18px;
@@ -662,6 +667,77 @@ tr:hover .row-actions { opacity: 1; }
 .login-card h2 { margin: 0 0 4px; font-size: 18px; color: var(--navy); }
 .login-card .input { margin-top: 18px; text-align: center; }
 .setup-card-gate { width: 440px; }
+
+/* ----- teams ----- */
+/* The team picker on the sign-in screen. Chips rather than a dropdown: on a
+   phone a chip is a thumb-sized target you can read at a glance, and a team
+   name is short. Past half a dozen teams it scrolls rather than pushing the
+   PIN field off the screen. */
+.team-picker {
+  display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+  width: 100%; margin-top: 16px; max-height: 148px; overflow-y: auto;
+}
+.team-picker[hidden] { display: none; }
+.team-option {
+  padding: 8px 14px; border-radius: 99px; border: 1px solid var(--line);
+  background: var(--card); color: var(--navy-soft);
+  font-size: 13px; font-weight: 550; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.team-option:hover { border-color: var(--blue); color: var(--blue-deep); }
+.team-option[aria-checked="true"] {
+  background: var(--blue-tint); border-color: transparent;
+  color: var(--blue-deep); font-weight: 650;
+}
+/* The quiet way between the two cards of the sign-in screen. */
+.login-alt {
+  margin-top: 16px; background: none; border: 0; padding: 4px;
+  color: var(--muted); font-size: 12.5px; font-weight: 550; cursor: pointer;
+  font-family: inherit;
+}
+.login-alt:hover { color: var(--blue-deep); text-decoration: underline; }
+.login-card .hint { margin-top: 10px; }
+.login-card #newTeamError:empty, .login-card #loginError:empty { margin-top: 0; }
+
+/* Which team you are in, in the header of every page — the one question this
+   app must never leave unanswered, since the mistake it prevents is emailing
+   the wrong team's list. It is also the way out: tapping it signs out and
+   returns to the picker. */
+.head-team {
+  /* Off on a wide screen: the sidebar names the team permanently, with Sign
+     out beside it, so a second copy in every header would be clutter. */
+  display: none;
+  align-items: center; gap: 5px;
+  max-width: 100%; margin-top: 4px; padding: 4px 10px 4px 8px;
+  border: 1px solid var(--line); border-radius: 99px;
+  background: var(--card); color: var(--navy-soft);
+  font-size: 12px; font-weight: 650; font-family: inherit; cursor: pointer;
+  position: relative;
+}
+.head-team[hidden] { display: none; }
+.head-team svg { opacity: 0.7; flex: none; }
+.head-team-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Which team you are in, above the account pill in the sidebar — and, on a
+   phone, above it again wherever app.js has moved that block to. */
+.team-chip {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px; margin-bottom: 8px;
+  border-radius: 10px; background: var(--blue-tint);
+  color: var(--blue-deep); font-size: 12.5px; font-weight: 650;
+  min-width: 0;
+}
+.team-chip[hidden] { display: none; }
+.team-chip-ico { display: flex; opacity: 0.75; flex: none; }
+.team-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A field with its own button beside it (the team name and Rename). */
+.row-inline { display: flex; gap: 8px; align-items: center; }
+.row-inline .input { flex: 1; min-width: 0; }
+.row-inline .btn { flex: none; }
+
+/* A hairline between two groups of controls inside one card. */
+.settings-sep { height: 1px; background: var(--line); margin: 16px 0 14px; }
 .setup-steps { text-align: left; font-size: 13px; line-height: 1.6; color: var(--navy-soft); padding-left: 20px; margin: 14px 0 6px; }
 .setup-steps li { margin-bottom: 6px; }
 .setup-steps code { background: var(--navy-tint); padding: 1px 6px; border-radius: 6px; font-size: 12px; color: var(--navy); }

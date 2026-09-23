@@ -6,6 +6,10 @@
   const $$ = (sel) => [...document.querySelectorAll(sel)];
 
   let state = null;            // last /api/state payload
+  // The team this browser is signed into. Declared up here because the very
+  // first thing this file does is read a per-team preference back out of
+  // localStorage, and teamKey() needs somewhere to look.
+  let currentTeam = null;      // { id, name, usesAppPassword }
   let selected = new Set();    // selected candidate ids
   let filter = 'all';
   let search = '';
@@ -49,6 +53,14 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  // Where this browser files something of its own for the team it is signed
+  // into. Not a security boundary — the server decides what you may see — but
+  // it keeps one team's remembered filters and paid-for Apollo ids from
+  // turning up in another team's session on a shared device.
+  function teamKey(name) {
+    return `${name}::${currentTeam ? currentTeam.id : ''}`;
+  }
+
   // ---------------- API ----------------
   // Errors carry whatever extra fields the server sent, so a caller can tell
   // "your plan blocks this" apart from "that went wrong".
@@ -78,11 +90,142 @@
     return data;
   }
 
-  // ---------------- Sign-in ----------------
+  // ---------------- Teams and signing in ----------------
+  // Everything the server sends back belongs to one team. The few things this
+  // browser remembers by itself are filed under that team too, so a device
+  // that signs out of one and into another is not left looking at the first
+  // one's leftovers.
+  let knownTeams = [];         // [{ id, name }] — what the picker offers
+  // The timers outlive a sign-out, so they ask before doing anything: a phone
+  // left on the sign-in screen overnight must not spend the night polling as
+  // a signed-out user.
+  let signedIn = false;
+  // Whether there is a sign-in to be signed out OF. Without a password there
+  // is exactly one team and no way to reach another, so the switch-team
+  // control would only ever put up a screen you cannot get past.
+  let authRequired = false;
+  let pickedTeamId = '';       // the chip currently chosen on the sign-in screen
+
+  const LAST_TEAM_KEY = 'lastTeam';
+  // Another admin may have made or renamed a team since this page loaded, and
+  // the delete list has to mean something. Refreshed when Settings is looked
+  // at, not on the 30-second poll, which must stay one request.
+  let teamsRefreshedAt = 0;
+  const lastTeam = () => { try { return localStorage.getItem(LAST_TEAM_KEY) || ''; } catch { return ''; } };
+
+  function setTeam(team) {
+    const changed = (currentTeam && currentTeam.id) !== (team && team.id);
+    currentTeam = team || null;
+    if (currentTeam) { try { localStorage.setItem(LAST_TEAM_KEY, currentTeam.id); } catch {} }
+    // Anything kept per team has to be re-read when the team changes, or the
+    // new team inherits the old one's view of things.
+    if (changed) feedChannel = readFeedChannel();
+    renderTeamChip();
+  }
+
+  function renderTeamChip() {
+    const chip = $('#teamChip');
+    if (chip) {
+      chip.hidden = !currentTeam;
+      if (currentTeam) $('#teamChipName').textContent = currentTeam.name;
+    }
+    // On a phone the sidebar is a tab bar and its foot is not on screen, so
+    // the chip above would only ever be visible on Settings. The one question
+    // this app must never leave unanswered is which team's 3,514 people you
+    // are about to email, so the answer rides in the header of every page,
+    // beside the bell and the theme switch — and is itself the way out.
+    $$('.head-team').forEach((b) => {
+      b.hidden = !(currentTeam && authRequired);
+      if (!currentTeam) return;
+      // In a page header, beside a title, what distinguishes one team from
+      // another is the name — "Maverick", "Ranger" — not the word "Team" they
+      // all share. Dropping it is what lets the whole answer fit on a phone
+      // instead of being cut to "Team M…", which answers nothing.
+      b.querySelector('.head-team-name').textContent = currentTeam.name.replace(/^team\s+/i, '') || currentTeam.name;
+      b.title = `${currentTeam.name} — tap to switch team`;
+    });
+  }
+
+  function mountTeam() {
+    // Under the page title, not in the row of controls beside it. A large iOS
+    // title and three controls do not both fit across a phone, and what gave
+    // way was the title — "Dashboa" is not a heading. A caption under the
+    // heading is the shape this belongs in anyway: it says where you are,
+    // right where the page says what you are looking at.
+    $$('.page-head > div:first-child').forEach((row) => {
+      if (row.querySelector('.head-team')) return;
+      const b = document.createElement('button');
+      b.className = 'head-team';
+      b.type = 'button';
+      b.hidden = true;
+      b.title = 'Switch team';
+      b.innerHTML = `${icon('users', 14)}<span class="head-team-name"></span>`;
+      b.addEventListener('click', async () => {
+        if (!confirm(`Leave ${currentTeam ? currentTeam.name : 'this team'} and sign in to another?`)) return;
+        await api('/api/logout', { method: 'POST' }).catch(() => {});
+        signedOut();
+      });
+      row.appendChild(b);
+    });
+  }
+
+  async function loadTeams() {
+    const r = await api('/api/teams');
+    knownTeams = r.teams || [];
+    renderTeamPicker();
+    return knownTeams;
+  }
+
+  function renderTeamPicker() {
+    const wrap = $('#teamPicker');
+    if (!wrap) return;
+    if (!knownTeams.length) {
+      wrap.hidden = true;
+      $('#loginIntro').textContent = 'No teams yet — start the first one below.';
+      return;
+    }
+    if (!knownTeams.some((t) => t.id === pickedTeamId)) {
+      const remembered = lastTeam();
+      pickedTeamId = knownTeams.some((t) => t.id === remembered) ? remembered : knownTeams[0].id;
+    }
+    // One team is not a choice, so it is not offered as one — the screen stays
+    // exactly as simple as it was before teams existed.
+    const many = knownTeams.length > 1;
+    wrap.hidden = !many;
+    $('#loginIntro').textContent = many
+      ? 'Choose your team, then enter its PIN.'
+      : `Enter the PIN for ${knownTeams[0].name}.`;
+    if (many) {
+      wrap.innerHTML = knownTeams.map((t) =>
+        `<button type="button" class="team-option" role="radio" data-team="${esc(t.id)}" aria-checked="${t.id === pickedTeamId}">${esc(t.name)}</button>`).join('');
+    }
+  }
+
   function showLogin() {
+    stateTag = '';
     $('#loginScreen').hidden = false;
+    $('#newTeamForm').hidden = true;
+    $('#loginForm').hidden = false;
+    loadTeams().catch(() => renderTeamPicker());
     setTimeout(() => $('#loginPassword').focus(), 50);
   }
+
+  async function enterApp(team) {
+    setTeam(team);
+    stateTag = '';
+    signedIn = true;
+    $('#loginScreen').hidden = true;
+    await refresh();
+    start();
+  }
+
+  $('#teamPicker').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-team]');
+    if (!b) return;
+    pickedTeamId = b.dataset.team;
+    renderTeamPicker();
+    $('#loginPassword').focus();
+  });
 
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -90,11 +233,9 @@
     btn.disabled = true;
     $('#loginError').textContent = '';
     try {
-      await api('/api/login', { method: 'POST', body: { password: $('#loginPassword').value } });
+      const r = await api('/api/login', { method: 'POST', body: { team: pickedTeamId, pin: $('#loginPassword').value } });
       $('#loginPassword').value = '';
-      $('#loginScreen').hidden = true;
-      await refresh();
-      start();
+      await enterApp(r.team);
     } catch (err) {
       $('#loginError').textContent = err.message;
     } finally {
@@ -102,9 +243,87 @@
     }
   });
 
+  $('#newTeamLink').addEventListener('click', () => {
+    $('#loginForm').hidden = true;
+    $('#newTeamForm').hidden = false;
+    $('#newTeamError').textContent = '';
+    setTimeout(() => $('#newTeamName').focus(), 50);
+  });
+
+  $('#backToLogin').addEventListener('click', () => {
+    $('#newTeamForm').hidden = true;
+    $('#loginForm').hidden = false;
+    setTimeout(() => $('#loginPassword').focus(), 50);
+  });
+
+  $('#newTeamForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('#newTeamError');
+    err.textContent = '';
+    if ($('#newTeamPin').value !== $('#newTeamPin2').value) {
+      err.textContent = 'Those two PINs are not the same.';
+      return;
+    }
+    const btn = $('#newTeamBtn');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/teams/create', {
+        method: 'POST',
+        body: { name: $('#newTeamName').value, pin: $('#newTeamPin').value, adminPassword: $('#newTeamAdmin').value },
+      });
+      ['#newTeamName', '#newTeamPin', '#newTeamPin2', '#newTeamAdmin'].forEach((sel) => { $(sel).value = ''; });
+      await loadTeams().catch(() => {});
+      if (r.signedIn) { await enterApp(r.team); return; }
+      pickedTeamId = r.team.id;
+      renderTeamPicker();
+      $('#newTeamForm').hidden = true;
+      $('#loginForm').hidden = false;
+      $('#loginError').textContent = `${r.team.name} is ready — sign in with its PIN.`;
+    } catch (e2) {
+      err.textContent = e2.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Everything the page is holding about the team you were in. A candidate id
+  // is only meaningful inside one team, and renderAll() replays the open
+  // thread — so without this the first thing a new team sees is an error about
+  // somebody else's candidate.
+  function resetClientState() {
+    state = null;
+    stateTag = '';
+    selected = new Set();
+    filter = 'all';
+    search = '';
+    roleFilter = '';
+    sortBy = 'default';
+    industryFilter = '';
+    addedFilter = '';
+    textedFilter = '';
+    rankFilter = '';
+    page = 0;
+    pageRows = [];
+    lastFilterSig = '';
+    pendingImport = null;
+    composeIds = [];
+    openThreadId = null;
+    openMailId = null;
+    threadLoading = false;
+    for (const k of Object.keys(thumbs)) delete thumbs[k];
+    for (const k of Object.keys(scrollMemory)) delete scrollMemory[k];
+  }
+
+  function signedOut() {
+    signedIn = false;
+    resetClientState();
+    setTeam(null);
+    showLogin();
+  }
+
   $('#signOutBtn').addEventListener('click', async () => {
     await api('/api/logout', { method: 'POST' }).catch(() => {});
-    showLogin();
+    signedOut();
   });
 
   // Persistence / security warnings that must not be missable.
@@ -117,7 +336,7 @@
       n.push(`<div class="notice danger"><span class="notice-ico">${icon('alert', 16)}</span><div><strong>Your data is not being saved permanently.</strong> Netlify Blobs is unavailable${state.storage.error ? ` (${esc(state.storage.error)})` : ''}, so settings and candidates will be lost on the next deploy or restart. Check that Blobs is enabled for this site in Netlify, then redeploy.</div></div>`);
     }
     if (state.storage && state.storage.deployed && state.auth && !state.auth.required) {
-      n.push(`<div class="notice warn"><span class="notice-ico">${icon('lock', 16)}</span><div><strong>This dashboard is public.</strong> Anyone with the URL could send email from your account. Add an environment variable named <code>APP_PASSWORD</code> in Netlify (Project configuration → Environment variables), then redeploy to require a sign-in.</div></div>`);
+      n.push(`<div class="notice warn"><span class="notice-ico">${icon('lock', 16)}</span><div><strong>This dashboard is public.</strong> Anyone with the URL could send email from your account. Add an environment variable named <code>APP_PASSWORD</code> in Netlify (Project configuration → Environment variables), then redeploy. That is the admin password — it locks the dashboard and is what lets you create and delete teams.</div></div>`);
     }
     if (state.lastError) {
       n.push(`<div class="notice warn"><span class="notice-ico">${icon('alert', 16)}</span><div>${esc(state.lastError)}</div></div>`);
@@ -142,6 +361,8 @@
     lastSyncAt = Date.now();
     stateTag = res.headers.get('ETag') || '';
     state = await res.json();
+    authRequired = Boolean(state.auth && state.auth.required);
+    setTeam(state.team);
     renderAll();
     return true;
   }
@@ -157,6 +378,7 @@
   let retryTimer = null;
 
   async function poll() {
+    if (!signedIn) return;
     clearTimeout(retryTimer);
     retryTimer = null;
     try {
@@ -291,7 +513,7 @@
     const chip = e.target.closest('[data-feed]');
     if (chip) {
       feedChannel = chip.dataset.feed;
-      try { localStorage.setItem('feedChannel', feedChannel); } catch {}
+      try { localStorage.setItem(teamKey('feedChannel'), feedChannel); } catch {}
       renderFeed();
     }
   });
@@ -389,7 +611,7 @@
       ['Add your Calendly booking link', Boolean(st.calendlyUrl), 'settings'],
       ['Turn on phone notifications for bookings', Boolean(st.ntfyTopic), 'settings'],
       ['Add your Apollo key to find new candidates', Boolean(state.apollo && state.apollo.configured), 'import'],
-      ['Personalize your default email template', true, 'template'],
+      ['Personalize your default email template', state.templateEdited !== false, 'template'],
     ];
     const allDone = items.every(([, d]) => d);
     $('#setupCard').hidden = allDone;
@@ -552,7 +774,7 @@
 
   // Pull interviews from Calendly on load and every 5 minutes while open.
   async function syncCalendly() {
-    if (!state || !state.calendly || !state.calendly.syncEnabled || document.hidden) return;
+    if (!signedIn || !state || !state.calendly || !state.calendly.syncEnabled || document.hidden) return;
     try {
       const r = await api('/api/calendly/sync', { method: 'POST' });
       if (r.newBookings > 0) { await refresh(); toast(`${r.newBookings} new interview${r.newBookings === 1 ? '' : 's'} booked.`); }
@@ -625,7 +847,7 @@
 
   function readFeedChannel() {
     try {
-      const v = localStorage.getItem('feedChannel');
+      const v = localStorage.getItem(teamKey('feedChannel'));
       return v === 'email' || v === 'text' ? v : 'all';
     } catch { return 'all'; }
   }
@@ -1814,12 +2036,12 @@
   // Ids already paid for in this browser, so a repeat search does not spend
   // credits revealing the same people twice.
   function apolloSeen() {
-    try { return new Set(JSON.parse(localStorage.getItem('apolloSeen') || '[]')); } catch { return new Set(); }
+    try { return new Set(JSON.parse(localStorage.getItem(teamKey('apolloSeen')) || '[]')); } catch { return new Set(); }
   }
   function rememberApollo(ids) {
     try {
       const all = [...apolloSeen(), ...ids].slice(-5000);
-      localStorage.setItem('apolloSeen', JSON.stringify(all));
+      localStorage.setItem(teamKey('apolloSeen'), JSON.stringify(all));
     } catch {}
   }
 
@@ -2328,7 +2550,11 @@
     settingsDirty = d;
     $('#saveSettingsBtn').textContent = d ? 'Save settings •' : 'Save settings';
   }
-  $$('#view-settings input').forEach((el) => el.addEventListener('input', () => setSettingsDirty(true)));
+  // The Team card is the first thing in this view but it saves itself through
+  // its own buttons, so typing a PIN there must not mark the settings form
+  // below as having unsaved changes — which would also freeze it against
+  // server updates until something was pressed.
+  $$('#view-settings input:not([data-no-dirty])').forEach((el) => el.addEventListener('input', () => setSettingsDirty(true)));
 
   // ---------------- Text composer ----------------
   // Texting one person, or a handful, without touching the saved template.
@@ -3261,7 +3487,106 @@
     try { const r = await api('/api/texts/queue/retry-failed', { method: 'POST' }); toast(`${r.requeued} re-queued.`); await refresh(); } catch (err) { oops(err); }
   });
 
+  // ---- the Team card ----
+  // Once a new name has been typed, the poll stops overwriting the field.
+  // Tabbing out of it to reach Rename must not lose what was typed, which is
+  // what checking only document.activeElement would do.
+  let teamNameDirty = false;
+  $('#teamName').addEventListener('input', () => { teamNameDirty = true; });
+
+  function renderTeamSettings() {
+    if (!currentTeam) return;
+    if (!knownTeams.some((t) => t.id === currentTeam.id)) knownTeams = [{ id: currentTeam.id, name: currentTeam.name }];
+    $('#teamBadge').textContent = currentTeam.name;
+    const nameField = $('#teamName');
+    if (!teamNameDirty && document.activeElement !== nameField) nameField.value = currentTeam.name;
+    $('#teamPinHint').textContent = currentTeam.usesAppPassword
+      ? 'This team still signs in with the APP_PASSWORD environment variable, the way the dashboard always did. Setting a PIN here gives it one of its own.'
+      : 'Changing the PIN signs every device out of this team, including this one.';
+    const sel = $('#deleteTeamSelect');
+    if (document.activeElement !== sel) {
+      sel.innerHTML = knownTeams.map((t) =>
+        `<option value="${esc(t.id)}"${t.id === currentTeam.id ? ' selected' : ''}>${esc(t.name)}${t.id === currentTeam.id ? ' — the one you are in' : ''}</option>`).join('');
+    }
+  }
+
+  // Each of these asks the server and then re-reads the answer, rather than
+  // assuming it worked: a rename that collides, a PIN that is too short and a
+  // wrong admin password all come back as plain messages.
+  $('#teamRenameBtn').addEventListener('click', async () => {
+    const btn = $('#teamRenameBtn');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/teams/rename', { method: 'POST', body: { name: $('#teamName').value } });
+      teamNameDirty = false;
+      setTeam(r.team);
+      await loadTeams().catch(() => {});
+      renderTeamSettings();
+      toast(`This team is now “${r.team.name}”.`);
+    } catch (err) { oops(err); } finally { btn.disabled = false; }
+  });
+
+  $('#teamPinBtn').addEventListener('click', async () => {
+    const btn = $('#teamPinBtn');
+    btn.disabled = true;
+    try {
+      await api('/api/teams/pin', { method: 'POST', body: { current: $('#teamPinCurrent').value, pin: $('#teamPinNew').value } });
+      $('#teamPinCurrent').value = '';
+      $('#teamPinNew').value = '';
+      toast('PIN changed — sign in again with the new one.');
+      signedOut();
+    } catch (err) { oops(err); } finally { btn.disabled = false; }
+  });
+
+  $('#teamSignOutAllBtn').addEventListener('click', async () => {
+    if (!confirm('Sign every device out of this team? Everyone will need the PIN again.')) return;
+    try {
+      await api('/api/teams/sign-out-all', { method: 'POST' });
+      signedOut();
+    } catch (err) { oops(err); }
+  });
+
+  $('#addTeamBtn').addEventListener('click', async () => {
+    const btn = $('#addTeamBtn');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/teams/create', {
+        method: 'POST',
+        body: { name: $('#addTeamName').value, pin: $('#addTeamPin').value, adminPassword: $('#addTeamAdmin').value },
+      });
+      ['#addTeamName', '#addTeamPin', '#addTeamAdmin'].forEach((sel) => { $(sel).value = ''; });
+      await loadTeams().catch(() => {});
+      renderTeamSettings();
+      toast(`${r.team.name} is ready, and empty. They sign in with the PIN you just set.`);
+    } catch (err) { oops(err); } finally { btn.disabled = false; }
+  });
+
+  $('#deleteTeamBtn').addEventListener('click', async () => {
+    const id = $('#deleteTeamSelect').value;
+    const target = knownTeams.find((t) => t.id === id);
+    if (!target) return;
+    if (!confirm(`Delete ${target.name}? Their candidates, templates, connections and history are erased for good.`)) return;
+    const btn = $('#deleteTeamBtn');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/teams/delete', {
+        method: 'POST',
+        body: { id, confirm: $('#deleteTeamConfirm').value, adminPassword: $('#deleteTeamAdmin').value },
+      });
+      ['#deleteTeamConfirm', '#deleteTeamAdmin'].forEach((sel) => { $(sel).value = ''; });
+      if (r.signedOut) { signedOut(); return; }
+      await loadTeams().catch(() => {});
+      renderTeamSettings();
+      toast(`${target.name} deleted.`);
+    } catch (err) { oops(err); } finally { btn.disabled = false; }
+  });
+
   function renderSettings() {
+    renderTeamSettings();
+    if (!teamsRefreshedAt || Date.now() - teamsRefreshedAt > 30000) {
+      teamsRefreshedAt = Date.now();
+      loadTeams().then(renderTeamSettings).catch(() => {});
+    }
     const s = state.settings;
     // Never overwrite what the user is typing: skip the form while it has unsaved edits.
     const setIf = (sel, val) => { const el = $(sel); if (!settingsDirty && document.activeElement !== el) el.value = val || ''; };
@@ -3772,8 +4097,12 @@
     renderApollo();
     renderTexting();
     mountTheme();
+    mountTeam();
     mountBell();
     mountConnection();
+    // The controls are created hidden and filled in here, because mounting
+    // happens after the team is known, not before.
+    renderTeamChip();
     renderBell();
     renderConnection();
     renderNavCounts();
@@ -3853,7 +4182,7 @@
   let scopeHintShown = false;
   let replyTextLimited = false;
   async function checkReplies() {
-    if (!state || !state.google.connected || document.hidden) return;
+    if (!signedIn || !state || !state.google.connected || document.hidden) return;
     try {
       const r = await api('/api/replies/check', { method: 'POST' });
       replyTextLimited = Boolean(r.scopeError);
@@ -3866,7 +4195,11 @@
     const boot = async () => {
       const a = await api('/api/auth/status');
       if (a.setupRequired) { $('#setupScreen').hidden = false; return; }
-      if (a.required && !a.authed) { showLogin(); return; }
+      knownTeams = a.teams || [];
+      authRequired = Boolean(a.required);
+      if (a.required && !a.authed) { renderTeamPicker(); showLogin(); return; }
+      setTeam(a.team);
+      signedIn = true;
       await refresh();
       start();
     };

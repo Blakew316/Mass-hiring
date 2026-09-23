@@ -11,6 +11,8 @@ const express = require('express');
 const store = require('./lib/store');
 const storage = require('./lib/storage');
 const auth = require('./lib/auth');
+const teams = require('./lib/teams');
+const tenant = require('./lib/tenant');
 const csv = require('./lib/csv');
 const google = require('./lib/google');
 const mailer = require('./lib/mailer');
@@ -41,38 +43,176 @@ const asyncRoute = (fn) => (req, res) => fn(req, res).catch((err) => {
   res.status(400).json({ error: err.message || String(err) });
 });
 
-// ---------- Sign-in (only enforced when APP_PASSWORD is set) ----------
+// ---------- Teams and sign-in ----------
+// Sign-in is choosing a team and entering its PIN. APP_PASSWORD is the admin
+// password: it is what lets you make a team or delete one, and — for Team
+// Maverick, which predates teams and has no PIN of its own — it is still the
+// way in. See lib/auth.js.
+// What a signed-in dashboard may know about its own team.
+const teamPublic = (t) => (t ? { id: t.id, name: t.name, usesAppPassword: teams.usesAppPassword(t) } : null);
+// What anyone at all may know: a name to pick from the sign-in screen, and
+// nothing else. Names are not secrets; which team signs in with the admin
+// password — the one secret that also creates and deletes teams — is.
+const teamName = (t) => (t ? { id: t.id, name: t.name } : null);
+
 app.get('/api/auth/status', asyncRoute(async (req, res) => {
+  // Nothing is created or read until a password exists: on a public deploy
+  // without one the only correct answer is "finish setting this up".
+  if (auth.setupRequired()) {
+    return res.json({ required: false, setupRequired: true, authed: false, team: null, teams: [] });
+  }
+  const team = await auth.sessionTeam(req).catch(() => null);
   res.json({
     required: auth.required(),
-    setupRequired: auth.setupRequired(),
-    authed: await auth.isAuthed(req),
+    setupRequired: false,
+    authed: Boolean(team),
+    team: teamName(team),
+    teams: await teams.publicList(),
   });
+}));
+
+// The sign-in screen needs the names to choose between. Names are not secrets
+// — the PIN is — and a list you cannot see is a list you cannot sign in from.
+app.get('/api/teams', asyncRoute(async (_req, res) => {
+  if (auth.setupRequired()) return res.json({ teams: [] });
+  res.json({ teams: await teams.publicList() });
 }));
 
 app.post('/api/login', asyncRoute(async (req, res) => {
   if (auth.setupRequired()) {
     return res.status(403).json({ error: 'Set APP_PASSWORD in Netlify first.', setupRequired: true });
   }
-  if (!auth.required()) return res.json({ ok: true });
-  const locked = auth.loginLockedFor(req);
+  const list = await teams.all();
+  if (!auth.required()) {
+    // No password means no way to tell two teams apart, so there is nothing
+    // here to sign in to unless there is exactly one of them.
+    if (list.length !== 1) {
+      return res.status(403).json({ error: 'Set APP_PASSWORD before signing in — with more than one team and no password there is no way to tell who you are.', setupRequired: true });
+    }
+    return res.json({ ok: true, team: teamPublic(list[0]) });
+  }
+  let teamId = String(req.body.team || '').trim();
+  // An app shell installed before teams existed posts a bare password and no
+  // team. While there is only one team that is not ambiguous, so let it in
+  // rather than make someone reinstall the app to sign in.
+  if (!teamId && list.length === 1) teamId = list[0].id;
+  const pin = req.body.pin != null ? req.body.pin : req.body.password;
+  const locked = auth.loginLockedFor(req, teamId);
   if (locked) {
     return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(locked / 60)} min.` });
   }
-  if (!auth.checkPassword(req.body.password)) {
-    auth.recordLoginFailure(req);
-    await auth.failDelay();
-    return res.status(401).json({ error: 'Incorrect password.' });
+  const team = list.find((t) => t.id === teamId) || null;
+  if (!team || !teams.verifyPin(team, pin)) {
+    auth.recordLoginFailure(req, teamId);
+    await auth.failDelay(req, teamId);
+    return res.status(401).json({ error: team ? 'That PIN is not right.' : 'Choose your team.' });
   }
-  auth.clearLoginFailures(req);
-  await auth.setSessionCookie(req, res);
+  auth.clearLoginFailures(req, teamId);
+  auth.setSessionCookie(req, res, team);
+  res.json({ ok: true, team: teamPublic(team) });
+}));
+
+// Signs this browser out. Other devices on the same team keep working — on a
+// shared PIN, one person leaving must not throw the whole team out. To do
+// that on purpose there is "Sign out everywhere" below.
+app.post('/api/logout', asyncRoute(async (req, res) => {
+  auth.clearSessionCookie(req, res);
   res.json({ ok: true });
 }));
 
-// Signs out every device (the session salt rotates).
-app.post('/api/logout', asyncRoute(async (req, res) => {
-  await auth.revokeAllSessions(req, res);
+app.post('/api/teams/sign-out-all', asyncRoute(async (req, res) => {
+  await auth.revokeTeamSessions(req, res, req.team.id);
   res.json({ ok: true });
+}));
+
+// ---------- making and unmaking teams ----------
+// Creating a team is reachable without being signed in — you have to be able
+// to make the first one from the sign-in screen — so it is the admin password
+// that guards it, throttled like any other secret typed into a public page.
+async function requireAdmin(req, res, given) {
+  if (auth.setupRequired()) {
+    res.status(403).json({ error: 'Set APP_PASSWORD in Netlify first.', setupRequired: true });
+    return false;
+  }
+  if (!auth.required()) {
+    res.status(403).json({ error: 'Set an APP_PASSWORD before making teams — without one there is nothing to stop anyone making them.' });
+    return false;
+  }
+  const locked = auth.loginLockedFor(req, auth.ADMIN_BUCKET);
+  if (locked) {
+    res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(locked / 60)} min.` });
+    return false;
+  }
+  if (!auth.checkAdminPassword(given)) {
+    auth.recordLoginFailure(req, auth.ADMIN_BUCKET);
+    await auth.failDelay(req, auth.ADMIN_BUCKET);
+    res.status(401).json({ error: 'That admin password is not right.' });
+    return false;
+  }
+  auth.clearLoginFailures(req, auth.ADMIN_BUCKET);
+  return true;
+}
+
+app.post('/api/teams/create', asyncRoute(async (req, res) => {
+  if (!await requireAdmin(req, res, req.body.adminPassword)) return;
+  const signedInAs = await auth.sessionTeam(req).catch(() => null);
+  const team = await teams.create(
+    { name: req.body.name, pin: req.body.pin },
+    () => store.seedTeam(),
+  );
+  // Made from the sign-in screen, this is how you get in. Made from Settings
+  // while already in a team, it must not tip you out of the one you are using.
+  if (!signedInAs) auth.setSessionCookie(req, res, team);
+  res.json({ ok: true, team: teamPublic(team), signedIn: !signedInAs });
+}));
+
+app.post('/api/teams/rename', asyncRoute(async (req, res) => {
+  const name = teams.cleanName(req.body.name);
+  if (!name) throw new Error('Give the team a name.');
+  const team = await teams.edit(req.team.id, (t, reg) => {
+    if (reg.teams.some((o) => o.id !== t.id && o.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`There is already a team called “${name}”.`);
+    }
+    if (t.name === name) return false;
+    t.name = name;
+  });
+  res.json({ ok: true, team: teamPublic(team) });
+}));
+
+// Changing the PIN needs the current one — or the admin password, which is
+// the way back in for a team that has forgotten theirs.
+app.post('/api/teams/pin', asyncRoute(async (req, res) => {
+  const next = teams.checkPinLength(req.body.pin);
+  const current = req.body.current;
+  const ok = teams.verifyPin(req.team, current) || auth.checkAdminPassword(current);
+  if (!ok) {
+    auth.recordLoginFailure(req, req.team.id);
+    await auth.failDelay(req, req.team.id);
+    return res.status(401).json({ error: 'That is not the current PIN (the admin password works too).' });
+  }
+  auth.clearLoginFailures(req, req.team.id);
+  const team = await teams.edit(req.team.id, (t) => { t.pin = teams.pinRecord(next); });
+  // The PIN changed, so every cookie signed under the old arrangement goes
+  // with it — including, deliberately, the one in this browser.
+  await auth.revokeTeamSessions(req, res, team.id);
+  res.json({ ok: true, team: teamPublic(team) });
+}));
+
+// Deleting a team erases everything it owns and cannot be undone, so it wants
+// the admin password AND the team's name typed out.
+app.post('/api/teams/delete', asyncRoute(async (req, res) => {
+  if (!await requireAdmin(req, res, req.body.adminPassword)) return;
+  const id = String(req.body.id || req.team.id);
+  const target = await teams.byId(id);
+  if (!target) throw new Error('That team no longer exists.');
+  if (teams.cleanName(req.body.confirm).toLowerCase() !== target.name.toLowerCase()) {
+    throw new Error(`Type the team's name (${target.name}) to confirm.`);
+  }
+  const remaining = (await teams.all()).length;
+  if (remaining <= 1) throw new Error('This is the only team — there would be nothing left to sign in to.');
+  await teams.remove(id);
+  if (id === req.team.id) auth.clearSessionCookie(req, res);
+  res.json({ ok: true, signedOut: id === req.team.id });
 }));
 
 function maskedSettings(s, fromAddress) {
@@ -233,6 +373,9 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     events: feedWindow(db.events),
     lastError: lastError ? lastError.message : '',
     template: db.template,
+    // Whether this team has written its own outreach letter yet, for the
+    // setup checklist. A team old enough to predate the flag counts as done.
+    templateEdited: !db.settings.templateSeeded,
     followUp: { template: db.followUp, dueIds: followUpDueIds(db), ...followUpSettings(db.settings) },
     settings: maskedSettings(db.settings, sendingNow.from),
     google: googleStatus,
@@ -241,6 +384,7 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     baseUrl: google.baseUrl(),
     storage: storageBackend,
     auth: { required: auth.required() },
+    team: teamPublic(req.team),
     queue: queue.status(emailQ, db.settings, sendingNow.from),
     maxImmediate: MAX_PER_REQUEST,
     interviews: db.interviews || [],
@@ -253,7 +397,7 @@ app.get('/api/state', asyncRoute(async (req, res) => {
       // so the candidate list stays the same shape it has always been.
       priority: textPriority(db, textQ),
       queue: textQueue.status(textQ, db.settings, relay),
-      tokenSet: Boolean(db.settings.relayToken || (process.env.RELAY_TOKEN || '').trim()),
+      tokenSet: Boolean(db.settings.relayToken || (tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim())),
     },
     calendly: {
       syncEnabled: Boolean(db.settings.calendlyToken),
@@ -276,7 +420,11 @@ app.get('/api/state', asyncRoute(async (req, res) => {
   // then it has stopped moving; what the page actually reacts to is the
   // `online` flag beside it, which is in the hash and flips when it should.
   const stable = JSON.stringify(payload, (k, v) => (k === 'lastSeenAt' ? null : v));
-  const etag = `W/"${crypto.createHash('sha1').update(stable).digest('base64url')}"`;
+  // The team goes into the hash explicitly. The payload names it too, so two
+  // teams could not collide by accident — but a tag that answers 304 for the
+  // wrong team would show one team the other's dashboard, and that is not a
+  // thing to leave resting on a field happening to be in the body.
+  const etag = `W/"${crypto.createHash('sha1').update(`${tenant.current() || '-'}:${stable}`).digest('base64url')}"`;
   res.set('ETag', etag);
   // Revalidate every time — never serve this from cache without asking.
   res.set('Cache-Control', 'no-cache, private');
@@ -351,6 +499,8 @@ app.post('/api/template', asyncRoute(async (req, res) => {
     subject: String(req.body.subject ?? db.template.subject),
     body: String(req.body.body ?? db.template.body),
   };
+  // Somebody has now written this team's letter, whatever it says.
+  db.settings.templateSeeded = false;
   await store.save(db);
   res.json({ ok: true, template: db.template });
 }));
@@ -790,7 +940,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
   }
   if (!db.settings.trackingSecret) {
-    await store.update((d) => { if (!d.settings.trackingSecret) d.settings.trackingSecret = crypto.randomBytes(16).toString('hex'); });
+    await store.update((d) => { if (!d.settings.trackingSecret) d.settings.trackingSecret = tracking.newSecret(); });
     db.settings.trackingSecret = (await store.load()).settings.trackingSecret;
   }
   const signature = await google.getSignature(db.settings, { refresh: true });
@@ -808,7 +958,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     if (paceLeft <= 0) { deferAll('rate', new Date(Date.now() + 20 * 1000), `Pacing to ${perMinute} emails per minute.`); break; }
     const attemptAt = new Date().toISOString();
     try {
-      const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
+      const trackingUrl = `${google.baseUrl()}${tracking.pixelPath(db.settings, c.id)}`;
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
       const thread = followUp && c.messageId ? { threadId: c.gmailThreadId || undefined, inReplyTo: c.messageId, references: c.messageId } : {};
       const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg, ...thread, attachments: followUp ? [] : files }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
@@ -1363,16 +1513,20 @@ app.get('/api/texts/relay-token', asyncRoute(async (_req, res) => {
   const db = await store.load();
   res.json({
     token: db.settings.relayToken || '',
-    envOverride: Boolean((process.env.RELAY_TOKEN || '').trim()),
+    envOverride: Boolean(tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim()),
     baseUrl: google.baseUrl(),
   });
 }));
 
-app.post('/api/texts/relay-token', asyncRoute(async (_req, res) => {
+app.post('/api/texts/relay-token', asyncRoute(async (req, res) => {
   const token = crypto.randomBytes(32).toString('base64url');
   await store.update((db) => { db.settings.relayToken = token; });
+  // The registry keeps a fingerprint of it, so a relay presenting the token
+  // can be traced to its team in one read instead of by opening every team's
+  // settings in turn.
+  await teams.setRelayToken(tenant.currentOrThrow('a relay token'), token);
   auth.forgetRelaySecret();
-  res.json({ ok: true, token, baseUrl: google.baseUrl(), envOverride: Boolean((process.env.RELAY_TOKEN || '').trim()) });
+  res.json({ ok: true, token, baseUrl: google.baseUrl(), envOverride: Boolean(tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim()) });
 }));
 
 // This runs in the recipient's mail client, once per open, so it is the most
@@ -1380,11 +1534,16 @@ app.post('/api/texts/relay-token', asyncRoute(async (_req, res) => {
 // three times and write it twice — once to look the token up, again to set the
 // timestamp, and a third time to add the feed line. The timestamp and the feed
 // line are now one write, and a repeat open still costs a single read.
-app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
+// Mark the open, if that token really is one of this team's. Returns nothing:
+// the pixel is served either way, because whether we recognised it is not the
+// mail client's business.
+async function recordOpen(token) {
   const db = await store.load();
-  const id = tracking.verify(db.settings, req.params.token);
-  const c = id && db.candidates.find((x) => x.id === id);
-  if (c && !c.openedAt) {
+  const id = tracking.verify(db.settings, token);
+  if (!id) return false;
+  const c = db.candidates.find((x) => x.id === id);
+  if (!c) return false;
+  if (!c.openedAt) {
     await store.update((fresh) => {
       const fc = fresh.candidates.find((x) => x.id === id);
       // Re-checked against the fresh copy: two opens can land together.
@@ -1393,6 +1552,10 @@ app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
       store.pushEvent(fresh, 'opened', `${fc.name || fc.email} opened your email.`, fc.id);
     });
   }
+  return true;
+}
+
+function servePixel(res) {
   res.set({
     'Content-Type': 'image/gif',
     'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
@@ -1400,6 +1563,45 @@ app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
     Expires: '0',
   });
   res.end(tracking.GIF);
+}
+
+app.get('/webhooks/open/:team/:token', asyncRoute(async (req, res) => {
+  const team = await teams.byId(req.params.team);
+  if (team) await tenant.run(team.id, () => recordOpen(req.params.token)).catch(() => {});
+  servePixel(res);
+}));
+
+// Every email sent before teams existed carries a pixel at this older path,
+// and those emails are out in the world for good. The token is signed, so the
+// team that can verify it is the team it belongs to: try each in turn and stop
+// at the first that recognises it.
+//
+// That search is the whole cost of this route, and it is a public path that
+// crawlers find, so it is guarded twice: anything that is not shaped like one
+// of our tokens is answered without touching storage at all, and a token that
+// has been placed once is remembered, so the second open of the same email is
+// one read rather than one per team.
+const pixelOwner = new Map();          // token -> team id
+const PIXEL_OWNER_MAX = 500;
+
+function rememberPixelOwner(token, teamId) {
+  if (pixelOwner.size >= PIXEL_OWNER_MAX) pixelOwner.delete(pixelOwner.keys().next().value);
+  pixelOwner.set(token, teamId);
+}
+
+app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
+  const token = req.params.token;
+  if (!tracking.looksLikeToken(token)) return servePixel(res);
+  const known = pixelOwner.get(token);
+  if (known) {
+    await tenant.run(known, () => recordOpen(token)).catch(() => {});
+    return servePixel(res);
+  }
+  for (const t of await teams.all().catch(() => [])) {
+    const hit = await tenant.run(t.id, () => recordOpen(token)).catch(() => false);
+    if (hit) { rememberPixelOwner(token, t.id); break; }
+  }
+  servePixel(res);
 }));
 
 // ---------- Reply detection (Gmail thread headers, a few at a time) ----------
@@ -1511,7 +1713,7 @@ app.get('/api/google/auth-url', asyncRoute(async (req, res) => {
   const db = await store.load();
   const st = await google.status(db.settings);
   if (!st.configured) throw new Error('Enter your Google OAuth Client ID and Secret first, then save.');
-  const state = auth.issueOauthState(req, res);
+  const state = auth.issueOauthState(req, res, req.team.id);
   res.json({ url: google.authUrl(db.settings, state) });
 }));
 
@@ -1519,7 +1721,7 @@ app.get('/auth/google', asyncRoute(async (req, res) => {
   const db = await store.load();
   const st = await google.status(db.settings);
   if (!st.configured) return res.redirect('/#settings?error=google-not-configured');
-  const state = auth.issueOauthState(req, res);
+  const state = auth.issueOauthState(req, res, req.team.id);
   res.redirect(google.authUrl(db.settings, state));
 }));
 
@@ -1527,9 +1729,11 @@ app.get('/auth/google/callback', asyncRoute(async (req, res) => {
   const db = await store.load();
   if (req.query.error) return res.redirect('/#settings?error=' + encodeURIComponent(req.query.error));
   // The state round-trip stops a forged callback from binding someone else's
-  // Google account to this dashboard.
-  if (!auth.consumeOauthState(req, res, req.query.state)) {
-    return res.redirect('/#settings?error=' + encodeURIComponent('Sign-in session expired or did not match — please click Connect Google again.'));
+  // Google account to this dashboard — and, because it carries the team that
+  // started it, stops a team switch made while the consent screen was open
+  // from filing one team's Gmail connection under another's.
+  if (!auth.consumeOauthState(req, res, req.query.state, req.team.id)) {
+    return res.redirect('/#settings?error=' + encodeURIComponent('That Google sign-in did not match this team — please click Connect Google again.'));
   }
   // A wrong client secret etc. must land the user back in Settings with the
   // message, not on a bare JSON page.
@@ -1562,14 +1766,20 @@ app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   if (!publicUrl || publicUrl.includes('localhost')) {
     throw new Error('Calendly needs a public URL to reach this app. Deploy it (or tunnel with ngrok) and enter that URL.');
   }
-  const result = await calendly.registerWebhook(token, publicUrl);
+  // The team's own callback path first, then the path everything used before
+  // teams existed — so re-registering also clears away the old subscription
+  // this deploy used to answer on, instead of leaving it firing forever.
+  const result = await calendly.registerWebhook(token, publicUrl, [
+    `/webhooks/calendly/${tenant.currentOrThrow('a Calendly registration')}`,
+    '/webhooks/calendly',
+  ]);
   if (result.signingKey) store.addCalendlyKey(db.settings, result.signingKey);
   db.settings.calendlyToken = token;
   if (!db.settings.calendlyUrl && result.schedulingUrl) db.settings.calendlyUrl = result.schedulingUrl;
   await store.save(db);
   // Re-registering IS the fix the warning asked for, so retire it here rather
   // than leaving it on screen for a day after the problem is gone.
-  lastSignatureWarning = 0;
+  lastSignatureWarning.delete(tenant.currentOrThrow('a Calendly registration'));
   const cleared = await store.clearEvents(isCalendlySignatureWarning).catch(() => 0);
   res.json({ ok: true, ...result, signingKey: undefined, clearedWarnings: cleared });
 }));
@@ -1583,7 +1793,9 @@ function formatWhen(iso, timeZone) {
   catch { return new Date(iso).toLocaleString('en-US', { ...opts, timeZone: 'UTC' }); }
 }
 
-let lastSignatureWarning = 0;
+// Per team: when we last complained about a bad Calendly signature. One team's
+// broken registration must not silence the warning for another's.
+const lastSignatureWarning = new Map();
 
 // Who booked? Email first — including addresses learned from earlier
 // bookings — then a unique full-name match, because people often book with
@@ -1634,33 +1846,20 @@ app.post('/api/interviews/link', asyncRoute(async (req, res) => {
   res.json({ ok: true, candidate: linked });
 }));
 
-app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  // Every key this app has ever issued, newest first, plus the environment
-  // override. A subscription that outlived a cleanup still verifies.
-  const keys = [
+// Every key this team has ever issued, newest first, plus the environment
+// override. A subscription that outlived a cleanup still verifies.
+function calendlyKeys(db) {
+  return [
     ...(db.settings.calendlySigningKeys || []),
     db.settings.calendlySigningKey,
-    process.env.CALENDLY_SIGNING_KEY,
+    // Set process-wide, so it belongs to the team that predates teams —
+    // otherwise any team could verify, and claim, another team's bookings.
+    tenant.isLegacy() ? process.env.CALENDLY_SIGNING_KEY : '',
   ].filter(Boolean);
-  const header = req.get('Calendly-Webhook-Signature');
-  if (!keys.length) {
-    return res.status(401).json({ error: 'Calendly webhook is not registered (no signing key). Use "Enable booking alerts" in Settings.' });
-  }
-  if (!calendly.verifySignature(keys, header, req.rawBody)) {
-    // This path is public and unauthenticated, so crawlers find it. Only a
-    // call that actually carries a Calendly signature can be a key problem;
-    // anything else is noise and must not be reported as a broken booking
-    // setup, which is what made this warning keep coming back.
-    if (calendly.parseSignature(header) && Date.now() - lastSignatureWarning > 10 * 60 * 1000) {
-      lastSignatureWarning = Date.now();
-      await store.addEvent('error', CALENDLY_SIGNATURE_WARNING);
-    }
-    return res.status(401).json({ error: 'Invalid Calendly signature' });
-  }
-  // A call that verifies proves the key is right, so the old warning goes.
-  lastSignatureWarning = 0;
-  await store.clearEvents(isCalendlySignatureWarning).catch(() => {});
+}
+
+// A booking, for the team already in context, already proven to be theirs.
+async function applyCalendlyEvent(req, db) {
   const event = req.body.event;
   const p = req.body.payload || {};
   const inviteeEmail = String(p.email || '').toLowerCase();
@@ -1725,7 +1924,72 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
       });
     } catch {}
   }
-  res.json({ ok: true });
+}
+
+// Handle a call we have decided belongs to `team`: verify it against that
+// team's keys and apply it. Nothing is applied on a signature we cannot check.
+function calendlyWebhook(req, res, team) {
+  return tenant.run(team.id, async () => {
+    const db = await store.load();
+    const keys = calendlyKeys(db);
+    const header = req.get('Calendly-Webhook-Signature');
+    if (!keys.length) {
+      return res.status(401).json({ error: 'Calendly webhook is not registered (no signing key). Use "Enable booking alerts" in Settings.' });
+    }
+    if (!calendly.verifySignature(keys, header, req.rawBody)) {
+      // This path is public and unauthenticated, so crawlers find it. Only a
+      // call that actually carries a Calendly signature can be a key problem;
+      // anything else is noise and must not be reported as a broken booking
+      // setup, which is what made this warning keep coming back.
+      const last = lastSignatureWarning.get(team.id) || 0;
+      if (calendly.parseSignature(header) && Date.now() - last > 10 * 60 * 1000) {
+        lastSignatureWarning.set(team.id, Date.now());
+        await store.addEvent('error', CALENDLY_SIGNATURE_WARNING);
+      }
+      return res.status(401).json({ error: 'Invalid Calendly signature' });
+    }
+    // A call that verifies proves the key is right, so the old warning goes.
+    lastSignatureWarning.delete(team.id);
+    await store.clearEvents(isCalendlySignatureWarning).catch(() => {});
+    await applyCalendlyEvent(req, db);
+    res.json({ ok: true });
+  });
+}
+
+// What Calendly is told to call from now on: the team is in the path, because
+// a webhook arrives with no session and nothing else to say whose booking it is.
+app.post('/webhooks/calendly/:team', asyncRoute(async (req, res) => {
+  const team = await teams.byId(req.params.team);
+  if (!team) return res.status(404).json({ error: 'Unknown team.' });
+  await calendlyWebhook(req, res, team);
+}));
+
+// Subscriptions registered before teams existed still call this path. The
+// signature is the proof of ownership: whichever team can verify the call is
+// the team that registered it. Re-registering from Settings moves them onto
+// the path above.
+app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
+  const header = req.get('Calendly-Webhook-Signature');
+  // Not even shaped like a signed call: this is a crawler, and it gets nothing
+  // and costs nothing.
+  if (!calendly.parseSignature(header)) return res.status(401).json({ error: 'Invalid Calendly signature' });
+  for (const t of await teams.all()) {
+    const mine = await tenant.run(t.id, async () => {
+      const db = await store.load();
+      const keys = calendlyKeys(db);
+      return keys.length > 0 && calendly.verifySignature(keys, header, req.rawBody);
+    }).catch(() => false);
+    if (mine) return calendlyWebhook(req, res, t);
+  }
+  // Nobody's key verifies it. This path belongs to the team that predates
+  // teams — every other team registers under its own id — so that is the team
+  // whose registration might genuinely be broken, and the one worth telling.
+  // It is deliberately not "whoever happens to be first in the list": a "your
+  // Calendly key is wrong" warning shown to a team that never registered here
+  // is worse than silence, because the fix it asks for does nothing.
+  const owner = await teams.byId(teams.LEGACY_ID);
+  if (!owner) return res.status(401).json({ error: 'Invalid Calendly signature' });
+  await calendlyWebhook(req, res, owner);
 }));
 
 // ---------- Calendly sync: pull scheduled interviews, match to candidates ----------

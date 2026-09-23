@@ -262,6 +262,9 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     box-shadow: 0 1px 0 var(--line);
   }
   .main.scrolled .page-head h1 { font-size: 19px; }
+  /* A safety net, not a plan: a title that will not fit ends in an ellipsis
+     rather than being sliced through a letter. */
+  .page-head h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .head-actions { flex-wrap: wrap; row-gap: 8px; gap: 8px; }
   /* The header's buttons share the row under the title rather than three of
      them squeezing onto one 358px line. */
@@ -297,6 +300,30 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     min-width: 44px;
     min-height: 44px;
   }
+  /* The quiet link between the two halves of the sign-in screen. It is the
+     only way to a new team from a phone, so it is a proper target even though
+     it is deliberately understated. */
+  .login-alt {
+    min-height: 44px;
+    padding: 12px 16px;
+    font-size: 14px;
+  }
+  .team-option { min-height: 44px; padding: 11px 16px; font-size: 14px; }
+  /* The phone's answer to "whose list am I about to email": a caption under
+     the page title, and the way to switch. Small paint, full-size target —
+     the same trick the filter chips use. */
+  .head-team { display: inline-flex; }
+  /* The sidebar's copy of the same thing follows .sidebar-foot into Settings
+     on a phone, where the header caption and the Team card have already said
+     it twice. Once is enough. */
+  .team-chip { display: none; }
+  .head-team::before {
+    content: ''; position: absolute; left: 0; right: 0;
+    top: 50%; transform: translateY(-50%); height: 44px;
+  }
+  /* Out of the way once you have started reading the page. */
+  .main.scrolled .head-team { display: none; }
+  .team-picker { max-height: 42vh; }
   .view-pill, .conv-tab, .chip, .feed-chip, .filter-tag, .token, .tab {
     min-height: 36px;
     display: inline-flex;
@@ -683,3 +710,11 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   pointer-events: none;
 }
 :root.is-offline .thread-compose .textarea { opacity: .5; }
+
+
+/* ---- the narrowest phones still in use (iPhone SE, 320pt) ----
+   "Candidates" at the large-title size does not fit beside the header's
+   controls at this width, and never did. One step down and it does. */
+@media (max-width: 360px) {
+  .page-head h1 { font-size: 26px; }
+}
