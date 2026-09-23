@@ -1997,6 +1997,18 @@
   // Follow-ups: who is due comes from the server (same rule the queue uses).
   const followUpDueIds = () => (state && state.followUp && state.followUp.dueIds) || [];
 
+  // How the sender reads on an email. sending.from is normally the address
+  // alone, but when Google is connected and its profile could not be read it
+  // is the words "connected Google account" instead -- wrapping that in angle
+  // brackets makes the preview look like a broken address.
+  const looksLikeAddress = (v) => /^[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+$/.test(String(v || '').trim());
+  function senderLine() {
+    const from = state.sending.from;
+    if (!from) return '';
+    const name = (state.settings.fromName || '').trim();
+    return name && looksLikeAddress(from) ? `${name} <${from}>` : from;
+  }
+
   function renderTemplatePreview() {
     if (!state) return;
     const sel = $('#previewCandidate');
@@ -2007,9 +2019,7 @@
     if ([...sel.options].some((o) => o.value === current)) sel.value = current;
     const cand = state.candidates.find((c) => c.id === sel.value) || SAMPLE;
     $('#pvSubject').textContent = fillSubject($('#tplSubject').value, cand);
-    $('#pvFrom').textContent = state.sending.from
-      ? (state.settings.fromName ? `${state.settings.fromName} <${state.sending.from}>` : state.sending.from)
-      : 'your work email (set up in Settings)';
+    $('#pvFrom').textContent = senderLine() || 'your work email (set up in Settings)';
     const bodyHtml = esc(fillClient($('#tplBody').value, cand)).split('\n').join('<br>');
     const cal = state.settings.calendlyUrl;
     $('#pvBody').innerHTML = bodyHtml + (cal
@@ -3235,7 +3245,7 @@
       $('#connLabel').textContent = name;
       // Break only at the "@" if the address is too long for one line.
       $('#connText').innerHTML = esc(state.sending.from).replace('@', '<wbr>@');
-      $('#connText').title = `Sending as ${name} <${state.sending.from}>`;
+      $('#connText').title = `Sending as ${senderLine()}`;
     } else {
       acct.className = 'account warn';
       $('#connLabel').textContent = state.google.expired ? 'Google expired' : 'Email not set up';
