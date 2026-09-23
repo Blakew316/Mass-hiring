@@ -111,7 +111,7 @@
   function renderNotices() {
     const n = [];
     if (updateReady) {
-      n.push(`<div class="notice ok"><span class="notice-ico">${icon('download', 16)}</span><div><strong>A new version is ready.</strong> It will be used the next time the app starts — or reload now. Finish anything part-way through first: a send in progress would be interrupted.</div><button class="btn btn-sm notice-action" id="reloadForUpdate">Reload</button></div>`);
+      n.push(`<div class="notice ok"><span class="notice-ico">${icon('download', 16)}</span><div><strong>A new version is ready.</strong> It will be picked up on its own the next time you come back to the app, once whatever is part-way through has finished — or reload now.</div><button class="btn btn-sm notice-action" id="reloadForUpdate">Reload</button></div>`);
     }
     if (state.storage && !state.storage.persistent) {
       n.push(`<div class="notice danger"><span class="notice-ico">${icon('alert', 16)}</span><div><strong>Your data is not being saved permanently.</strong> Netlify Blobs is unavailable${state.storage.error ? ` (${esc(state.storage.error)})` : ''}, so settings and candidates will be lost on the next deploy or restart. Check that Blobs is enabled for this site in Netlify, then redeploy.</div></div>`);
@@ -162,6 +162,7 @@
     try {
       await refresh();
       if (pollFails) { pollFails = 0; renderConnection(); }
+      takeUpdate('launch');
     } catch (err) {
       // Signed out is not offline — the login panel is already up, and
       // hammering the server would not help.
@@ -3482,7 +3483,40 @@
   // every request goes to the network and this is the app it was before.
   let updateReady = null;
   let askedForUpdate = false;
+  let updateTaken = false;
   let reloadingForUpdate = false;
+  const openedAt = Date.now();
+
+  // Is anything on screen that a reload would throw away? A send part-way
+  // through, a dialog, a half-written message, an edit not yet saved.
+  function somethingInFlight() {
+    if (!state) return true;                              // nothing known yet
+    if (state.queue && state.queue.active) return true;
+    if (state.texting && state.texting.queue && state.texting.queue.active) return true;
+    if ($('.modal-backdrop:not([hidden])')) return true;
+    if (templateDirty || followUpDirty || settingsDirty || textTemplateDirty) return true;
+    const el = document.activeElement;
+    if (el && /^(INPUT|TEXTAREA)$/.test(el.tagName) && el.value) return true;
+    return false;
+  }
+
+  // Take a waiting version without being asked, but only at the two moments
+  // when a reload costs nothing: while the app is still starting, and on the
+  // way back into it from somewhere else. Otherwise the notice waits — a page
+  // that reloads out from under somebody reading it is its own kind of rude,
+  // and one that reloads mid-send is worse than one that is a day old.
+  //
+  // This is here because it went wrong in exactly the way it was going to:
+  // a fix shipped, the worker installed it, and the app kept serving the old
+  // one because nobody knew there was a button to press.
+  function takeUpdate(moment) {
+    if (!updateReady || updateTaken) return;
+    if (moment === 'launch' && Date.now() - openedAt > 20000) return;
+    if (somethingInFlight()) return;
+    updateTaken = true;
+    askedForUpdate = true;
+    updateReady.postMessage('SKIP_WAITING');
+  }
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#reloadForUpdate')) return;
@@ -3490,6 +3524,7 @@
     // The page reloads from the controllerchange below, once the new worker
     // has actually taken over — not here, or it would reload into the old one.
     askedForUpdate = true;
+    updateTaken = true;
     updateReady.postMessage('SKIP_WAITING');
   });
 
@@ -3507,6 +3542,7 @@
             if (!worker || worker.state !== 'installed' || !navigator.serviceWorker.controller) return;
             updateReady = worker;
             if (state) renderNotices();
+            takeUpdate('launch');
           };
           offerIfWaiting(reg.waiting);
           reg.addEventListener('updatefound', () => {
@@ -3516,7 +3552,13 @@
           // Look for a new one on the way back to the app and once a day, so a
           // shell can never sit stale for a week against a moving API.
           const lookAgain = () => { reg.update().catch(() => {}); };
-          document.addEventListener('visibilitychange', () => { if (!document.hidden) lookAgain(); });
+          document.addEventListener('visibilitychange', () => {
+            if (document.hidden) return;
+            // Coming back to the app is the moment a reload is least in the
+            // way, and the moment a native app would have updated itself.
+            takeUpdate('return');
+            lookAgain();
+          });
           setInterval(lookAgain, 24 * 3600 * 1000);
         })
         .catch(() => { /* no service worker; the app does not need one */ });
