@@ -1,6 +1,6 @@
 [build]
   # Build the single-file function (see scripts/build-function.mjs), then deploy the static UI.
-  command = "npm install && npm run build:function"
+  command = "npm install && npm run build"
   publish = "public"
 
 [functions]
@@ -29,3 +29,33 @@
   for = "/"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+# The service worker script, explicitly rather than by relying on how the
+# /*.js rule above expands. A worker cached without revalidation is the one
+# mistake a later deploy cannot fix: the browser keeps re-registering the old
+# script. Service-Worker-Allowed lets it control the whole origin.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Service-Worker-Allowed = "/"
+
+# Some browsers refuse a manifest served as text/plain, and then the app is
+# quietly not installable with nothing in the console to say why.
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json; charset=utf-8"
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Icons and launch screens are content-addressed by name and never change
+# under the same name, so they can be held for a year.
+[[headers]]
+  for = "/icons/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/splash/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

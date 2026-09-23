@@ -53,6 +53,11 @@
     alert: '<path fill-rule="evenodd" d="M13.8 3.5a2.1 2.1 0 0 0-3.6 0L1.9 18.2A2.1 2.1 0 0 0 3.7 21.4h16.6a2.1 2.1 0 0 0 1.8-3.2zM10.9 8.6h2.2v5.7h-2.2zm0 7.4h2.2v2.2h-2.2z"/>',
     lock: '<path d="M12 2.2a4.9 4.9 0 0 0-4.9 4.9v2.5h2.6V7.1a2.3 2.3 0 0 1 4.6 0v2.5h2.6V7.1A4.9 4.9 0 0 0 12 2.2z"/><rect x="3.8" y="9.6" width="16.4" height="11.8" rx="3.6"/>',
 
+    // Three sliders, which is the one thing everyone reads as "filters". Each
+    // knob sits at a different point along its rail, so it cannot be mistaken
+    // for a list or a menu.
+    filter: '<path fill-rule="evenodd" d="M3 4.9h3.4a3 3 0 0 1 5.8 0H21a1.1 1.1 0 0 1 0 2.2h-8.8a3 3 0 0 1-5.8 0H3a1.1 1.1 0 0 1 0-2.2zm0 6h11a3 3 0 0 1 5.8 0H21a1.1 1.1 0 0 1 0 2.2h-1.2a3 3 0 0 1-5.8 0H3a1.1 1.1 0 0 1 0-2.2zm0 6h6.2a3 3 0 0 1 5.8 0H21a1.1 1.1 0 0 1 0 2.2h-6a3 3 0 0 1-5.8 0H3a1.1 1.1 0 0 1 0-2.2z"/>',
+
     // A crescent: one disc with a second, offset disc taken out of it. Two arcs,
     // no subtraction — the return arc is the bite.
     moon: '<path d="M21.3 13.6a9.4 9.4 0 1 1-10.9-10.9 8.2 8.2 0 0 0 10.9 10.9z"/>',

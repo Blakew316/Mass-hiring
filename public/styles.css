@@ -865,6 +865,9 @@ tr.row-muted { opacity: .55; }
 .search-wrap.wide .search { width: 100%; }
 
 /* The filters currently in force, each one removable. */
+/* Only a phone folds the filters away; on a desktop they are one row that
+   fits, and the button would be a step for nothing. */
+.filters-toggle { display: none; }
 .active-filters[hidden] { display: none !important; }
 .active-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -4px 0 14px; }
 .filter-tag {

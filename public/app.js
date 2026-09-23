@@ -110,6 +110,9 @@
   // Persistence / security warnings that must not be missable.
   function renderNotices() {
     const n = [];
+    if (updateReady) {
+      n.push(`<div class="notice ok"><span class="notice-ico">${icon('download', 16)}</span><div><strong>A new version is ready.</strong> It will be used the next time the app starts — or reload now. Finish anything part-way through first: a send in progress would be interrupted.</div><button class="btn btn-sm notice-action" id="reloadForUpdate">Reload</button></div>`);
+    }
     if (state.storage && !state.storage.persistent) {
       n.push(`<div class="notice danger"><span class="notice-ico">${icon('alert', 16)}</span><div><strong>Your data is not being saved permanently.</strong> Netlify Blobs is unavailable${state.storage.error ? ` (${esc(state.storage.error)})` : ''}, so settings and candidates will be lost on the next deploy or restart. Check that Blobs is enabled for this site in Netlify, then redeploy.</div></div>`);
     }
@@ -185,6 +188,10 @@
 
   function renderConnection() {
     const lost = pollFails >= 2;
+    // Not just the marker in the header: with no connection every control that
+    // sends something is going to fail, and a button that looks ready is a
+    // button somebody presses three times.
+    document.documentElement.classList.toggle('is-offline', lost);
     const when = lastSyncAt
       ? new Date(lastSyncAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       : '';
@@ -211,12 +218,18 @@
   const oops = (err) => toast(err.message || String(err), true);
 
   // ---------------- Navigation ----------------
+  // The one thing that scrolls. Declared here rather than beside the rest of
+  // the phone code because show() reads it, and show() is defined above that.
+  const mainEl = $('.main');
+
   // The page you are on lives in the address bar. Back used to leave the site
   // entirely, a reload always dumped you on the Dashboard however deep into
   // Texting you were, and there was no way to send somebody a link to a page.
   let currentView = 'dashboard';
+  const scrollMemory = Object.create(null);
   function show(view, { record = true } = {}) {
     if (!$(`#view-${view}`)) return;
+    if (currentView !== view) scrollMemory[currentView] = mainEl ? mainEl.scrollTop : 0;
     currentView = view;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
@@ -224,21 +237,53 @@
     // rather than on every poll for six pages at once.
     if (staleViews.has(view)) renderView(view);
     // The editors moved to Settings; Email and Texting are conversations only.
-    if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); }
+    if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); placeAccountControls(); }
     if (view === 'texting') renderTexting();
+    // Arriving at a page is arriving at its list, never at whatever thread was
+    // open the last time you were here.
+    if (record) syncThreadStack(false);
+    // Every page shares one scroller, so without this, leaving Candidates
+    // halfway down and tapping Settings opened Settings halfway down too.
+    // The frame's delay is needed: the new page has no height until the class
+    // swap above has been painted.
+    lastRouted = `${view}|`;
+    const back = scrollMemory[view] || 0;
+    requestAnimationFrame(() => {
+      mainEl.scrollTop = back;
+      mainEl.classList.toggle('scrolled', back > 14);
+    });
     if (record && location.hash !== `#${view}`) history.pushState({ view }, '', `#${view}`);
   }
   const viewInAddressBar = () => {
     const want = location.hash.replace('#', '').split('?')[0];
     return want && $(`#view-${want}`) ? want : 'dashboard';
   };
+  // Going back between two entries whose URLs differ only in the fragment
+  // fires popstate AND hashchange, and there is a handler on each. Without
+  // this the whole transition ran twice, which on a phone means the thread
+  // slides out and straight back in.
+  let lastRouted = '';
+  function route(view, thread) {
+    const key = `${view}|${thread ? 't' : ''}`;
+    if (key === lastRouted) return;
+    lastRouted = key;
+    show(view, { record: false });
+    // On a phone a thread is its own entry in the history, so going back out
+    // of one is the same gesture as going back out of a page.
+    syncThreadStack(thread);
+  }
   window.addEventListener('popstate', (e) => {
-    show((e.state && e.state.view) || viewInAddressBar(), { record: false });
+    route((e.state && e.state.view) || viewInAddressBar(), Boolean(e.state && e.state.thread));
   });
   // Typing a page into the address bar, or following a link to #texting from
   // outside, changes the hash without reloading and without a popstate.
-  window.addEventListener('hashchange', () => show(viewInAddressBar(), { record: false }));
-  $$('.nav-item').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
+  window.addEventListener('hashchange', () => route(viewInAddressBar(), false));
+  $$('.nav-item').forEach((b) => b.addEventListener('click', () => {
+    // Tapping the tab you are already on is how iOS pops back to the top of
+    // it — here, out of an open conversation.
+    if (b.dataset.view === currentView && threadIsOpen()) { backFromThread(); return; }
+    show(b.dataset.view);
+  }));
   document.addEventListener('click', (e) => {
     const go = e.target.closest('[data-goto]');
     if (go) show(go.dataset.goto);
@@ -967,6 +1012,8 @@
     if (textedFilter) bits.push([`Texting: ${$('#textedFilter').selectedOptions[0].textContent}`, () => { textedFilter = ''; }]);
     if (rankFilter) bits.push([`Ranking: ${$('#rankFilter').selectedOptions[0].textContent}`, () => { rankFilter = ''; }]);
     if (search) bits.push([`Search: “${search}”`, () => { search = ''; }]);
+    const label = $('#filtersLabel');
+    if (label) label.textContent = bits.length ? `Filters · ${bits.length}` : 'Filters';
     const el = $('#activeFilters');
     el.hidden = bits.length === 0;
     clearFilterActions = bits.map(([, fn]) => fn);
@@ -1032,25 +1079,28 @@
       const displayName = c.name || `${c.firstName} ${c.lastName}`.trim() || '—';
       const pri = ranking ? textPriorityOf(c.id) : null;
       const blockedWhy = ranking ? textBlockedOf(c.id) : '';
+      // data-col on every cell: on a phone the row is not a row, it is a card,
+      // and the stylesheet places the cells by name. Counting nth-child would
+      // break the moment the ranking column appears or disappears.
       return `<tr data-id="${c.id}"${ranking && !pri ? ' class="row-muted"' : ''}>
-        ${ranking ? `<td class="col-rank">${pri ? pri.rank : '<span class="muted">—</span>'}</td>` : ''}
-        <td class="col-check"><input type="checkbox" class="row-check" ${selected.has(c.id) ? 'checked' : ''}></td>
-        <td><div class="name-cell">
+        ${ranking ? `<td class="col-rank" data-col="rank">${pri ? pri.rank : '<span class="muted">—</span>'}</td>` : ''}
+        <td class="col-check" data-col="check"><input type="checkbox" class="row-check" ${selected.has(c.id) ? 'checked' : ''}></td>
+        <td data-col="name"><div class="name-cell">
           <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
           <div><div class="cand-name">${esc(displayName)}</div>
           ${pri ? `<div class="cand-sub why-text">${esc(pri.reason)}</div>`
             : blockedWhy ? `<div class="cand-sub muted">not texting: ${esc(blockedWhy)}</div>`
             : (c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
         </div></td>
-        <td>${esc(c.email)}</td>
-        <td>${textCell(c)}</td>
-        <td>${esc(c.role) || '<span class="muted">—</span>'}${c.pastRoles ? `<div class="cand-sub" title="${esc(c.pastRoles)}">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}</td>
-        <td>${esc(c.company) || '<span class="muted">—</span>'}</td>
-        <td><select class="status-select ${st.cls}" title="Change status">
+        <td data-col="email">${esc(c.email)}</td>
+        <td data-col="text">${textCell(c)}</td>
+        <td data-col="role">${esc(c.role) || '<span class="muted">—</span>'}${c.pastRoles ? `<div class="cand-sub" title="${esc(c.pastRoles)}">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}</td>
+        <td data-col="company">${esc(c.company) || '<span class="muted">—</span>'}</td>
+        <td data-col="status"><select class="status-select ${st.cls}" title="Change status">
           ${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${v.label}</option>`).join('')}
         </select></td>
-        <td>${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
-        <td><div class="row-actions">
+        <td data-col="last">${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
+        <td data-col="act"><div class="row-actions">
           <button class="icon-btn act-edit" title="Edit details (name, phone, role…)">${icon('doc', 16)}</button>
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
           ${textPhoneOf(c) ? `<button class="icon-btn act-text" title="Send a text">${icon('bubble', 16)}</button>` : ''}
@@ -1141,6 +1191,14 @@
   // 3,514 rows filtered and rebuilt on every keystroke was ~86 ms a character.
   const searchRender = debounce(renderCandidates, 120);
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; searchRender(); });
+  // Folding the filters away on a phone. The button says how many are in
+  // force, so a list that is filtered never looks like a list that is short.
+  $('#filtersToggle').addEventListener('click', () => {
+    const card = $('#filtersToggle').closest('.list-card');
+    const open = card.classList.toggle('filters-open');
+    $('#filtersToggle').setAttribute('aria-expanded', String(open));
+  });
+
   $('#emptyClear').addEventListener('click', () => {
     filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; search = '';
     syncFilterControls(); renderCandidates();
@@ -2528,6 +2586,10 @@
   async function openThread(id, { markSeen = true, quiet = false } = {}) {
     openThreadId = id;
     threadLoading = true;
+    // On a phone the thread is a screen pushed over the list. `quiet` is the
+    // background refresh of a thread already on screen, which must not push a
+    // second time.
+    if (!quiet) pushThread('texting');
     renderConvList();
     $('#threadEmpty').hidden = true;
     $('#threadLive').hidden = false;
@@ -2675,6 +2737,7 @@
   async function openMail(id, { markSeen = true, quiet = false } = {}) {
     openMailId = id;
     mailLoading = true;
+    if (!quiet) pushThread('template');
     renderMailList();
     $('#mailEmpty').hidden = true;
     $('#mailLive').hidden = false;
@@ -2936,9 +2999,14 @@
       return true;
     }, renderConvList);
     $('#threadCompose').addEventListener('submit', (e) => { e.preventDefault(); sendReply(); });
-    // Enter sends, shift-enter makes a new line — the way every messenger works.
+    // Enter sends and shift-enter makes a new line, the way every messenger
+    // works — on a keyboard. A soft keyboard has no shift to hold, so there
+    // the return key makes the line break and the send button sends.
     $('#threadInput').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(); }
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      if (window.matchMedia('(pointer: coarse)').matches) return;
+      e.preventDefault();
+      sendReply();
     });
     $('#threadInput').addEventListener('input', (e) => {
       e.target.style.height = 'auto';
@@ -3090,7 +3158,15 @@
     const hidden = input.value.startsWith('•');
     input.value = hidden ? relayTokenRevealed : '••••••••••••••••••••';
     $('#relayTokenShow').textContent = hidden ? 'Hide' : 'Show';
-    if (hidden) { input.select(); document.execCommand?.('copy'); toast('Token copied — paste it into config.json on the Mac.'); }
+    if (hidden) {
+      // execCommand('copy') returns nothing useful on iOS and often does
+      // nothing at all, and this said "copied" either way. The token is on
+      // screen now, so say that instead when the copy does not happen.
+      input.select();
+      navigator.clipboard?.writeText(input.value)
+        .then(() => toast('Token copied — paste it into config.json on the Mac.'))
+        .catch(() => toast('Token shown — copy it by hand into config.json on the Mac.'));
+    }
   });
 
   $('#relayTokenGen').addEventListener('click', async () => {
@@ -3355,7 +3431,17 @@
     // straight after this and win.
     const items = focusablesIn(m);
     const field = items.find((el) => /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) || items[0];
-    if (field) field.focus();
+    if (window.matchMedia('(pointer: coarse)').matches) {
+      // On a touch screen this is a sheet sliding up from the bottom, and
+      // focusing a field on the first frame raises the keyboard into the
+      // middle of that and lays the whole thing out twice. The dialog itself
+      // takes focus instead, which is all the Tab trap needs; the field is one
+      // tap away.
+      m.setAttribute('tabindex', '-1');
+      m.focus({ preventScroll: true });
+    } else if (field) {
+      field.focus();
+    }
     return m;
   }
 
@@ -3388,6 +3474,221 @@
     if (e.shiftKey && here === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && here === last) { e.preventDefault(); first.focus(); }
   });
+
+  // ---------------- The service worker ----------------
+  // Fire and forget, on purpose. Nothing in the app waits for this, reads from
+  // Cache Storage, or behaves differently depending on whether it worked — in
+  // a private window, on an old browser, or when registration simply fails,
+  // every request goes to the network and this is the app it was before.
+  let updateReady = null;
+  let askedForUpdate = false;
+  let reloadingForUpdate = false;
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#reloadForUpdate')) return;
+    if (!updateReady) { location.reload(); return; }
+    // The page reloads from the controllerchange below, once the new worker
+    // has actually taken over — not here, or it would reload into the old one.
+    askedForUpdate = true;
+    updateReady.postMessage('SKIP_WAITING');
+  });
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      // updateViaCache: 'none' so the browser always revalidates the worker
+      // script itself. A service worker cached without revalidation is the one
+      // mistake a later deploy cannot fix.
+      navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+        .then((reg) => {
+          const offerIfWaiting = (worker) => {
+            // A worker reaching "installed" while one is already in charge is
+            // an update. The same event on a first-ever install is not, and
+            // must not put a Reload button in front of somebody.
+            if (!worker || worker.state !== 'installed' || !navigator.serviceWorker.controller) return;
+            updateReady = worker;
+            if (state) renderNotices();
+          };
+          offerIfWaiting(reg.waiting);
+          reg.addEventListener('updatefound', () => {
+            const worker = reg.installing;
+            if (worker) worker.addEventListener('statechange', () => offerIfWaiting(worker));
+          });
+          // Look for a new one on the way back to the app and once a day, so a
+          // shell can never sit stale for a week against a moving API.
+          const lookAgain = () => { reg.update().catch(() => {}); };
+          document.addEventListener('visibilitychange', () => { if (!document.hidden) lookAgain(); });
+          setInterval(lookAgain, 24 * 3600 * 1000);
+        })
+        .catch(() => { /* no service worker; the app does not need one */ });
+
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        // Only ever after somebody pressed Reload. A first install fires this
+        // too — the worker claims the page it was registered from — and
+        // reloading on that put the app in a loop: reload, register, claim,
+        // reload. It is also the rule that matters most in an app that sends
+        // real email: nothing reloads the page out from under a send except a
+        // person deciding to.
+        if (!askedForUpdate || reloadingForUpdate) return;
+        reloadingForUpdate = true;
+        location.reload();
+      });
+    });
+  }
+
+  // ---------------- The phone ----------------
+  // Everything below runs on every device but only does anything on a narrow
+  // one. The layout is CSS; what needs JavaScript is the four things CSS
+  // cannot express: a height that survives the software keyboard, a thread
+  // that is pushed and popped rather than revealed, somewhere for the account
+  // controls to live, and a way to ask for fresh data when there is no
+  // address bar to pull.
+  const phoneQuery = window.matchMedia('(max-width: 800px)');
+  const onPhone = () => phoneQuery.matches;
+  const installed = () => window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+
+  // ---- a height the keyboard cannot lie about ----
+  // 100dvh is right until iOS opens the keyboard in a standalone app, where
+  // it shrinks the visual viewport and often does not put it back — leaving a
+  // dead band under the composer and the tab bar floating in it.
+  const viewport = window.visualViewport;
+  let heightTick = false;
+  function syncAppHeight() {
+    if (heightTick) return;
+    heightTick = true;
+    requestAnimationFrame(() => {
+      heightTick = false;
+      const h = Math.round(viewport ? viewport.height : window.innerHeight);
+      if (h > 0) document.documentElement.style.setProperty('--app-h', `${h}px`);
+    });
+  }
+  if (viewport) viewport.addEventListener('resize', syncAppHeight);
+  window.addEventListener('orientationchange', () => setTimeout(syncAppHeight, 150));
+  window.addEventListener('resize', syncAppHeight);
+  syncAppHeight();
+
+  // ---- the title shrinks as you scroll, the way a navigation bar does ----
+  let scrollTick = false;
+  mainEl.addEventListener('scroll', () => {
+    if (scrollTick) return;
+    scrollTick = true;
+    requestAnimationFrame(() => {
+      scrollTick = false;
+      mainEl.classList.toggle('scrolled', mainEl.scrollTop > 14);
+    });
+  }, { passive: true });
+
+  // ---- Email and Texting: a thread is a screen you push ----
+  // It rides on real history, so the iOS edge-swipe back closes the thread
+  // instead of leaving the app, and so does the button. Whichever one is used,
+  // popstate does the work — the class is never changed in two places.
+  const messengerOf = (view) => $(`#view-${view} .messenger`);
+  const threadIsOpen = () => Boolean($('.messenger.thread-open'));
+
+  function pushThread(view) {
+    if (!onPhone()) return;
+    const m = messengerOf(view);
+    if (!m || m.classList.contains('thread-open')) return;
+    m.classList.add('thread-open');
+    history.pushState({ view, thread: true }, '', location.hash || `#${view}`);
+    // The route guard has to know a thread is now the current state, or the
+    // popstate that closes it looks like a repeat of where we already were and
+    // gets skipped.
+    lastRouted = `${view}|t`;
+  }
+  function syncThreadStack(open) {
+    $$('.messenger').forEach((m) => m.classList.toggle('thread-open', Boolean(open) && onPhone()));
+  }
+  function backFromThread() {
+    // Only walk the history if the thread put an entry there; a thread opened
+    // before the phone layout existed (a resize, say) has not.
+    if (history.state && history.state.thread) history.back();
+    else syncThreadStack(false);
+  }
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-thread-back]')) { e.preventDefault(); backFromThread(); }
+  });
+  // Leaving the page the thread belongs to closes it, or coming back to that
+  // page would land straight in a thread nobody asked for.
+  phoneQuery.addEventListener('change', () => { syncThreadStack(threadIsOpen() && onPhone()); placeAccountControls(); });
+
+  // ---- the account pill and Sign out ----
+  // They live in the sidebar foot, which is not on screen on a phone. Moving
+  // the real elements into Settings keeps one copy of state; a second copy
+  // would be one more thing that can disagree with the server.
+  function placeAccountControls() {
+    const foot = $('.sidebar-foot');
+    const slot = $('#settingsAccount');
+    if (!foot || !slot) return;
+    const wantSlot = onPhone();
+    if (wantSlot && foot.parentElement !== slot) slot.appendChild(foot);
+    else if (!wantSlot && foot.parentElement === slot) $('.sidebar').appendChild(foot);
+  }
+  placeAccountControls();
+
+  // ---- pull down to refresh ----
+  // A Home Screen app has no reload button and no address bar, so the only
+  // way to ask "is that really all of it?" is to wait out the poll. This is
+  // deliberately narrow: it only takes over the gesture when the list is
+  // already at the very top and the finger is travelling down, so an ordinary
+  // scroll is never intercepted.
+  (function pullToRefresh() {
+    const PULL = 72;
+    const spinner = document.createElement('div');
+    spinner.className = 'ptr';
+    spinner.innerHTML = icon('reply', 20);
+    let startY = 0, pulling = false, armed = false;
+
+    mainEl.addEventListener('touchstart', (e) => {
+      if (!onPhone() || mainEl.scrollTop > 0 || e.touches.length !== 1) return;
+      startY = e.touches[0].clientY;
+      pulling = true;
+      armed = false;
+    }, { passive: true });
+
+    mainEl.addEventListener('touchmove', (e) => {
+      if (!pulling) return;
+      const dy = e.touches[0].clientY - startY;
+      if (dy <= 0 || mainEl.scrollTop > 0) { reset(); return; }
+      if (!spinner.isConnected) mainEl.prepend(spinner);
+      e.preventDefault();
+      const give = Math.min(dy * 0.45, PULL + 18);
+      mainEl.style.transform = `translateY(${give}px)`;
+      armed = give >= PULL * 0.62;
+      spinner.classList.toggle('armed', armed);
+    }, { passive: false });
+
+    const finish = () => {
+      if (!pulling) return;
+      pulling = false;
+      mainEl.style.transition = 'transform .28s cubic-bezier(.32,.72,0,1)';
+      mainEl.style.transform = '';
+      setTimeout(() => { mainEl.style.transition = ''; }, 300);
+      if (!armed) { spinner.remove(); return; }
+      spinner.classList.remove('armed');
+      spinner.classList.add('spinning');
+      poll().finally(() => {
+        spinner.classList.remove('spinning');
+        spinner.remove();
+      });
+      armed = false;
+    };
+    const reset = () => {
+      pulling = false;
+      armed = false;
+      mainEl.style.transform = '';
+      spinner.remove();
+    };
+    mainEl.addEventListener('touchend', finish, { passive: true });
+    mainEl.addEventListener('touchcancel', reset, { passive: true });
+  }());
+
+  // ---- coming back to the app ----
+  // iOS freezes a backgrounded web app rather than keeping it running, and
+  // under memory pressure cold-starts it instead. Either way what is on
+  // screen when it comes back may be minutes or days old, so ask again.
+  // pageshow covers the restored-from-freeze case that visibilitychange misses.
+  window.addEventListener('pageshow', (e) => { if (e.persisted) poll(); });
 
   // ---------------- Boot ----------------
   // The five expensive renders, and the page each one draws. Measured against

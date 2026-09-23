@@ -1,0 +1,653 @@
+/* =====================================================================
+   WPI Outreach · the phone
+   ---------------------------------------------------------------------
+   Loaded after styles.css, and everything in it is inside a media query,
+   so on a desktop this file changes nothing at all.
+
+   It does three jobs:
+
+   1. Touch hygiene everywhere — no grey tap flash, no accidental text
+      selection on a control, scroll contained to the thing being scrolled.
+   2. At 800px and under, a phone app: one fixed shell, one scrolling
+      area, a tab bar along the bottom, and a stack you push and pop
+      instead of two panes side by side.
+   3. Installed to the Home Screen, the last details — safe areas, a
+      height driven by the visual viewport so the keyboard cannot leave a
+      dead band under the composer, and no rubber-band on the document.
+
+   Sizes follow Apple's own: 44pt is the smallest thing a thumb should
+   have to hit, 50pt of tab bar, 16px on anything you can type into,
+   because below that iOS zooms the page and never zooms back.
+   ===================================================================== */
+
+:root {
+  --tabbar-h: 50px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  /* iOS curves: a quick ease-out for something arriving, and a shorter one
+     for something leaving, which is what makes a push feel like a push. */
+  --ease-in-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --push-ms: 320ms;
+}
+
+/* ---------------- Touch hygiene, at every width ---------------- */
+
+html {
+  /* Stops iOS inflating text in the one orientation it feels like. */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* The grey flash iOS paints over anything tappable is from a decade of
+   pages where nothing else said "that worked". Everything here has a
+   :active state instead. */
+button, a, label, summary, .conv, .stat-card, .view-pill, .feed-chip,
+.nav-item, .filter-tag, .chip, .token, input[type="checkbox"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* A control is not prose: a long press should not offer to select it or
+   pop the iOS callout menu. Text the user might want to copy — a message,
+   an address, a token — is deliberately left out of this list. */
+button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
+.stat-label, .pipe-label, .funnel-label {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Every scroller keeps its overscroll to itself, so flinging a list does
+   not drag the page underneath it. */
+.activity, .modal-body, .conv-list, .thread-body, .bell-body,
+.preview-wrap, .nav, .main, .send-progress, .link-results {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 100vh is the *large* viewport: on iOS it is taller than what you can
+   see, so the bottom of the page sits under the browser chrome. */
+@supports (height: 100dvh) {
+  .shell { min-height: 100dvh; }
+  .modal { max-height: 88dvh; }
+}
+
+/* =====================================================================
+   The phone
+   ===================================================================== */
+@media (max-width: 800px) {
+
+  /* ---- the shell: one fixed frame, one thing inside it that scrolls ----
+     The document itself must not scroll, or the rubber-band drags the tab
+     bar and the header around with it. --app-h is set from the visual
+     viewport by app.js when the keyboard changes the usable height; the
+     dvh is what it falls back to. */
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  .shell {
+    position: fixed;
+    inset: 0;
+    height: var(--app-h, 100dvh);
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .main {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-width: none;
+    padding: 0 16px calc(var(--tabbar-h) + var(--safe-b) + 24px);
+    padding-left: max(16px, var(--safe-l));
+    padding-right: max(16px, var(--safe-r));
+    scroll-padding-top: 56px;
+  }
+
+  /* ---- the tab bar ----
+     It is the sidebar, moved: same six buttons, same click handlers, same
+     hash routing. Nothing here knows it used to be a sidebar. */
+  .sidebar {
+    position: fixed;
+    /* top: auto matters — the desktop rule is `position: sticky; top: 0` with
+       a height, and leaving that top in place stretched the bar over the whole
+       screen, blurring the app behind its own backdrop filter. */
+    top: auto;
+    left: 0; right: 0; bottom: 0;
+    z-index: 60;
+    width: auto;
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 0 0 var(--safe-b);
+    border-top: 1px solid var(--line);
+    border-right: 0;
+    background: var(--card);
+    /* The iOS tab bar is translucent over whatever scrolls beneath it. */
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .sidebar { background: color-mix(in srgb, var(--card) 82%, transparent); }
+  }
+  /* The wordmark lives in the header on a phone; the tab bar is for tabs. */
+  .sidebar .brand, .sidebar-foot { display: none; }
+
+  .nav {
+    display: flex;
+    flex-direction: row;
+    margin: 0;
+    padding: 0;
+    overflow: visible;                /* six tabs fit; nothing to scroll to */
+    height: var(--tabbar-h);
+  }
+  .nav-item {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 5px 2px 4px;
+    margin: 0;
+    border-radius: 0;
+    background: none;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    position: relative;
+    transition: color .15s;
+  }
+  /* "Dashboard" and "Candidates" need 56px of 10px Inter and the cell is 52px
+     on the smallest phone still in service. Rather than truncate them, or push
+     two of the six behind a More sheet and cost a tap, each tab carries a
+     short name for this width. The sidebar keeps the long ones. */
+  .nav-item .nav-label { display: none; }
+  .nav-item::after { content: attr(data-short); }
+  .nav-item .nav-ico { margin: 0; }
+  .nav-item .ico { width: 22px; height: 22px; }
+  .nav-item.active { background: none; color: var(--blue); }
+  .nav-item:active { opacity: .55; }
+  /* The count rides on the icon as a badge rather than sitting after the
+     label, where at 10px it would push the word off its own tab. */
+  .nav-count {
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    margin-left: 4px;
+    min-width: 16px;
+    padding: 0 4px;
+    border-radius: 99px;
+    background: var(--red);
+    color: #fff;
+    font-size: 9.5px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+  }
+  .nav-count:empty { display: none; }
+
+  /* ---- cards ----
+     Early in the file on purpose: the specific card rules further down have
+     the same specificity, and whichever comes last wins. */
+  .view .card, .view.dense .card { padding: 16px 14px; }
+  .view .list-card, .view.dense .list-card { padding: 0; }
+
+  /* ---- the header ----
+     A large title that shrinks to a compact one as you scroll, the way an
+     iOS navigation bar does. The class is toggled by an IntersectionObserver
+     watching a sentinel, so nothing runs on the scroll itself. */
+  .page-head {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    margin: 0 -16px 12px;
+    padding: 10px 16px 8px;
+    background: var(--bg);
+    flex-wrap: wrap;
+    row-gap: 8px;
+    transition: box-shadow .2s, padding .2s;
+  }
+  .page-head h1 {
+    font-size: 30px;
+    line-height: 1.15;
+    margin: 0;
+    transition: font-size .2s var(--ease-in-ios);
+  }
+  .main.scrolled .page-head {
+    box-shadow: 0 1px 0 var(--line);
+  }
+  .main.scrolled .page-head h1 { font-size: 19px; }
+  .head-actions { flex-wrap: wrap; row-gap: 8px; gap: 8px; }
+  /* The header's buttons wrap under the title and each take a full half,
+     rather than three of them squeezing onto one 358px line. */
+  .head-actions .btn { flex: 1 1 140px; justify-content: center; }
+  .head-actions .bell,
+  .head-actions .theme-switch,
+  .head-actions .conn-lost { flex: 0 0 auto; }
+
+  /* ---- everything you can type into ----
+     16px exactly. Below it WebKit zooms the page on focus and leaves it
+     zoomed, which breaks every fixed thing on the screen. The visual size
+     is kept by trimming the padding, not the type. */
+  .input, .textarea, .select, .select.slim, .status-select,
+  .view.dense .input, .view.dense .select, .view.dense .textarea,
+  .filter-row .role-filter, .thread-compose .textarea,
+  #view-import .paste-details .textarea, #view-import .paste-details summary,
+  input, select, textarea {
+    font-size: 16px;
+  }
+  .input, .select, .view.dense .input, .view.dense .select {
+    padding: 10px 12px;
+    min-height: 44px;
+  }
+  .textarea, .view.dense .textarea { padding: 10px 12px; }
+  .select, .select.slim, .filter-row .role-filter { padding-right: 34px; }
+
+  /* ---- 44px, everywhere a thumb lands ----
+     Grown with padding and a ::before overlay rather than by scaling the
+     glyph, so nothing about the design gets bigger, only the target. */
+  .btn, .btn-sm, .btn.small, .view.dense .btn, .btn-small {
+    min-height: 44px;
+    padding: 11px 16px;
+    font-size: 14px;
+  }
+  .icon-btn, .bell, .conn-lost, .send-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .view-pill, .conv-tab, .chip, .feed-chip, .filter-tag, .token, .tab {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Under 44px on purpose — a dense strip of filters that were 22px before
+     — so the target is extended past the paint instead. */
+  .view-pill, .feed-chip, .filter-tag, .token, .text-pip, .btn-link {
+    position: relative;
+  }
+  .view-pill::before, .feed-chip::before, .filter-tag::before,
+  .token::before, .text-pip::before, .btn-link::before {
+    content: '';
+    position: absolute;
+    inset: -6px -4px;
+  }
+  /* The tick box for a row is the start of every bulk send, and it was 15px.
+     22px of paint, and the rest of the 44 comes from a transparent overlay so
+     the design does not grow, only the target. */
+  .table input[type="checkbox"], .check input, .check-row input,
+  .row-check, input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    position: relative;
+  }
+  .table input[type="checkbox"]::before, .check input::before,
+  .check-row input::before, .row-check::before, input[type="checkbox"]::before {
+    content: '';
+    position: absolute;
+    inset: -11px;
+  }
+  /* A status pill is a real menu — changing someone's stage is a daily action
+     and it was 27px tall. */
+  .status-select { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
+  /* A disclosure triangle is a control, not a caption. */
+  summary { min-height: 44px; display: flex; align-items: center; }
+  .check-row { min-height: 44px; align-items: center; }
+  .theme-switch { position: relative; }
+  .theme-switch::before { content: ''; position: absolute; inset: -4px; }
+
+  /* ---- the candidates table is not a table on a phone ----
+     Ten columns clipped by an overflow:hidden card meant Status, Last
+     emailed and all five row actions simply did not exist here. Each row
+     becomes a card and every cell keeps its place by name — counting
+     nth-child would break the moment the ranking column appears. */
+  #candTableWrap .table,
+  #candTableWrap thead,
+  #candTableWrap tbody,
+  #candTableWrap tr,
+  #candTableWrap td { display: block; }
+  #candTableWrap thead { display: none; }
+  #candTableWrap tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  #candTableWrap td { padding: 0; border: 0; }
+  td[data-col="rank"]  { order: 0; flex: 0 0 auto; font-weight: 700; color: var(--blue); }
+  td[data-col="check"] { order: 1; flex: 0 0 auto; }
+  td[data-col="name"]  { order: 2; flex: 1 1 auto; min-width: 0; }
+  td[data-col="email"] { order: 3; flex: 1 0 100%; font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; }
+  td[data-col="role"]    { order: 4; }
+  td[data-col="company"] { order: 5; }
+  td[data-col="status"]  { order: 6; }
+  td[data-col="text"]    { order: 7; }
+  td[data-col="last"]    { order: 8; font-size: 12.5px; color: var(--muted); }
+  td[data-col="role"], td[data-col="company"], td[data-col="status"],
+  td[data-col="text"], td[data-col="last"] {
+    flex: 0 0 auto;
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  /* A middle dot between the facts, so the line reads as one sentence — but
+     only between two that ended up on the same line. `last` wraps often and a
+     leading dot on a new line reads as a bullet. */
+  td[data-col="company"]::before {
+    content: '·';
+    margin-right: 8px;
+    color: var(--muted);
+  }
+  td[data-col="act"] { order: 9; flex: 1 0 100%; margin-top: 10px; }
+  /* This is the one that mattered most: five actions behind :hover, on a
+     device with no hover, that were also painted past the clip edge. They
+     are a real row of buttons here. */
+  #candTableWrap .row-actions {
+    opacity: 1;
+    display: flex;
+    gap: 6px;
+    justify-content: flex-start;
+  }
+  #candTableWrap .row-actions .icon-btn { flex: 0 0 auto; }
+  .name-cell .cand-name { font-size: 15px; }
+  .list-card { overflow: visible; }
+  #candTableWrap { overflow: visible; }
+  .list-top, .filter-row { padding-left: 14px; padding-right: 14px; }
+  /* One column, not two. At 16px — which iOS requires — two 165px selects
+     clipped their own labels to "Any indus" and "All roles (2". */
+  .filter-row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  /* max-width: 200px on the desktop rule is why these were half-width menus
+     with their own labels clipped. */
+  .filter-row .role-filter { width: 100%; min-width: 0; max-width: none; }
+
+  /* The filters fold away. What is actually in force is still on screen the
+     whole time, as the removable chips under them. */
+  .filters-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 14px 12px;
+  }
+  #candFilters { display: none; }
+  .list-card.filters-open #candFilters { display: grid; }
+  .filters-toggle [data-icon] { transition: transform .2s var(--ease-in-ios); }
+  .list-card.filters-open .filters-toggle [data-icon] { transform: rotate(180deg); }
+  /* The count belongs under the search box, not squeezed beside it. */
+  .list-top { flex-wrap: wrap; gap: 8px; padding-top: 12px; padding-bottom: 10px; }
+  .list-top .search-wrap, .list-top .search-wrap.wide { max-width: none; width: 100%; flex: 1 1 100%; }
+  .search-wrap.wide { margin-bottom: 12px; }
+  .card-views, #candViews { gap: 8px; }
+
+  /* ---- Email and Texting: a stack, not two panes ----
+     Stacking them vertically put sixty conversations above the thread, and
+     took the bounded height that both scrollers depend on, so neither
+     scrolled and the composer sat at the bottom of a 3,600px page. Here the
+     list is one screen and the thread slides over it. */
+  /* The conversation card gives up its side padding so the list can run the
+     full width of the screen. It needs two classes to say so: Email and
+     Texting are `.view.dense`, whose own .card rule is more specific than a
+     single class and was keeping a 17px gutter on both sides. */
+  /* Edge to edge, like Messages itself: the page gutter is cancelled so the
+     conversation rows run the full width of the screen. */
+  .view .messages-card, .view.dense .messages-card {
+    padding: 12px 0 0;
+    margin-left: -16px;
+    margin-right: -16px;
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+  }
+  .messages-card .card-head { padding: 0 14px; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+  .messages-card .msg-head-right, .messages-card .msg-search { width: 100%; max-width: none; }
+  .messenger {
+    position: relative;
+    /* minmax(0, 1fr), not 1fr: a plain 1fr refuses to go below the content's
+       min-content width, which is what kept the conversation list 540px wide
+       inside a 390px screen. */
+    grid-template-columns: minmax(0, 1fr);
+    height: calc(var(--app-h, 100dvh) - var(--tabbar-h) - var(--safe-b) - 232px);
+    min-height: 320px;
+    overflow: hidden;
+  }
+  .messenger .conv-col {
+    border-right: 0;
+    min-height: 0;
+    min-width: 0;
+  }
+  .messenger .conv-list, .messenger .conv, .messenger .conv-main { min-width: 0; }
+  .messenger .conv-tabs { min-width: 0; }
+  .messenger .conv-tab { min-width: 0; flex: 1 1 0; }
+  .messenger .thread-col {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    background: var(--card);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform var(--push-ms) var(--ease-in-ios), visibility 0s linear var(--push-ms);
+  }
+  .messenger.thread-open .thread-col {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform var(--push-ms) var(--ease-in-ios), visibility 0s;
+  }
+  /* The list slides a little the other way, which is what makes it read as
+     one screen sitting behind another rather than a panel appearing. */
+  .messenger .conv-col {
+    transition: transform var(--push-ms) var(--ease-in-ios);
+  }
+  .messenger.thread-open .conv-col { transform: translateX(-22%); }
+  /* There is no list to go back to when nothing is open. */
+  .messenger .thread-empty { display: none; }
+  .thread-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 44px;
+    min-height: 44px;
+    margin-left: -8px;
+    padding: 0 6px 0 2px;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font-family: var(--font);
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .thread-back:active { opacity: .5; }
+  /* Two rows, because one will not hold a back button, a name, a number, a
+     role, a company and an action inside 390px — they were sitting on top of
+     each other. Navigation on top, who you are talking to underneath. */
+  .thread-head {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 8px;
+    column-gap: 8px;
+    padding: 8px 12px 10px;
+  }
+  .thread-back { order: 1; flex: 0 0 auto; }
+  .thread-head-actions, .thread-head > .btn {
+    order: 2;
+    margin-left: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .thread-head-actions { display: flex; gap: 8px; }
+  .thread-head-actions .btn, .thread-head > .btn { padding: 9px 13px; min-height: 40px; }
+  .thread-who { order: 3; flex: 1 1 100%; min-width: 0; gap: 10px; }
+  .thread-who .thread-name { font-size: 16px; }
+  .thread-who .thread-sub {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thread-compose {
+    padding-bottom: 10px;
+  }
+
+  /* The account pill and Sign out, moved into Settings because the tab bar
+     has no room for them and there was otherwise no way to sign out. */
+  .settings-account { margin-bottom: 14px; }
+  .settings-account .sidebar-foot { display: flex; margin: 0; padding: 0; border: 0; }
+  .settings-account .account { margin-bottom: 10px; }
+
+  /* Pull the list down to refresh: there is no reload button in a Home
+     Screen app, and the 30-second poll is invisible while you wait for it. */
+  .ptr {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 56px;
+    margin-top: -56px;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .ptr .ico { transition: transform .2s; }
+  .ptr.armed .ico { transform: rotate(180deg); color: var(--blue); }
+  .ptr.spinning .ico { animation: ptrSpin .9s linear infinite; color: var(--blue); }
+  @keyframes ptrSpin { to { transform: rotate(360deg); } }
+
+  /* ---- modals arrive from the bottom, like a sheet ---- */
+  .modal-backdrop {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    width: 100%;
+    max-width: none;
+    max-height: 92dvh;
+    margin: 0;
+    border-radius: 16px 16px 0 0;
+    padding-bottom: var(--safe-b);
+    animation: sheetUp .34s var(--ease-in-ios);
+  }
+  /* The grabber, which is how a sheet says it can be dragged away. */
+  .modal::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 5px;
+    margin: 8px auto 2px;
+    border-radius: 99px;
+    background: var(--dot);
+  }
+  @keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+  .modal-head { padding-top: 6px; }
+  .modal-body { overscroll-behavior: contain; }
+  /* The send and save buttons were behind the keyboard, in a footer that
+     was a sibling of the scroller rather than part of it. */
+  .modal-foot {
+    position: sticky;
+    bottom: 0;
+    background: var(--card);
+    padding-bottom: 14px;
+  }
+  .modal-foot .btn { flex: 1 1 auto; }
+
+  /* ---- the notifications panel is a sheet too ----
+     It was absolutely positioned at right: 36px, which is the desktop
+     gutter; on a phone it pointed at nothing. */
+  .bell-panel {
+    position: fixed;
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: calc(var(--tabbar-h) + var(--safe-b));
+    width: auto;
+    max-height: 60dvh;
+    border-radius: 16px 16px 0 0;
+    z-index: 55;
+  }
+
+  /* ---- odds and ends ---- */
+  .toast-wrap {
+    right: 12px;
+    left: 12px;
+    bottom: calc(14px + var(--tabbar-h) + var(--safe-b));
+  }
+  .toast { max-width: none; }
+  .grid-2, #apolloCard .grid-2, .field-row, .two-col { grid-template-columns: 1fr; }
+  .field-row { display: flex; flex-wrap: wrap; }
+  .field-row > * { flex: 1 1 100%; }
+  .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .funnel-row { grid-template-columns: 74px 1fr 40px 38px; }
+  .pipe-row { grid-template-columns: 96px 1fr 38px; }
+  .login-screen, .setup-screen {
+    padding: max(20px, var(--safe-t)) 16px calc(20px + var(--safe-b));
+  }
+  /* Hover states are sticky on iOS: the first tap paints them and they stay
+     until you touch something else, which reads as a stuck selection. */
+  @media (hover: none) {
+    .conv:hover, .link-results li:hover, tr:hover,
+    .btn:hover, .icon-btn:hover, .bell:hover { background: inherit; }
+    tr:hover .row-actions { opacity: 1; }
+  }
+}
+
+/* Narrower still — the small iPhones and anything in a split view. */
+@media (max-width: 380px) {
+  .nav-item { font-size: 9px; }
+  .filter-row { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: 1fr; }
+}
+
+/* =====================================================================
+   Installed to the Home Screen
+   Not width-dependent: an installed app on an iPad needs the safe areas
+   and the no-bounce document just as much.
+   ===================================================================== */
+@media all and (display-mode: standalone) {
+  html, body {
+    overscroll-behavior: none;
+    background: var(--bg);
+  }
+  /* There is no browser chrome to pull down, so a page that ends exactly at
+     the bottom looks cut off. */
+  .main { padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 32px); }
+  /* No URL bar to tell you the page is loading, so the app says it itself. */
+  .conn-lost { display: inline-flex; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .messenger .thread-col, .messenger .conv-col { transition: none; }
+  .modal { animation: none; }
+  .page-head, .page-head h1 { transition: none; }
+}
+
+/* =====================================================================
+   No connection
+   The header already says so. This is the rest of the honesty: a control
+   that is going to fail should not look ready to go. Every one of these
+   sends an email, a text, or a change the server has to accept.
+   ===================================================================== */
+:root.is-offline .email-all-btn,
+:root.is-offline .follow-up-btn,
+:root.is-offline #textSendAllBtn,
+:root.is-offline #composeSendBtn,
+:root.is-offline #textComposeSendBtn,
+:root.is-offline #selEmailBtn,
+:root.is-offline #selTextBtn,
+:root.is-offline #selBothBtn,
+:root.is-offline .send-btn,
+:root.is-offline #fetchSheetBtn,
+:root.is-offline #apolloImportBtn,
+:root.is-offline #apolloSearchBtn,
+:root.is-offline #saveSettingsBtn {
+  opacity: .4;
+  pointer-events: none;
+}
+:root.is-offline .thread-compose .textarea { opacity: .5; }
