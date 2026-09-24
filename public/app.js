@@ -339,8 +339,8 @@
     // Unsaved edits and the template shown belong to the team they were made
     // in: carried into the next team, pressing Save would write them there.
     try {
-      templateDirty = false; followUpDirty = false; textTemplateDirty = false; settingsDirty = false;
       presetShown.email = ''; presetShown.text = '';
+      setTemplateDirty(false); setFollowUpDirty(false); setPresetDirty('text', false); setSettingsDirty(false);
     } catch { /* not declared yet: nothing to reset */ }
   }
 
@@ -1607,6 +1607,7 @@
     $('#composePresetRow').hidden = followUp;
     $('#composeSaveAsBtn').hidden = followUp;
     if (!followUp) fillPresetSelect($('#composePreset'), 'email', override ? '' : defaultPresetId('email'));
+    composeLoaded = { subject: $('#composeSubject').value, body: $('#composeBody').value, id: override ? '' : defaultPresetId('email') };
     const atts = followUp ? [] : ((state.template && state.template.attachments) || []);
     $('#composeAttach').hidden = !atts.length;
     $('#composeAttach').innerHTML = atts.map((a) => `<span class="pv-attach">${icon('paperclip', 13)} ${esc(a.name)} <span class="muted">(${fmtSize(a.size)})</span></span>`).join('');
@@ -1647,15 +1648,23 @@
   let queueMode = false;
 
   $('#composeCancelBtn').addEventListener('click', () => { cancelSend = true; });
+  // What the send window's fields were last filled with, so choosing another
+  // template only asks first when you have typed something of your own.
+  let composeLoaded = { subject: '', body: '', id: '' };
   $('#composePreset').addEventListener('change', (e) => {
     const p = presetById('email', e.target.value);
     if (!p) return;
+    const edited = $('#composeSubject').value !== composeLoaded.subject || $('#composeBody').value !== composeLoaded.body;
+    if (edited && !confirm(`Replace what you have written with “${p.name}”?`)) { e.target.value = composeLoaded.id; return; }
     $('#composeSubject').value = p.subject || '';
     $('#composeBody').value = p.body || '';
+    composeLoaded = { subject: p.subject || '', body: p.body || '', id: p.id };
   });
   $('#composeSaveAsBtn').addEventListener('click', async () => {
     const made = await saveAsPreset('email', { subject: $('#composeSubject').value, body: $('#composeBody').value });
-    if (made) fillPresetSelect($('#composePreset'), 'email', made.id);
+    if (!made) return;
+    fillPresetSelect($('#composePreset'), 'email', made.id);
+    composeLoaded = { subject: made.subject, body: made.body, id: made.id };
   });
 
   // Sends in batches of 8 (each request must finish inside the server's
@@ -2050,6 +2059,7 @@
       try { return await api('/api/import/commit', { method: 'POST', body }); }
       catch (err) {
         if (attempt >= 4 || !retryable(err)) throw err;
+        commitBatch.retried = true;
         await new Promise((r) => setTimeout(r, 800 * attempt));
       }
     }
@@ -2071,22 +2081,34 @@
     const { rows, lines, repeats } = splitRepeats(pendingImport.rows, pendingImport.lines, mapping);
     totals.duplicate += repeats;
     let done = 0;
+    let retried = false;
+    const listBefore = state ? state.candidates.length : null;
     importRunning = true;
     try {
       for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
         if (rows.length > IMPORT_ROW_BATCH) btn.textContent = `Importing… ${Math.min(i + IMPORT_ROW_BATCH, rows.length).toLocaleString()} / ${rows.length.toLocaleString()}`;
+        commitBatch.retried = false;
         const r = await commitBatch({
           rows: rows.slice(i, i + IMPORT_ROW_BATCH), lines: lines.slice(i, i + IMPORT_ROW_BATCH), headerless: pendingImport.headerless,
           mapping, source: pendingImport.source, updateExisting: $('#importUpdateExisting').checked,
         });
         for (const k of Object.keys(totals)) totals[k] += r[k] || 0;
+        if (commitBatch.retried) retried = true;
         done = Math.min(i + IMPORT_ROW_BATCH, rows.length);
       }
       $('#mappingCard').hidden = true;
       pendingImport = null;
       importRunning = false;
-      await refresh().catch(() => {});
-      totals.onList = state ? state.candidates.length : null;
+      const fresh = await refresh().then(() => true, () => false);
+      if (fresh && state) {
+        totals.onList = state.candidates.length;
+        // A batch sent again after a lost answer reports its own people as
+        // "already in your list". The list itself says how many were added.
+        if (retried && listBefore != null) {
+          const gained = Math.max(0, state.candidates.length - listBefore);
+          if (gained > totals.added) { totals.existing = Math.max(0, totals.existing - (gained - totals.added)); totals.added = gained; }
+        }
+      }
       showImportResult(totals);
       $('#importResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (err) {
@@ -2551,7 +2573,7 @@
 
   $('#saveTemplateBtn').addEventListener('click', async () => {
     const p = currentPreset('email');
-    if (!p) return;
+    if (!p) { await saveOrphanedEdits('email'); return; }
     try {
       await api(`/api/templates/email/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { subject: $('#tplSubject').value, body: $('#tplBody').value } });
       setTemplateDirty(false);
@@ -2592,6 +2614,24 @@
     const ul = $('#backupList');
     if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
   }
+  // Fetched rather than followed, so an expired session or a storage error is
+  // a message on screen instead of a file that turns out to hold an error.
+  $('#exportCandidatesBtn').addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/candidates/export');
+      if (res.status === 401) { showLogin(); return; }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Download failed (${res.status})`); }
+      const blob = await res.blob();
+      const name = ((res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'candidates.csv';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    } catch (err) { oops(err); }
+  });
   $('#backupNowBtn').addEventListener('click', async () => {
     const btn = $('#backupNowBtn');
     btn.disabled = true;
@@ -2608,8 +2648,10 @@
     if (!btn) return;
     try {
       const check = await api('/api/backups/restore', { method: 'POST', body: { key: btn.dataset.restore, dryRun: true } });
-      if (!check.missing) { toast('Everyone in that backup is already on your list — nothing to restore.'); return; }
-      if (!confirm(`${check.missing.toLocaleString()} ${check.missing === 1 ? 'person in this backup is' : 'people in this backup are'} not on your list now. Add them back? Nobody already on the list is changed.`)) return;
+      const skipped = check.deleted ? ` ${check.deleted.toLocaleString()} ${check.deleted === 1 ? 'other was' : 'others were'} deleted on purpose and stay deleted.` : '';
+      if (!check.missing) { toast(`Everyone in that backup is already on your list — nothing to restore.${skipped}`); return; }
+      const who = (check.names || []).join(', ') + (check.missing > (check.names || []).length ? ', …' : '');
+      if (!confirm(`${check.missing.toLocaleString()} ${check.missing === 1 ? 'person in this backup is' : 'people in this backup are'} not on your list now (${who}). Add them back? Nobody already on the list is changed.${skipped}`)) return;
       const r = await api('/api/backups/restore', { method: 'POST', body: { key: btn.dataset.restore } });
       toast(`Restored ${r.restored.toLocaleString()} candidate${r.restored === 1 ? '' : 's'}.`);
       await refresh();
@@ -2625,9 +2667,25 @@
   function presetsOf(kind) { return (state && state.templates && state.templates[kind]) || []; }
   function defaultPresetId(kind) { return (state && state.templates && state.templates.defaults && state.templates.defaults[kind]) || ''; }
   function presetById(kind, id) { return presetsOf(kind).find((p) => p.id === id) || null; }
+  // The template an editor is showing. If it is deleted elsewhere while the
+  // editor holds unsaved words, the editor stays on it (shown as deleted) —
+  // sliding to the default would make Save write those words over the default.
   function currentPreset(kind) {
-    if (!presetById(kind, presetShown[kind])) presetShown[kind] = defaultPresetId(kind);
+    if (!presetById(kind, presetShown[kind]) && !presetDirty(kind)) presetShown[kind] = defaultPresetId(kind);
     return presetById(kind, presetShown[kind]);
+  }
+  // Save pressed on an editor whose template was deleted elsewhere: offer to
+  // keep the words as a new template instead of writing them anywhere else.
+  async function saveOrphanedEdits(kind) {
+    const words = kind === 'email'
+      ? { subject: $('#tplSubject').value, body: $('#tplBody').value }
+      : { body: $('#txBody').value };
+    if (!confirm('The template you were editing was deleted (perhaps in another tab). Save these words as a new template?')) return;
+    const made = await saveAsPreset(kind, words);
+    if (!made) return;
+    presetShown[kind] = made.id;
+    setPresetDirty(kind, false);
+    renderPresetBar(kind);
   }
   function presetOptions(kind, selectedId) {
     const def = defaultPresetId(kind);
@@ -2643,7 +2701,17 @@
   function renderPresetBar(kind) {
     const pre = kind === 'email' ? 'tpl' : 'tx';
     const p = currentPreset(kind);
-    if (!p) return;
+    if (!p) {
+      // Deleted elsewhere while being edited: say so, and offer nothing that would act on it.
+      const sel = $(`#${pre}Preset`);
+      const html = `<option value="" selected>(deleted — unsaved)</option>${presetOptions(kind, '')}`;
+      if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+      sel.value = '';
+      for (const id of ['PresetRename', 'PresetDefault', 'PresetDelete']) $(`#${pre}${id}`).hidden = true;
+      $(`#${pre}PresetNote`).textContent = 'This template was deleted elsewhere. Save keeps your words as a new one.';
+      return;
+    }
+    $(`#${pre}PresetRename`).hidden = false;
     const isDefault = p.id === defaultPresetId(kind);
     fillPresetSelect($(`#${pre}Preset`), kind, p.id);
     $(`#${pre}PresetDefault`).hidden = isDefault;
@@ -2700,8 +2768,9 @@
     $(`#${pre}Preset`).addEventListener('change', (e) => {
       const next = e.target.value;
       const was = currentPreset(kind);
-      if (presetDirty(kind) && was && !confirm(`Discard your unsaved changes to “${was.name}”?`)) {
-        e.target.value = was.id;
+      if (!next) return;
+      if (presetDirty(kind) && !confirm(`Discard your unsaved changes${was ? ` to “${was.name}”` : ''}?`)) {
+        e.target.value = was ? was.id : '';
         return;
       }
       presetShown[kind] = next;
@@ -2863,6 +2932,8 @@
     const def = presetById('text', defaultPresetId('text'));
     $('#textComposeBody').value = (def && def.body) || (state.texting && state.texting.template && state.texting.template.body) || '';
     fillPresetSelect($('#textComposePreset'), 'text', def ? def.id : '');
+    textComposeLoaded = { body: $('#textComposeBody').value, id: def ? def.id : '' };
+    $('#textComposeSendBtn').textContent = people.length > 1 ? `Queue ${people.length.toLocaleString()} texts` : 'Send text';
     $('#textComposeNow').checked = false;   // never sticky between sends
     openModal('#textComposeModal');
     renderTextComposePreview();
@@ -2895,15 +2966,22 @@
   }
 
   $('#textComposeBody').addEventListener('input', renderTextComposePreview);
+  let textComposeLoaded = { body: '', id: '' };
   $('#textComposePreset').addEventListener('change', (e) => {
     const p = presetById('text', e.target.value);
     if (!p) return;
+    if ($('#textComposeBody').value !== textComposeLoaded.body && !confirm(`Replace what you have written with “${p.name}”?`)) {
+      e.target.value = textComposeLoaded.id; return;
+    }
     $('#textComposeBody').value = p.body || '';
+    textComposeLoaded = { body: p.body || '', id: p.id };
     renderTextComposePreview();
   });
   $('#textComposeSaveAsBtn').addEventListener('click', async () => {
     const made = await saveAsPreset('text', { body: $('#textComposeBody').value });
-    if (made) fillPresetSelect($('#textComposePreset'), 'text', made.id);
+    if (!made) return;
+    fillPresetSelect($('#textComposePreset'), 'text', made.id);
+    textComposeLoaded = { body: made.body, id: made.id };
   });
   $('#textComposeNow').addEventListener('change', renderTextComposePreview);
   $$('.tc-token').forEach((b) => b.addEventListener('click', () => {
@@ -2924,6 +3002,13 @@
       const sendNow = $('#textComposeNow').checked;
       if (sendNow && textComposeIds.length > 3
           && !confirm(`Send ${textComposeIds.length} texts right now, ignoring the quiet hours? That is meant for testing one message, not a batch.`)) {
+        btn.disabled = false; return;
+      }
+      const tq = (state.texting && state.texting.queue) || {};
+      const n = textComposeIds.length;
+      if (n > 1 && (!tq.relay || !tq.relay.online)) {
+        if (!confirm(`The Mac relay is offline, so nothing will send until it is back. Queue these ${n.toLocaleString()} texts anyway?`)) { btn.disabled = false; return; }
+      } else if (n > 1 && !sendNow && !confirm(`Text ${n.toLocaleString()} people? They go out one at a time, only during daytime hours where each person lives.`)) {
         btn.disabled = false; return;
       }
       const r = await api('/api/texts/queue', { method: 'POST', body: { ids: textComposeIds, template: { body }, ignoreQuietHours: sendNow } });
@@ -3721,7 +3806,7 @@
 
   $('#txSave').addEventListener('click', async () => {
     const p = currentPreset('text');
-    if (!p) return;
+    if (!p) { await saveOrphanedEdits('text'); return; }
     try {
       await api(`/api/templates/text/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { body: $('#txBody').value } });
       setPresetDirty('text', false);

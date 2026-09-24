@@ -44,8 +44,9 @@ app.use(auth.middleware);
 const asyncRoute = (fn) => (req, res) => fn(req, res).catch((err) => {
   // A conflict (409) or a storage failure is not the caller's mistake, and the
   // page treats it differently from a bad request.
-  const status = err.status === 409 || err.guard || err.storage ? (err.status === 409 ? 409 : 503) : 400;
-  res.status(status).json({ error: err.message || String(err), retry: status !== 400 });
+  // A refusal to drop candidates is a fault that no retry will fix.
+  const status = err.status === 409 ? 409 : err.storage ? 503 : (err.guard || err.status === 500) ? 500 : 400;
+  res.status(status).json({ error: err.message || String(err), retry: status === 409 || status === 503 });
 });
 
 // ---------- Teams and sign-in ----------
@@ -518,6 +519,7 @@ app.post('/api/template', asyncRoute(async (req, res) => {
     // Somebody has now written this team's letter, whatever it says.
     d.settings.templateSeeded = false;
     touchDefault(d, 'email');
+    presets.normalize(d);   // the named default follows, in this reply too
   });
   res.json({ ok: true, template: db.template, templates: presets.publicView(db) });
 }));
@@ -526,6 +528,7 @@ app.post('/api/template/reset', asyncRoute(async (_req, res) => {
   const db = await store.update((d) => {
     d.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: d.template.attachments };
     touchDefault(d, 'email');
+    presets.normalize(d);   // the named default follows, in this reply too
   });
   res.json({ ok: true, template: db.template, templates: presets.publicView(db) });
 }));
@@ -540,7 +543,7 @@ function touchDefault(db, kind) {
 // answer carries the whole list, so the page never has to guess what is saved.
 const templateKind = (req) => {
   const kind = String(req.params.kind || '');
-  if (!presets.KINDS[kind]) throw new Error('Unknown kind of template.');
+  if (!Object.hasOwn(presets.KINDS, kind)) throw new Error('Unknown kind of template.');
   return kind;
 };
 const templatesReply = (db, extra = {}) => ({
@@ -1084,7 +1087,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
       }
       if (err.name === 'AbortError' && st.via === 'gmail-api') {
         // Outcome unknown: the queue checks the Sent folder before deciding — never a blind resend.
-        await queue.updateQ((f) => queue.deferUnverified(f, c.id, c.email, attemptAt));
+        await queue.updateQ((f) => queue.deferUnverified(f, c.id, c.email, attemptAt, template, { followUp }));
         results.push({ id, ok: false, queued: true, email: c.email, error: 'Timed out — Gmail will be checked and the send finished in the background.' });
         continue;
       }
@@ -1357,6 +1360,7 @@ app.post('/api/texts/template', asyncRoute(async (req, res) => {
   const db = await store.update((d) => {
     d.textTemplate = { body: String((req.body && req.body.body) || '').slice(0, 2000) };
     touchDefault(d, 'text');
+    presets.normalize(d);   // the named default follows, in this reply too
   });
   res.json({ ok: true, textTemplate: db.textTemplate, templates: presets.publicView(db) });
 }));
@@ -1367,6 +1371,7 @@ app.post('/api/texts/template/reset', asyncRoute(async (_req, res) => {
     // the one that claims to be nobody.
     d.textTemplate = structuredClone(tenant.isLegacy() ? store.DEFAULT_TEXT_TEMPLATE : store.NEW_TEAM_TEXT_TEMPLATE);
     touchDefault(d, 'text');
+    presets.normalize(d);   // the named default follows, in this reply too
   });
   res.json({ ok: true, textTemplate: db.textTemplate, templates: presets.publicView(db) });
 }));
@@ -1531,6 +1536,7 @@ app.post('/api/emails/seen', asyncRoute(async (req, res) => {
   const all = Boolean(req.body && req.body.all);
   let n = 0;
   await store.update((db) => {
+    n = 0;   // re-run on a conflict: count afresh
     for (const c of db.candidates) {
       if (!c.emailUnread) continue;
       if (!all && c.id !== id) continue;
@@ -1605,6 +1611,7 @@ app.post('/api/texts/seen', asyncRoute(async (req, res) => {
   const all = Boolean(req.body && req.body.all);
   let n = 0;
   await store.update((db) => {
+    n = 0;   // re-run on a conflict: count afresh
     for (const c of db.candidates) {
       if (!c.textUnread) continue;
       if (!all && c.id !== id) continue;
@@ -1759,6 +1766,7 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
   const now = new Date().toISOString();
   const announce = [];
   await store.update((fresh) => {
+    announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
     for (const [id, r] of Object.entries(results)) {
       const fc = fresh.candidates.find((x) => x.id === id);
       if (!fc) continue;
@@ -2120,6 +2128,7 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
   }
   const announce = [];
   await store.update((fresh) => {
+    announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
     const list = [];
     for (const ev of result.interviews) {
       if (!ev.invitees.length) {
