@@ -1053,7 +1053,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
   const signature = await google.getSignature(db.settings, { refresh: true });
   const files = await attachments.loadAll(db);
   const recent = queue.recentlySentIds(q);
-  const patches = {};
+  const sentPatches = [];
   for (const id of ids) {
     const c = db.candidates.find((x) => x.id === id);
     if (!c) { results.push({ id, ok: false, error: 'Not found' }); continue; }
@@ -1069,9 +1069,13 @@ app.post('/api/send', asyncRoute(async (req, res) => {
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
       const thread = followUp && c.messageId ? { threadId: c.gmailThreadId || undefined, inReplyTo: c.messageId, references: c.messageId } : {};
       const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg, ...thread, attachments: followUp ? [] : files }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
-      await queue.updateQ((f) => queue.recordSent(f, c.id, c.email));
+      // What the send changes on the candidate goes in the same write as the
+      // send, so a request cut off before the end still gets it recorded.
+      const ts = new Date().toISOString();
+      const patch = { id: c.id, lastEmailedAt: ts, gmailThreadId: sent.threadId || '', messageId: sent.messageId || '', lastSubject: msg.subject, followUp };
+      await queue.updateQ((f) => queue.recordSent(f, c.id, c.email, ts, patch));
       paceLeft -= 1;
-      patches[c.id] = { lastEmailedAt: new Date().toISOString(), gmailThreadId: sent.threadId || '', messageId: sent.messageId || '', lastSubject: msg.subject, followUp };
+      sentPatches.push(patch);
       results.push({ id, ok: true, email: c.email });
     } catch (err) {
       const kind = queue.classifySendError(err);
@@ -1096,14 +1100,10 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     }
     await sleep(400);
   }
-  if (Object.keys(patches).length) {
-    await store.update((fresh) => {
-      for (const [id, p] of Object.entries(patches)) {
-        const fc = fresh.candidates.find((x) => x.id === id);
-        if (fc) queue.applySentPatch(fc, p);
-      }
-    });
-  }
+  // The emails have gone and are recorded: a failure here must not report
+  // them as failed. The scheduled worker writes anything left within a minute.
+  try { await queue.settlePending(sentPatches); }
+  catch (err) { console.warn('[send] sends not written to candidates yet, the worker will:', err.message); }
   res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
 }));
 
@@ -1210,41 +1210,68 @@ app.post('/api/relay/handles', asyncRoute(async (_req, res) => {
   res.json({ handles: [...handles] });
 }));
 
+// What the relay reported goes into the text queue first and onto the
+// candidate second. Should a request end between the two, the outcome waits in
+// the queue's pending list and the next report or claim writes it — safe to
+// repeat: the thread never gets the same message twice.
+function applyTextOutcome(c, o) {
+  if (o.status === 'sent') {
+    if (!(Date.parse(c.lastTextedAt) >= Date.parse(o.ts))) c.lastTextedAt = o.ts;
+    advanceText(c, 'sent');
+    // Our half of the conversation. Until now it lived only in the queue's
+    // lease and went in the bin on delivery.
+    if (o.body) store.addToThread(c, 'out', o.body, o.ts);
+  } else if (Date.parse(c.lastTextedAt) > Date.parse(o.ts)) {
+    // A later text went through; an older failure says nothing about now.
+  } else if (o.status === 'not-imessage') c.textStatus = 'not-imessage';
+  else c.textStatus = 'failed';
+}
+
+async function settleTextOutcomes(list) {
+  if (!list || !list.length) return;
+  await store.update((db) => {
+    const byId = new Map(db.candidates.map((c) => [c.id, c]));
+    let changed = false;
+    for (const o of list) {
+      const c = byId.get(o.id);
+      if (!c) continue;
+      const before = JSON.stringify(c);
+      applyTextOutcome(c, o);
+      if (JSON.stringify(c) !== before) changed = true;
+    }
+    if (!changed) return false;
+  });
+  await textQueue.updateQ((q) => textQueue.dropPending(q, list));
+}
+
 app.post('/api/relay/claim', asyncRoute(async (req, res) => {
   const db = await store.load();
   let out = { job: null, reason: 'empty' };
-  await textQueue.updateQ((q) => {
-    out = textQueue.claim(q, db, { render: (tpl, c) => renderText(tpl || db.textTemplate, c, db.settings) });
+  const q = await textQueue.updateQ((f) => {
+    out = textQueue.claim(f, db, { render: (tpl, c) => renderText(tpl || db.textTemplate, c, db.settings) });
     // A poll that found nothing to do writes nothing: the relay polls every few
     // seconds, and rewriting the record each time would be pure churn.
     if (!out.changed) return false;
   });
+  if (q.pendingPatches.length) {
+    try { await settleTextOutcomes(q.pendingPatches); }
+    catch (err) { console.warn('[relay] earlier outcomes not written to candidates yet:', err.message); }
+  }
   res.json({ job: out.job || null, reason: out.reason, until: out.until || null });
 }));
 
 app.post('/api/relay/report', asyncRoute(async (req, res) => {
   const { jobId, status, error } = req.body || {};
   let out = { ok: false, reason: 'unknown-or-expired-job' };
-  await textQueue.updateQ((q) => {
-    out = textQueue.report(q, { jobId: String(jobId || ''), status: String(status || ''), error: String(error || '').slice(0, 300) });
+  const q = await textQueue.updateQ((f) => {
+    out = textQueue.report(f, { jobId: String(jobId || ''), status: String(status || ''), error: String(error || '').slice(0, 300) });
     if (!out.ok) return false;
   });
   if (!out.ok) return res.status(409).json(out);
-  if (out.candidateId) {
-    await store.update((db) => {
-      const c = db.candidates.find((x) => x.id === out.candidateId);
-      if (!c) return false;
-      if (out.status === 'sent') {
-        c.lastTextedAt = new Date().toISOString();
-        advanceText(c, 'sent');
-        // Our half of the conversation. Until now it lived only in the queue's
-        // lease and went in the bin on delivery.
-        if (out.body) store.addToThread(c, 'out', out.body, c.lastTextedAt);
-      }
-      else if (out.status === 'not-imessage') c.textStatus = 'not-imessage';
-      else c.textStatus = 'failed';
-    });
-  }
+  // The outcome is stored; a failure writing it onto the candidate must not
+  // send the relay back to report a job that is already closed.
+  try { await settleTextOutcomes(q.pendingPatches); }
+  catch (err) { console.warn('[relay] outcome not written to the candidate yet, the next poll will:', err.message); }
   res.json(out);
 }));
 

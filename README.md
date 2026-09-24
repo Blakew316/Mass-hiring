@@ -97,6 +97,7 @@ Keep as many named emails and texts as you like and pick one each time you send.
 - **No silent fallback.** If Netlify Blobs were ever unavailable, the app now stops with a storage error instead of showing (and saving to) an empty temporary list.
 - **Daily backups.** Once a day the list is copied to a separate entry that nothing else writes, and the last 20 copies are kept (Settings → *Candidate list backups*). **Back up now** makes one on demand; **Restore missing** adds back anybody in a copy who is not on the list now — it never removes or changes anyone already there.
 - **Your own copy.** **Download all candidates (CSV)** in the same card exports the whole list as a spreadsheet.
+- **Sends are never forgotten.** Each email or text is recorded, together with what it changes on the candidate (Emailed, when, the Gmail thread), in the same save that logs the send. If the sender is cut off before it updates the candidate list, the next run (within a minute) finishes the update, so nobody who was contacted is left showing as *Not contacted* or gets a second copy from **Email all not contacted**.
 - **Imports.** A batch that meets a busy moment is retried automatically; the page asks before you close it mid-import, never reloads itself for an update during one, and afterwards shows the new people first along with the total now on your list.
 
 ## Opens and replies
