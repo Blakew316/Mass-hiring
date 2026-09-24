@@ -82,6 +82,23 @@ Each row shows what that person did **before** their current job, the search box
 
 People who were emailed and never replied or booked become **due a follow-up** after a wait (Settings → Sending pace: *Follow up after N days*, default 3; *Follow-ups per person*, default 2). The **Follow up** button on the Dashboard, the Candidates page, the Emailed tile and the Email Template page shows how many are due and sends them the follow-up email — as a **reply in the same conversation** (the subject becomes *Re:* the email they received, with the proper In-Reply-To/References headers, so it lands in the same thread in their inbox), without the attachment. Each person can also be followed up individually from their row. The follow-up text has its own editor and preview on the Email Template page; `{{originalSubject}}` stands for the subject they got. Anyone who replies or books while a follow-up is queued is skipped.
 
+## Saved templates
+
+Keep as many named emails and texts as you like and pick one each time you send.
+
+- **Making one.** In Settings, write the email (or text) and press **Save as new…**, or press **Save as template…** in the send window while you are writing to someone. Each team's templates are its own.
+- **Using one.** The email send window and the text composer both have a **Template** list; choosing one fills in the subject and message, which you can still change for that send. **Text everyone with a number** now opens the composer too, so you choose and read the message before anything is queued.
+- **The default.** One email and one text are marked *default*: the send window opens with it, and the queue uses it when nothing else was chosen. **Make default** switches it; the default cannot be deleted until another one is.
+- Editing or deleting a template never changes a message that is already queued — it goes out as it was written. Attachments belong to the team and go with every outreach email, whichever template it started from. The follow-up email keeps its own single template.
+
+## Keeping the candidate list safe
+
+- **Every change is checked.** Saves are made against the exact version that was read, so two changes at the same moment can never overwrite each other; each save is confirmed by the store before the page is told it worked; and a save that would leave out anybody who was not deliberately deleted is refused outright, with nothing written. Deleting someone from their row is the only way a candidate leaves the list.
+- **No silent fallback.** If Netlify Blobs were ever unavailable, the app now stops with a storage error instead of showing (and saving to) an empty temporary list.
+- **Daily backups.** Once a day the list is copied to a separate entry that nothing else writes, and the last 20 copies are kept (Settings → *Candidate list backups*). **Back up now** makes one on demand; **Restore missing** adds back anybody in a copy who is not on the list now — it never removes or changes anyone already there.
+- **Your own copy.** **Download all candidates (CSV)** in the same card exports the whole list as a spreadsheet.
+- **Imports.** A batch that meets a busy moment is retried automatically; the page asks before you close it mid-import, never reloads itself for an update during one, and afterwards shows the new people first along with the total now on your list.
+
 ## Opens and replies
 
 - Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email". The feed is ordered by when things actually happened (a reply is dated when it was sent, a booking when it was made), even if the app only noticed later.

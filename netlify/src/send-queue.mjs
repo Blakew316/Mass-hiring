@@ -8,10 +8,14 @@
 // gets out of the way, so the budget goes to whoever actually has sending to
 // do — and a team whose drain fails does not stop the next one.
 import queue from '../../lib/queue.js';
+import backups from '../../lib/backups.js';
 import teams from '../../lib/teams.js';
 import tenant from '../../lib/tenant.js';
 
 const TOTAL_BUDGET_MS = 20000;
+// A copy reads and writes the whole list once each; started any later than
+// this it could run into the 30-second limit.
+const BACKUP_START_BEFORE_MS = 22000;
 // The smallest slice worth giving anyone. It is the send worker's own floor,
 // not a number picked here: lib/queue.js will not begin a send unless it has
 // SEND_TIMEOUT_MS + WRITE_RESERVE_MS left, so a shorter slice buys a run lease,
@@ -45,6 +49,19 @@ export default async () => {
         if (r.processed || r.reason !== 'empty') console.log('[send-queue]', team.id, JSON.stringify(r));
       } catch (err) {
         console.error(`[send-queue] ${team.id} failed:`, err && err.stack ? err.stack : err);
+      }
+    }
+    // The daily copy of the candidate list (lib/backups.js), one team a
+    // minute in the same rotation, after the sending and only with time to
+    // spare. It is apart from the drain on purpose: a copy that fails must
+    // never cost a send, and a send must never wait on a copy.
+    if (order.length && Date.now() - started < BACKUP_START_BEFORE_MS) {
+      const team = order[0];
+      try {
+        const b = await tenant.run(team.id, () => backups.maybeDaily());
+        if (b) console.log('[send-queue] backup', team.id, JSON.stringify(b));
+      } catch (err) {
+        console.error(`[send-queue] backup for ${team.id} failed:`, err && err.stack ? err.stack : err);
       }
     }
   } catch (err) {

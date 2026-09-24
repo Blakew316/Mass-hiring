@@ -1340,3 +1340,26 @@ tr.row-muted { opacity: .55; }
 }
 .pager-range, .pager-page { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .pager-btns { display: flex; align-items: center; gap: 10px; }
+
+/* ---- Saved templates ---- */
+.preset-bar { margin: 2px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--navy-tint); }
+.preset-bar .label { margin-top: 0; }
+.preset-row { display: flex; gap: 8px; align-items: center; }
+.preset-row .select { flex: 1; min-width: 0; }
+.preset-row .btn { flex: none; white-space: nowrap; }
+.preset-links { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 8px; }
+.preset-links .muted { margin-left: auto; }
+.link-danger { color: var(--red); }
+.compose-preset { margin-top: 12px; }
+.compose-preset .label { margin-top: 0; }
+.modal-foot .foot-left { margin-right: auto; align-self: center; }
+
+/* ---- Candidate list backups ---- */
+.backup-card { margin-bottom: 22px; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.backup-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.backup-list { list-style: none; margin: 14px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.backup-list li { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.backup-list li .when { font-weight: 600; min-width: 0; }
+.backup-list li .muted { flex: 1; }
+.backup-list li:empty { display: none; }

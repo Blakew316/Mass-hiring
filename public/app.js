@@ -336,6 +336,12 @@
     threadLoading = false;
     for (const k of Object.keys(thumbs)) delete thumbs[k];
     for (const k of Object.keys(scrollMemory)) delete scrollMemory[k];
+    // Unsaved edits and the template shown belong to the team they were made
+    // in: carried into the next team, pressing Save would write them there.
+    try {
+      templateDirty = false; followUpDirty = false; textTemplateDirty = false; settingsDirty = false;
+      presetShown.email = ''; presetShown.text = '';
+    } catch { /* not declared yet: nothing to reset */ }
   }
 
   function signedOut() {
@@ -383,11 +389,17 @@
     if (res.status === 401) { showLogin(); const e = new Error('Please sign in.'); e.authFailed = true; throw e; }
     if (!res.ok) throw new Error(`Request failed (${res.status})`);
     lastSyncAt = Date.now();
-    stateTag = res.headers.get('ETag') || '';
+    const tag = res.headers.get('ETag') || '';
+    // The tag is remembered only once this version is actually on screen. Saved
+    // first, a body cut off in transit or a drawing error left the page asking
+    // "anything newer than this?", being told no, and showing the old list —
+    // an import that never appeared — until something else changed.
+    stateTag = '';
     state = await res.json();
     authRequired = Boolean(state.auth && state.auth.required);
     setTeam(state.team);
     renderAll();
+    stateTag = tag;
     return true;
   }
 
@@ -1591,6 +1603,10 @@
     const base = followUp ? state.followUp.template : state.template;
     $('#composeSubject').value = override ? override.subject : base.subject;
     $('#composeBody').value = override ? override.body : base.body;
+    // Saved templates are for outreach; a follow-up has its own single letter.
+    $('#composePresetRow').hidden = followUp;
+    $('#composeSaveAsBtn').hidden = followUp;
+    if (!followUp) fillPresetSelect($('#composePreset'), 'email', override ? '' : defaultPresetId('email'));
     const atts = followUp ? [] : ((state.template && state.template.attachments) || []);
     $('#composeAttach').hidden = !atts.length;
     $('#composeAttach').innerHTML = atts.map((a) => `<span class="pv-attach">${icon('paperclip', 13)} ${esc(a.name)} <span class="muted">(${fmtSize(a.size)})</span></span>`).join('');
@@ -1631,6 +1647,16 @@
   let queueMode = false;
 
   $('#composeCancelBtn').addEventListener('click', () => { cancelSend = true; });
+  $('#composePreset').addEventListener('change', (e) => {
+    const p = presetById('email', e.target.value);
+    if (!p) return;
+    $('#composeSubject').value = p.subject || '';
+    $('#composeBody').value = p.body || '';
+  });
+  $('#composeSaveAsBtn').addEventListener('click', async () => {
+    const made = await saveAsPreset('email', { subject: $('#composeSubject').value, body: $('#composeBody').value });
+    if (made) fillPresetSelect($('#composePreset'), 'email', made.id);
+  });
 
   // Sends in batches of 8 (each request must finish inside the server's
   // 10-second limit); the modal shows live progress and can be stopped
@@ -2005,6 +2031,30 @@
   }
 
   $('#cancelImportBtn').addEventListener('click', () => { $('#mappingCard').hidden = true; pendingImport = null; });
+  // True while an import is being written. The page will not reload itself for
+  // an update meanwhile, and closing the tab asks first: the batches already
+  // written are kept, but the rest of the file exists only in this page.
+  let importRunning = false;
+  window.addEventListener('beforeunload', (e) => {
+    if (!importRunning) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+  // A batch that met a busy moment (someone else saving, the store slow to
+  // answer, a dropped connection) is sent again, a few times, before giving up.
+  // Sending one again is safe: anyone it already added is simply "already in
+  // your list" the second time.
+  const retryable = (err) => err && (err.retry || [409, 502, 503, 504].includes(err.status) || err instanceof TypeError);
+  async function commitBatch(body) {
+    for (let attempt = 1; ; attempt++) {
+      try { return await api('/api/import/commit', { method: 'POST', body }); }
+      catch (err) {
+        if (attempt >= 4 || !retryable(err)) throw err;
+        await new Promise((r) => setTimeout(r, 800 * attempt));
+      }
+    }
+  }
+
   $('#commitImportBtn').addEventListener('click', async () => {
     if (!pendingImport) return;
     const mapping = currentMapping();
@@ -2021,20 +2071,23 @@
     const { rows, lines, repeats } = splitRepeats(pendingImport.rows, pendingImport.lines, mapping);
     totals.duplicate += repeats;
     let done = 0;
+    importRunning = true;
     try {
       for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
         if (rows.length > IMPORT_ROW_BATCH) btn.textContent = `Importing… ${Math.min(i + IMPORT_ROW_BATCH, rows.length).toLocaleString()} / ${rows.length.toLocaleString()}`;
-        const r = await api('/api/import/commit', { method: 'POST', body: {
+        const r = await commitBatch({
           rows: rows.slice(i, i + IMPORT_ROW_BATCH), lines: lines.slice(i, i + IMPORT_ROW_BATCH), headerless: pendingImport.headerless,
           mapping, source: pendingImport.source, updateExisting: $('#importUpdateExisting').checked,
-        }});
+        });
         for (const k of Object.keys(totals)) totals[k] += r[k] || 0;
         done = Math.min(i + IMPORT_ROW_BATCH, rows.length);
       }
       $('#mappingCard').hidden = true;
       pendingImport = null;
+      importRunning = false;
+      await refresh().catch(() => {});
+      totals.onList = state ? state.candidates.length : null;
       showImportResult(totals);
-      await refresh();
       $('#importResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (err) {
       // Say exactly what already went in, and leave the rest ready to retry.
@@ -2048,6 +2101,7 @@
       }
       btn.textContent = label;
     } finally {
+      importRunning = false;
       delete btn.dataset.busy;
       btn.disabled = !pendingImport;
       $('#importUpdateExisting').disabled = false;
@@ -2251,13 +2305,16 @@
     if (t.existing) bits.push(`${t.existing.toLocaleString()} already in your list${t.updated ? ` (${t.updated.toLocaleString()} of them updated with new details)` : ''}`);
     if (t.duplicate) bits.push(`${t.duplicate.toLocaleString()} repeated in the file`);
     if (t.invalid) bits.push(`${t.invalid.toLocaleString()} without a usable email`);
+    if (t.onList != null) bits.push(`your list now has ${t.onList.toLocaleString()} candidates`);
     el.className = `notice ${note ? 'warn' : good ? 'ok' : 'warn'}`;
     el.innerHTML = `<span class="notice-ico">${icon(good && !note ? 'checkcircle' : 'alert', 16)}</span><div>${bits.join(' · ')}` +
       (note ? `<br><span class="small">${esc(note)}</span>` : '') +
       (!note && !t.added && t.existing ? '<br><span class="small">Nothing was added because every address in the file is already in your candidate list.</span>' : '') +
       `</div><button class="btn notice-action" id="viewCandidatesBtn">View candidates</button>`;
     el.hidden = false;
-    $('#viewCandidatesBtn').addEventListener('click', () => show('candidates'));
+    // Newest first with nothing filtered, so the people just imported are the
+    // first thing on screen — not on page 70 of a list in the order added.
+    $('#viewCandidatesBtn').addEventListener('click', () => { show('candidates'); page = 0; openSegment({ sort: 'newest' }); });
     if (note) return;
     toast(t.added ? `Imported ${t.added.toLocaleString()} candidate${t.added === 1 ? '' : 's'}.`
       : t.updated ? `Updated ${t.updated.toLocaleString()} existing candidate${t.updated === 1 ? '' : 's'}.`
@@ -2481,7 +2538,7 @@
   const debouncedPreview = debounce(renderTemplatePreview, 200);
   $('#previewCandidate').addEventListener('change', () => { renderTemplatePreview(); renderFollowUpPreview(); });
 
-  $$('.token:not(.fu-token):not(.tx-token)').forEach((btn) => btn.addEventListener('click', () => {
+  $$('.tpl-token').forEach((btn) => btn.addEventListener('click', () => {
     const ta = $('#tplBody');
     const t = btn.dataset.token;
     const start = ta.selectionStart ?? ta.value.length;
@@ -2493,22 +2550,213 @@
   }));
 
   $('#saveTemplateBtn').addEventListener('click', async () => {
+    const p = currentPreset('email');
+    if (!p) return;
     try {
-      await api('/api/template', { method: 'POST', body: { subject: $('#tplSubject').value, body: $('#tplBody').value } });
+      await api(`/api/templates/email/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { subject: $('#tplSubject').value, body: $('#tplBody').value } });
       setTemplateDirty(false);
-      toast('Template saved — it’s now the default for all outreach.');
+      toast(p.id === defaultPresetId('email')
+        ? `“${p.name}” saved — the send window opens with it.`
+        : `“${p.name}” saved. Pick it under Template when you send.`);
       await refresh();
     } catch (err) { oops(err); }
   });
   $('#resetTemplateBtn').addEventListener('click', async () => {
+    if (!confirm('Put the starter email back into your default template? Your current wording of it is replaced.')) return;
     try {
       const r = await api('/api/template/reset', { method: 'POST' });
       $('#tplSubject').value = r.template.subject;
       $('#tplBody').value = r.template.body;
       setTemplateDirty(false);
       renderTemplatePreview();
-      } catch (err) { oops(err); }
+      await refresh();
+    } catch (err) { oops(err); }
   });
+
+  // ---------------- Candidate list backups ----------------
+  // The list is copied to a separate backup every day by the server. From
+  // here: a spreadsheet of everyone, a copy on demand, and "restore missing",
+  // which only ever adds back people who are not on the list now.
+  function renderBackups() {
+    if (!state) return;
+    const list = state.backups || [];
+    const n = state.candidates.length;
+    const newest = list[0];
+    $('#backupBadge').textContent = newest ? `last backup ${timeAgo(newest.at)}` : 'first backup today';
+    $('#backupSummary').textContent = newest
+      ? `${n.toLocaleString()} candidates on your list. They are saved on the server as you work, and copied to a separate backup every day — the last ${list.length === 1 ? 'copy' : `${list.length} copies`} are kept.`
+      : `${n.toLocaleString()} candidates on your list. They are saved on the server as you work; the first daily backup is made within the next few minutes, or press Back up now.`;
+    const html = list.map((b) => `<li><span class="when">${esc(new Date(b.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}</span>` +
+      `<span class="muted">${Number(b.count || 0).toLocaleString()} candidates · ${b.reason === 'daily' ? 'daily' : 'made by hand'}</span>` +
+      `<button class="btn-link" data-restore="${esc(b.key)}">Restore missing</button></li>`).join('');
+    const ul = $('#backupList');
+    if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
+  }
+  $('#backupNowBtn').addEventListener('click', async () => {
+    const btn = $('#backupNowBtn');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/backups', { method: 'POST' });
+      state.backups = r.backups;
+      renderBackups();
+      toast(`Backed up ${r.backup.count.toLocaleString()} candidates.`);
+    } catch (err) { oops(err); }
+    finally { btn.disabled = false; }
+  });
+  $('#backupList').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-restore]');
+    if (!btn) return;
+    try {
+      const check = await api('/api/backups/restore', { method: 'POST', body: { key: btn.dataset.restore, dryRun: true } });
+      if (!check.missing) { toast('Everyone in that backup is already on your list — nothing to restore.'); return; }
+      if (!confirm(`${check.missing.toLocaleString()} ${check.missing === 1 ? 'person in this backup is' : 'people in this backup are'} not on your list now. Add them back? Nobody already on the list is changed.`)) return;
+      const r = await api('/api/backups/restore', { method: 'POST', body: { key: btn.dataset.restore } });
+      toast(`Restored ${r.restored.toLocaleString()} candidate${r.restored === 1 ? '' : 's'}.`);
+      await refresh();
+    } catch (err) { oops(err); }
+  });
+
+  // ---------------- Saved templates ----------------
+  // Any number of named emails and texts, kept on the server with the team.
+  // Each Settings editor shows one of them at a time; the send windows offer
+  // them all. One of each kind is the default: what the send window opens
+  // with, and what the queue uses when nothing else was chosen.
+  const presetShown = { email: '', text: '' };
+  function presetsOf(kind) { return (state && state.templates && state.templates[kind]) || []; }
+  function defaultPresetId(kind) { return (state && state.templates && state.templates.defaults && state.templates.defaults[kind]) || ''; }
+  function presetById(kind, id) { return presetsOf(kind).find((p) => p.id === id) || null; }
+  function currentPreset(kind) {
+    if (!presetById(kind, presetShown[kind])) presetShown[kind] = defaultPresetId(kind);
+    return presetById(kind, presetShown[kind]);
+  }
+  function presetOptions(kind, selectedId) {
+    const def = defaultPresetId(kind);
+    return presetsOf(kind).map((p) =>
+      `<option value="${esc(p.id)}"${p.id === selectedId ? ' selected' : ''}>${esc(p.name)}${p.id === def ? ' — default' : ''}</option>`).join('');
+  }
+  function fillPresetSelect(sel, kind, selectedId) {
+    const html = presetOptions(kind, selectedId);
+    if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+    sel.value = selectedId;
+  }
+  // The row above an editor: the picker, and what can be done to the one shown.
+  function renderPresetBar(kind) {
+    const pre = kind === 'email' ? 'tpl' : 'tx';
+    const p = currentPreset(kind);
+    if (!p) return;
+    const isDefault = p.id === defaultPresetId(kind);
+    fillPresetSelect($(`#${pre}Preset`), kind, p.id);
+    $(`#${pre}PresetDefault`).hidden = isDefault;
+    $(`#${pre}PresetDelete`).hidden = isDefault;
+    $(`#${pre}PresetNote`).textContent = isDefault
+      ? `The ${kind === 'email' ? 'send window' : 'text composer'} opens with this one.`
+      : (p.updatedAt ? `Saved ${timeAgo(p.updatedAt)}` : '');
+    // "Restore starter text" belongs to the default only.
+    $(kind === 'email' ? '#resetTemplateBtn' : '#txReset').hidden = !isDefault;
+    $(kind === 'email' ? '#saveTemplateBtn' : '#txSave').textContent =
+      `${kind === 'email' ? 'Save template' : 'Save message'}${(kind === 'email' ? templateDirty : textTemplateDirty) ? ' •' : ''}`;
+  }
+  const presetDirty = (kind) => (kind === 'email' ? templateDirty : textTemplateDirty);
+  function setPresetDirty(kind, d) {
+    if (kind === 'email') setTemplateDirty(d);
+    else { textTemplateDirty = d; $('#txSave').textContent = d ? 'Save message •' : 'Save message'; }
+  }
+  function loadPresetIntoEditor(kind) {
+    const p = currentPreset(kind);
+    if (!p) return;
+    if (kind === 'email') {
+      $('#tplSubject').value = p.subject || '';
+      $('#tplBody').value = p.body || '';
+      renderTemplatePreview();
+    } else {
+      $('#txBody').value = p.body || '';
+      renderTextPreview();
+    }
+  }
+  function askName(title, suggested) {
+    const name = (prompt(title, suggested) || '').replace(/\s+/g, ' ').trim();
+    return name.slice(0, 60);
+  }
+  function suggestName(kind) {
+    const base = kind === 'email' ? 'New email' : 'New text';
+    const taken = new Set(presetsOf(kind).map((p) => p.name.toLowerCase()));
+    for (let i = 1; ; i++) { const n = i === 1 ? base : `${base} ${i}`; if (!taken.has(n.toLowerCase())) return n; }
+  }
+  // Save what is in front of you as a new template. Used by the editors and
+  // by both send windows; returns the new template, or null.
+  async function saveAsPreset(kind, words) {
+    const name = askName(`Name this ${kind === 'email' ? 'email' : 'text'} template:`, suggestName(kind));
+    if (!name) return null;
+    try {
+      const r = await api(`/api/templates/${kind}`, { method: 'POST', body: { name, ...words } });
+      state.templates = r.templates;
+      toast(`Saved as “${r.preset.name}”. It is in the Template list whenever you send.`);
+      refresh().catch(() => {});
+      return r.preset;
+    } catch (err) { oops(err); return null; }
+  }
+  for (const kind of ['email', 'text']) {
+    const pre = kind === 'email' ? 'tpl' : 'tx';
+    $(`#${pre}Preset`).addEventListener('change', (e) => {
+      const next = e.target.value;
+      const was = currentPreset(kind);
+      if (presetDirty(kind) && was && !confirm(`Discard your unsaved changes to “${was.name}”?`)) {
+        e.target.value = was.id;
+        return;
+      }
+      presetShown[kind] = next;
+      setPresetDirty(kind, false);
+      loadPresetIntoEditor(kind);
+      renderPresetBar(kind);
+    });
+    $(`#${pre}PresetNew`).addEventListener('click', async () => {
+      const words = kind === 'email'
+        ? { subject: $('#tplSubject').value, body: $('#tplBody').value }
+        : { body: $('#txBody').value };
+      const made = await saveAsPreset(kind, words);
+      if (!made) return;
+      presetShown[kind] = made.id;
+      setPresetDirty(kind, false);
+      renderPresetBar(kind);
+    });
+    $(`#${pre}PresetRename`).addEventListener('click', async () => {
+      const p = currentPreset(kind);
+      if (!p) return;
+      const name = askName('Rename this template:', p.name);
+      if (!name || name === p.name) return;
+      try {
+        const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { name } });
+        state.templates = r.templates;
+        renderPresetBar(kind);
+        toast(`Renamed to “${name}”.`);
+      } catch (err) { oops(err); }
+    });
+    $(`#${pre}PresetDefault`).addEventListener('click', async () => {
+      const p = currentPreset(kind);
+      if (!p) return;
+      if (presetDirty(kind) && !confirm(`“${p.name}” has unsaved changes. Make the saved version the default anyway?`)) return;
+      try {
+        const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}/default`, { method: 'POST' });
+        state.templates = r.templates;
+        renderPresetBar(kind);
+        toast(`“${p.name}” is now the default — the ${kind === 'email' ? 'send window' : 'text composer'} opens with it.`);
+        await refresh();
+      } catch (err) { oops(err); }
+    });
+    $(`#${pre}PresetDelete`).addEventListener('click', async () => {
+      const p = currentPreset(kind);
+      if (!p || !confirm(`Delete the template “${p.name}”? Messages already queued with it still go out as written.`)) return;
+      try {
+        const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+        state.templates = r.templates;
+        presetShown[kind] = defaultPresetId(kind);
+        setPresetDirty(kind, false);
+        loadPresetIntoEditor(kind);
+        renderPresetBar(kind);
+        toast(`Deleted “${p.name}”.`);
+      } catch (err) { oops(err); }
+    });
+  }
 
   function debounce(fn, ms) {
     let t;
@@ -2596,21 +2844,24 @@
   let textComposeIds = [];
   let textComposeThenEmail = null;
 
-  function openTextCompose(ids, { thenEmail = null } = {}) {
-    const people = state.candidates.filter((c) => ids.includes(c.id) && textPhoneOf(c));
+  function openTextCompose(ids, { thenEmail = null, title = '' } = {}) {
+    const want = new Set(ids);
+    const people = state.candidates.filter((c) => want.has(c.id) && textPhoneOf(c));
     if (!people.length) {
       toast('None of those people have a phone number yet — add one from the Text column.', true);
       return;
     }
     textComposeIds = people.map((c) => c.id);
     textComposeThenEmail = thenEmail;
-    $('#textComposeTitle').textContent = people.length === 1
+    $('#textComposeTitle').textContent = title || (people.length === 1
       ? `Text ${people[0].name || prettyPhone(textPhoneOf(people[0]))}`
-      : `Text ${people.length} people`;
+      : `Text ${people.length.toLocaleString()} people`);
     $('#textComposeTo').innerHTML = people.slice(0, 12).map((c) =>
       `<span class="to-chip">${esc(c.name || 'Unnamed')} <span class="muted">${esc(prettyPhone(textPhoneOf(c)))}</span></span>`).join('')
       + (people.length > 12 ? `<span class="to-chip muted">+${people.length - 12} more</span>` : '');
-    $('#textComposeBody').value = (state.texting && state.texting.template && state.texting.template.body) || '';
+    const def = presetById('text', defaultPresetId('text'));
+    $('#textComposeBody').value = (def && def.body) || (state.texting && state.texting.template && state.texting.template.body) || '';
+    fillPresetSelect($('#textComposePreset'), 'text', def ? def.id : '');
     $('#textComposeNow').checked = false;   // never sticky between sends
     openModal('#textComposeModal');
     renderTextComposePreview();
@@ -2643,6 +2894,16 @@
   }
 
   $('#textComposeBody').addEventListener('input', renderTextComposePreview);
+  $('#textComposePreset').addEventListener('change', (e) => {
+    const p = presetById('text', e.target.value);
+    if (!p) return;
+    $('#textComposeBody').value = p.body || '';
+    renderTextComposePreview();
+  });
+  $('#textComposeSaveAsBtn').addEventListener('click', async () => {
+    const made = await saveAsPreset('text', { body: $('#textComposeBody').value });
+    if (made) fillPresetSelect($('#textComposePreset'), 'text', made.id);
+  });
   $('#textComposeNow').addEventListener('change', renderTextComposePreview);
   $$('.tc-token').forEach((b) => b.addEventListener('click', () => {
     const el = $('#textComposeBody');
@@ -3324,7 +3585,12 @@
       ? 'A separate secret from your dashboard password. Generating a new one stops the old Mac until you update its config.'
       : 'Generate a token, then paste it into ~/.wp-relay/config.json on the Mac Studio.';
 
-    if (!textTemplateDirty && t.template) $('#txBody').value = t.template.body || '';
+    if (!textTemplateDirty) {
+      const p = currentPreset('text');
+      if (p) $('#txBody').value = p.body || '';
+      else if (t.template) $('#txBody').value = t.template.body || '';
+    }
+    renderPresetBar('text');
     // Only the focused field was protected, so typing a new pace and tabbing to
     // the next box lost the first one the moment anything else moved — which is
     // exactly when you adjust the pace, mid-send. These live in Settings with
@@ -3441,27 +3707,32 @@
     } catch (err) { oops(err); }
   });
 
-  $('#txBody').addEventListener('input', () => { textTemplateDirty = true; renderTextPreview(); });
+  $('#txBody').addEventListener('input', () => { setPresetDirty('text', true); renderTextPreview(); });
   $$('.tx-token').forEach((b) => b.addEventListener('click', () => {
     const el = $('#txBody');
     const at = el.selectionStart ?? el.value.length;
     el.value = el.value.slice(0, at) + b.dataset.txToken + el.value.slice(el.selectionEnd ?? at);
     el.focus();
     el.selectionStart = el.selectionEnd = at + b.dataset.txToken.length;
-    textTemplateDirty = true;
+    setPresetDirty('text', true);
     renderTextPreview();
   }));
 
   $('#txSave').addEventListener('click', async () => {
+    const p = currentPreset('text');
+    if (!p) return;
     try {
-      await api('/api/texts/template', { method: 'POST', body: { body: $('#txBody').value } });
-      textTemplateDirty = false;
-      toast('Message saved.');
+      await api(`/api/templates/text/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { body: $('#txBody').value } });
+      setPresetDirty('text', false);
+      toast(p.id === defaultPresetId('text')
+        ? `“${p.name}” saved — the text composer opens with it.`
+        : `“${p.name}” saved. Pick it under Template when you text.`);
       await refresh();
     } catch (err) { oops(err); }
   });
 
   $('#txReset').addEventListener('click', async () => {
+    if (!confirm('Put the starter text back into your default text? Your current wording of it is replaced.')) return;
     try {
       const r = await api('/api/texts/template/reset', { method: 'POST' });
       $('#txBody').value = r.textTemplate.body;
@@ -3489,24 +3760,12 @@
     } catch (err) { oops(err); }
   });
 
-  $('#textSendAllBtn').addEventListener('click', async () => {
+  // Text everyone: through the composer, so the message can be chosen from
+  // the saved texts and read before anything is queued.
+  $('#textSendAllBtn').addEventListener('click', () => {
     const ids = textableIds();
-    const q = (state.texting && state.texting.queue) || {};
-    if (!q.relay || !q.relay.online) {
-      if (!confirm('The Mac relay is offline, so nothing will send until it is back. Queue these texts anyway?')) return;
-    } else if (!confirm(`Text ${ids.length} ${ids.length === 1 ? 'person' : 'people'}? They go out one at a time, only during daytime hours where each person lives.`)) {
-      return;
-    }
-    try {
-      const r = await api('/api/texts/queue', { method: 'POST', body: { ids } });
-      const skip = r.skipped || {};
-      const notes = [];
-      if (skip.noPhone) notes.push(`${skip.noPhone} had no usable number`);
-      if (skip.optedOut) notes.push(`${skip.optedOut} asked to stop`);
-      if (skip.alreadyTexted) notes.push(`${skip.alreadyTexted} were texted already`);
-      toast(`${r.added} queued${notes.length ? ` · ${notes.join(', ')}` : ''}.`);
-      await refresh();
-    } catch (err) { oops(err); }
+    if (!ids.length) { toast('Nobody with a number is waiting for a text.', true); return; }
+    openTextCompose(ids, { title: `Text everyone with a number (${ids.length.toLocaleString()})` });
   });
 
   $('#textStopBtn').addEventListener('click', async () => {
@@ -3613,6 +3872,7 @@
   });
 
   function renderSettings() {
+    renderBackups();
     renderTeamSettings();
     if (!teamsRefreshedAt || Date.now() - teamsRefreshedAt > 30000) {
       teamsRefreshedAt = Date.now();
@@ -3847,6 +4107,7 @@
   // through, a dialog, a half-written message, an edit not yet saved.
   function somethingInFlight() {
     if (!state) return true;                              // nothing known yet
+    if (importRunning) return true;
     if (state.queue && state.queue.active) return true;
     if (state.texting && state.texting.queue && state.texting.queue.active) return true;
     if ($('.modal-backdrop:not([hidden])')) return true;
@@ -4150,9 +4411,11 @@
     renderSettings();
     // Only prime the template editor when there are no unsaved edits.
     if (!templateDirty) {
-      $('#tplSubject').value = state.template.subject;
-      $('#tplBody').value = state.template.body;
+      const p = currentPreset('email');
+      $('#tplSubject').value = p ? p.subject : state.template.subject;
+      $('#tplBody').value = p ? p.body : state.template.body;
     }
+    renderPresetBar('email');
     renderAttachments();
     renderTemplatePreview();
     renderFollowUpEditor();

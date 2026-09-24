@@ -657,6 +657,20 @@
           </div>
         </div>
 
+        <h2 class="settings-title">Candidate list backups</h2>
+        <div class="card backup-card" id="backupCard">
+          <div class="card-head">
+            <h2><span class="card-ico tone-green" data-icon="lock" data-size="15"></span>Kept safe</h2>
+            <span class="badge tint-mint" id="backupBadge"></span>
+          </div>
+          <div class="hint" id="backupSummary">Your candidates are stored on the server and copied to a separate backup every day.</div>
+          <div class="backup-actions">
+            <a class="btn" id="exportCandidatesBtn" href="/api/candidates/export" download><span data-icon="download" data-size="14"></span> Download all candidates (CSV)</a>
+            <button class="btn" id="backupNowBtn" type="button">Back up now</button>
+          </div>
+          <ul class="backup-list" id="backupList"></ul>
+        </div>
+
         <h2 class="settings-title">Accounts &amp; connections</h2>
         <div class="settings-grid">
           <div class="card">
@@ -744,16 +758,29 @@
         <div class="two-col template-cols">
           <div class="card">
             <div class="card-head"><h2><span class="card-ico tone-blue" data-icon="doc" data-size="15"></span>Edit</h2></div>
+            <div class="preset-bar">
+              <label class="label" for="tplPreset">Saved templates</label>
+              <div class="preset-row">
+                <select id="tplPreset" class="input select" data-no-dirty></select>
+                <button class="btn" id="tplPresetNew" title="Save what is in the editor as a new template">Save as new…</button>
+              </div>
+              <div class="preset-links">
+                <button class="btn-link" id="tplPresetRename">Rename</button>
+                <button class="btn-link" id="tplPresetDefault">Make default</button>
+                <button class="btn-link link-danger" id="tplPresetDelete">Delete</button>
+                <span class="muted small" id="tplPresetNote"></span>
+              </div>
+            </div>
             <label class="label">Subject</label>
-            <input type="text" id="tplSubject" class="input">
+            <input type="text" id="tplSubject" class="input" data-no-dirty>
             <label class="label">Body</label>
             <textarea id="tplBody" class="input textarea" rows="11"></textarea>
             <div class="token-row">
               <span class="muted small">Insert:</span>
-              <button class="token" data-token="{{firstName}}">first name</button>
-              <button class="token" data-token="{{fullName}}">full name</button>
-              <button class="token" data-token="{{role}}">role</button>
-              <button class="token" data-token="{{company}}">company</button>
+              <button class="token tpl-token" data-token="{{firstName}}">first name</button>
+              <button class="token tpl-token" data-token="{{fullName}}">full name</button>
+              <button class="token tpl-token" data-token="{{role}}">role</button>
+              <button class="token tpl-token" data-token="{{company}}">company</button>
             </div>
             <div class="attach-block">
               <label class="label">Attachments <span class="muted small">— sent with every email</span></label>
@@ -766,7 +793,7 @@
               </div>
             </div>
             <div class="card-actions">
-              <button class="btn" id="resetTemplateBtn">Reset to default</button>
+              <button class="btn" id="resetTemplateBtn">Restore starter text</button>
               <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
             </div>
           </div>
@@ -795,7 +822,7 @@
               <span class="badge tint-mint" id="followUpDueBadge"></span>
             </div>
             <label class="label">Subject</label>
-            <input type="text" id="fuSubject" class="input">
+            <input type="text" id="fuSubject" class="input" data-no-dirty>
             <label class="label">Body</label>
             <textarea id="fuBody" class="input textarea" rows="7"></textarea>
             <div class="token-row">
@@ -898,6 +925,19 @@
         <div class="two-col template-cols">
           <div class="card">
             <div class="card-head"><h2><span class="card-ico tone-green" data-icon="doc" data-size="15"></span>Message</h2></div>
+            <div class="preset-bar">
+              <label class="label" for="txPreset">Saved texts</label>
+              <div class="preset-row">
+                <select id="txPreset" class="input select" data-no-dirty></select>
+                <button class="btn" id="txPresetNew" title="Save what is in the editor as a new text">Save as new…</button>
+              </div>
+              <div class="preset-links">
+                <button class="btn-link" id="txPresetRename">Rename</button>
+                <button class="btn-link" id="txPresetDefault">Make default</button>
+                <button class="btn-link link-danger" id="txPresetDelete">Delete</button>
+                <span class="muted small" id="txPresetNote"></span>
+              </div>
+            </div>
             <textarea id="txBody" class="input textarea" rows="6" placeholder="Hi {{firstName}}…"></textarea>
             <div class="token-row">
               <span class="muted small">Insert:</span>
@@ -906,7 +946,7 @@
               <button class="token tx-token" data-tx-token="{{company}}">company</button>
             </div>
             <div class="card-actions">
-              <button class="btn" id="txReset">Reset to default</button>
+              <button class="btn" id="txReset">Restore starter text</button>
               <button class="btn btn-primary" id="txSave">Save message</button>
             </div>
           </div>
@@ -934,6 +974,10 @@
     </div>
     <div class="modal-body">
       <div class="compose-to" id="composeTo"></div>
+      <div class="compose-preset" id="composePresetRow">
+        <label class="label" for="composePreset">Template</label>
+        <select id="composePreset" class="input select"></select>
+      </div>
       <label class="label">Subject</label>
       <input type="text" id="composeSubject" class="input">
       <label class="label">Message <span class="muted small">(placeholders are filled per recipient)</span></label>
@@ -944,6 +988,7 @@
       <div class="send-progress" id="sendProgress" hidden></div>
     </div>
     <div class="modal-foot">
+      <button class="btn-link foot-left" id="composeSaveAsBtn" title="Keep this subject and message as a template to use again">Save as template…</button>
       <button class="btn" id="composeCancelBtn" data-close>Cancel</button>
       <button class="btn btn-primary" id="composeSendBtn">Send</button>
     </div>
@@ -999,6 +1044,10 @@
     </div>
     <div class="modal-body">
       <div class="compose-to" id="textComposeTo"></div>
+      <div class="compose-preset">
+        <label class="label" for="textComposePreset">Template</label>
+        <select id="textComposePreset" class="input select"></select>
+      </div>
       <label class="label">Message <span class="muted small">(placeholders are filled per person)</span></label>
       <textarea id="textComposeBody" class="input textarea" rows="6"></textarea>
       <div class="token-row">
@@ -1012,6 +1061,7 @@
       <div class="hint" id="textComposeHint"></div>
     </div>
     <div class="modal-foot">
+      <button class="btn-link foot-left" id="textComposeSaveAsBtn" title="Keep this message as a template to use again">Save as template…</button>
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="textComposeSendBtn">Send text</button>
     </div>

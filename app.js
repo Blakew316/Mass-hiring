@@ -26,6 +26,8 @@ const address = require('./lib/email-address');
 const textQueue = require('./lib/text-queue');
 const phone = require('./lib/phone');
 const priority = require('./lib/priority');
+const backups = require('./lib/backups');
+const presets = require('./lib/presets');
 const crypto = require('crypto');
 const { renderEmail, renderText, escapeHtml } = require('./lib/template');
 
@@ -40,7 +42,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(auth.middleware);
 
 const asyncRoute = (fn) => (req, res) => fn(req, res).catch((err) => {
-  res.status(400).json({ error: err.message || String(err) });
+  // A conflict (409) or a storage failure is not the caller's mistake, and the
+  // page treats it differently from a bad request.
+  const status = err.status === 409 || err.guard || err.storage ? (err.status === 409 ? 409 : 503) : 400;
+  res.status(status).json({ error: err.message || String(err), retry: status !== 400 });
 });
 
 // ---------- Teams and sign-in ----------
@@ -359,12 +364,13 @@ app.get('/api/state', asyncRoute(async (req, res) => {
   // Four independent reads. On Netlify Blobs each one is its own round trip, so
   // awaiting them in a line made this route as slow as the sum of them; nothing
   // here depends on anything else here.
-  const [googleStatus, textQ, emailQ, relay, storageBackend] = await Promise.all([
+  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList] = await Promise.all([
     google.status(db.settings),
     textQueue.loadQ(),
     queue.loadQ(),
     storage.getJson('relay').catch(() => null),
     storage.backend(),
+    backups.list().catch(() => []),
   ]);
   // Derived from the status above rather than fetching it a second time.
   const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
@@ -374,6 +380,7 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     events: feedWindow(db.events),
     lastError: lastError ? lastError.message : '',
     template: db.template,
+    templates: presets.publicView(db),
     // Whether this team has written its own outreach letter yet, for the
     // setup checklist. A team old enough to predate the flag counts as done.
     templateEdited: !db.settings.templateSeeded,
@@ -384,6 +391,7 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     stats: stats(db),
     baseUrl: google.baseUrl(),
     storage: storageBackend,
+    backups: backupList.map((b) => ({ key: b.key, at: b.at, reason: b.reason, count: b.count })),
     auth: { required: auth.required() },
     team: teamPublic(req.team),
     queue: queue.status(emailQ, db.settings, sendingNow.from),
@@ -460,16 +468,28 @@ const SETTING_REASONS = {
 };
 
 app.post('/api/settings', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  const before = { ...db.settings };
-  const sender = (await mailer.sendStatus(db.settings)).from;
-  const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
-    'googleClientId', 'googleClientSecret', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone',
-    ...TEXT_NUMERIC, 'textSunday'];
+  const sender = (await mailer.sendStatus((await store.load()).settings)).from;
+  let before = null;
+  let adjusted = [];
+  const db = await store.update((d) => { before = { ...d.settings }; adjusted = applySettings(d, req.body, sender); });
+  // A raised daily limit lifts the daily-limit pause at once instead of waiting
+  // it out; new mail credentials lift the "not set up" pause.
+  const kinds = [];
+  if (db.settings.dailyLimit !== before.dailyLimit) kinds.push('daily');
+  if (['smtpUser', 'smtpPass', 'googleClientId', 'googleClientSecret'].some((k) => db.settings[k] !== before[k])) kinds.push('not-ready');
+  if (kinds.length) await queue.updateQ((f) => queue.clearPause(f, kinds) || false);
+  res.json({ ok: true, settings: maskedSettings(db.settings, sender), adjusted });
+}));
+
+const SETTINGS_ALLOWED = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
+  'googleClientId', 'googleClientSecret', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone',
+  ...TEXT_NUMERIC, 'textSunday'];
+// Apply a settings form to a document; returns what had to be adjusted.
+function applySettings(db, body, sender) {
   const adjusted = [];
-  for (const k of allowed) {
-    if (!(k in req.body) || req.body[k] === '••••••••') continue;
-    const v = req.body[k];
+  for (const k of SETTINGS_ALLOWED) {
+    if (!(k in body) || body[k] === '••••••••') continue;
+    const v = body[k];
     let val = typeof v === 'boolean' ? v : String(v ?? '').trim();
     if (k in NUMERIC_SETTINGS && val !== '') {
       const range = NUMERIC_SETTINGS[k];
@@ -483,34 +503,71 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
     }
     db.settings[k] = val;
   }
-  await store.save(db);
-  // A raised daily limit lifts the daily-limit pause at once instead of waiting
-  // it out; new mail credentials lift the "not set up" pause.
-  const kinds = [];
-  if (db.settings.dailyLimit !== before.dailyLimit) kinds.push('daily');
-  if (['smtpUser', 'smtpPass', 'googleClientId', 'googleClientSecret'].some((k) => db.settings[k] !== before[k])) kinds.push('not-ready');
-  if (kinds.length) await queue.updateQ((f) => queue.clearPause(f, kinds) || false);
-  res.json({ ok: true, settings: maskedSettings(db.settings, sender), adjusted });
-}));
+  return adjusted;
+}
 
+// The default email: what the send window opens with and the queue falls
+// back to. Kept for the editors and anything else that knows only one.
 app.post('/api/template', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  db.template = {
-    ...db.template,   // attachments are managed by their own routes
-    subject: String(req.body.subject ?? db.template.subject),
-    body: String(req.body.body ?? db.template.body),
-  };
-  // Somebody has now written this team's letter, whatever it says.
-  db.settings.templateSeeded = false;
-  await store.save(db);
-  res.json({ ok: true, template: db.template });
+  const db = await store.update((d) => {
+    d.template = {
+      ...d.template,   // attachments are managed by their own routes
+      subject: String(req.body.subject ?? d.template.subject),
+      body: String(req.body.body ?? d.template.body),
+    };
+    // Somebody has now written this team's letter, whatever it says.
+    d.settings.templateSeeded = false;
+    touchDefault(d, 'email');
+  });
+  res.json({ ok: true, template: db.template, templates: presets.publicView(db) });
 }));
 
 app.post('/api/template/reset', asyncRoute(async (_req, res) => {
-  const db = await store.load();
-  db.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: db.template.attachments };
-  await store.save(db);
-  res.json({ ok: true, template: db.template });
+  const db = await store.update((d) => {
+    d.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: d.template.attachments };
+    touchDefault(d, 'email');
+  });
+  res.json({ ok: true, template: db.template, templates: presets.publicView(db) });
+}));
+
+function touchDefault(db, kind) {
+  const p = db[presets.KINDS[kind].list].find((x) => x.id === db.templateDefaults[kind]);
+  if (p) p.updatedAt = new Date().toISOString();
+}
+
+// ---------- Saved templates (email and text) ----------
+// Every change is a retried read-modify-write of the team's document, and the
+// answer carries the whole list, so the page never has to guess what is saved.
+const templateKind = (req) => {
+  const kind = String(req.params.kind || '');
+  if (!presets.KINDS[kind]) throw new Error('Unknown kind of template.');
+  return kind;
+};
+const templatesReply = (db, extra = {}) => ({
+  ok: true, ...extra, templates: presets.publicView(db), template: db.template, textTemplate: db.textTemplate,
+});
+app.post('/api/templates/:kind', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  let made = null;
+  const db = await store.update((d) => { made = presets.create(d, kind, req.body || {}); });
+  res.json(templatesReply(db, { preset: made }));
+}));
+app.patch('/api/templates/:kind/:id', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  let p = null;
+  const db = await store.update((d) => { p = presets.update(d, kind, req.params.id, req.body || {}); });
+  res.json(templatesReply(db, { preset: p }));
+}));
+app.post('/api/templates/:kind/:id/default', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  let p = null;
+  const db = await store.update((d) => { p = presets.setDefault(d, kind, req.params.id); });
+  res.json(templatesReply(db, { preset: p }));
+}));
+app.delete('/api/templates/:kind/:id', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  const db = await store.update((d) => { presets.remove(d, kind, req.params.id); });
+  res.json(templatesReply(db));
 }));
 
 app.post('/api/followup', asyncRoute(async (req, res) => {
@@ -827,13 +884,9 @@ app.post('/api/apollo/import', asyncRoute(async (req, res) => {
 
 // ---------- Candidates ----------
 app.post('/api/candidates', asyncRoute(async (req, res) => {
-  const db = await store.load();
   const b = req.body;
   const email = address.normalize(b.email);
   if (!email) throw new Error('A valid email address is required.');
-  if (db.candidates.some((c) => c.email.toLowerCase() === email.toLowerCase())) {
-    throw new Error('A candidate with that email already exists.');
-  }
   const c = {
     id: store.rid(),
     name: String(b.name || '').trim(),
@@ -851,24 +904,28 @@ app.post('/api/candidates', asyncRoute(async (req, res) => {
     lastEmailedAt: null,
     bookedAt: null,
   };
-  db.candidates.push(c);
-  await store.save(db);
+  await store.update((db) => {
+    if (db.candidates.some((x) => x.email.toLowerCase() === email.toLowerCase())) {
+      throw new Error('A candidate with that email already exists.');
+    }
+    db.candidates.push(c);
+  });
   res.json({ ok: true, candidate: c });
 }));
 
 app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  const c = db.candidates.find((x) => x.id === req.params.id);
-  if (!c) throw new Error('Candidate not found.');
-  const wasDeclined = c.status === 'declined';
-  const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
-  for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
-  if ('email' in req.body) {
-    const email = address.normalize(req.body.email);
-    if (!email) throw new Error('That is not a valid email address.');
-    c.email = email;
-  }
-  await store.save(db);
+  const email = 'email' in req.body ? address.normalize(req.body.email) : null;
+  if ('email' in req.body && !email) throw new Error('That is not a valid email address.');
+  let c = null;
+  let wasDeclined = false;
+  await store.update((db) => {
+    c = db.candidates.find((x) => x.id === req.params.id);
+    if (!c) throw new Error('Candidate not found.');
+    wasDeclined = c.status === 'declined';
+    const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
+    for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
+    if (email) c.email = email;
+  });
   // Marking somebody "Not interested" has to stop a text that is already
   // waiting to go out. The ranking reads the status, but the queue does not —
   // it only consults its own opt-out list — so a text queued before the change
@@ -880,12 +937,55 @@ app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
   res.json({ ok: true, candidate: c });
 }));
 
-app.delete('/api/candidates/:id', asyncRoute(async (req, res) => {
+// ---------- Keeping the list safe ----------
+// The whole list as a spreadsheet, for a copy of your own.
+const EXPORT_COLUMNS = [
+  ['First Name', 'firstName'], ['Last Name', 'lastName'], ['Email', 'email'], ['Phone', 'phone'],
+  ['Location', 'location'], ['Role', 'role'], ['Company', 'company'], ['Status', 'status'],
+  ['Notes', 'notes'], ['Source', 'source'], ['Added', 'addedAt'], ['Last emailed', 'lastEmailedAt'],
+  ['Last texted', 'lastTextedAt'], ['Last reply', 'lastReplyAt'], ['Booked', 'bookedAt'],
+];
+function csvCell(v) {
+  // Typed by strangers on a job board: a cell starting = + - @ is a formula to
+  // Excel, so it gets a leading space, which the importer trims again.
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = ` ${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+app.get('/api/candidates/export', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const idx = db.candidates.findIndex((x) => x.id === req.params.id);
-  if (idx === -1) throw new Error('Candidate not found.');
-  db.candidates.splice(idx, 1);
-  await store.save(db);
+  const lines = [EXPORT_COLUMNS.map(([h]) => h).join(',')];
+  for (const c of db.candidates) {
+    const first = c.firstName || (c.name || '').split(' ')[0] || '';
+    const last = c.lastName || (c.firstName ? '' : (c.name || '').split(' ').slice(1).join(' '));
+    lines.push(EXPORT_COLUMNS.map(([, k]) => csvCell(k === 'firstName' ? first : k === 'lastName' ? last : c[k])).join(','));
+  }
+  const team = (req.team && req.team.name ? req.team.name : 'candidates').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'candidates';
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${team}-candidates-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.set('Cache-Control', 'no-store');
+  // A byte-order mark so Excel reads accents correctly; CRLF because Excel expects it.
+  res.send(`\uFEFF${lines.join('\r\n')}\r\n`);
+}));
+
+app.get('/api/backups', asyncRoute(async (_req, res) => {
+  res.json({ ok: true, backups: await backups.list() });
+}));
+app.post('/api/backups', asyncRoute(async (_req, res) => {
+  const b = await backups.snapshot('manual');
+  res.json({ ok: true, backup: b, backups: await backups.list() });
+}));
+// Add back anybody who is in a backup and not on the list now. Never removes
+// or changes anyone already on it. dryRun says how many that would be.
+app.post('/api/backups/restore', asyncRoute(async (req, res) => {
+  const r = await backups.restoreMissing(String((req.body && req.body.key) || ''), { dryRun: Boolean(req.body && req.body.dryRun) });
+  res.json({ ok: true, ...r });
+}));
+
+app.delete('/api/candidates/:id', asyncRoute(async (req, res) => {
+  await store.update((db) => {
+    if (!store.removeCandidate(db, req.params.id)) throw new Error('Candidate not found.');
+  });
   res.json({ ok: true });
 }));
 
@@ -1130,7 +1230,7 @@ app.post('/api/relay/report', asyncRoute(async (req, res) => {
   if (out.candidateId) {
     await store.update((db) => {
       const c = db.candidates.find((x) => x.id === out.candidateId);
-      if (!c) return;
+      if (!c) return false;
       if (out.status === 'sent') {
         c.lastTextedAt = new Date().toISOString();
         advanceText(c, 'sent');
@@ -1252,18 +1352,23 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
 }));
 
 // ---------- Texting: the dashboard's own routes ----------
+// The default text, like /api/template for email.
 app.post('/api/texts/template', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  db.textTemplate = { body: String((req.body && req.body.body) || '').slice(0, 2000) };
-  await store.save(db);
-  res.json({ ok: true, textTemplate: db.textTemplate });
+  const db = await store.update((d) => {
+    d.textTemplate = { body: String((req.body && req.body.body) || '').slice(0, 2000) };
+    touchDefault(d, 'text');
+  });
+  res.json({ ok: true, textTemplate: db.textTemplate, templates: presets.publicView(db) });
 }));
 
 app.post('/api/texts/template/reset', asyncRoute(async (_req, res) => {
-  const db = await store.load();
-  db.textTemplate = structuredClone(store.DEFAULT_TEXT_TEMPLATE);
-  await store.save(db);
-  res.json({ ok: true, textTemplate: db.textTemplate });
+  const db = await store.update((d) => {
+    // Only Team Maverick's starter text introduces Blake; any other team gets
+    // the one that claims to be nobody.
+    d.textTemplate = structuredClone(tenant.isLegacy() ? store.DEFAULT_TEXT_TEMPLATE : store.NEW_TEAM_TEXT_TEMPLATE);
+    touchDefault(d, 'text');
+  });
+  res.json({ ok: true, textTemplate: db.textTemplate, templates: presets.publicView(db) });
 }));
 
 app.post('/api/texts/preview', asyncRoute(async (req, res) => {
@@ -1405,7 +1510,7 @@ app.post('/api/emails/reply', asyncRoute(async (req, res) => {
     });
     await store.update((fresh) => {
       const f = fresh.candidates.find((x) => x.id === id);
-      if (!f) return;
+      if (!f) return false;
       // A reply is a contact, so the follow-up clock restarts from here — an
       // automated nudge on top of a conversation already in progress reads as
       // nobody being home.
@@ -1551,7 +1656,7 @@ async function recordOpen(token) {
     await store.update((fresh) => {
       const fc = fresh.candidates.find((x) => x.id === id);
       // Re-checked against the fresh copy: two opens can land together.
-      if (!fc || fc.openedAt) return;
+      if (!fc || fc.openedAt) return false;
       fc.openedAt = new Date().toISOString();
       store.pushEvent(fresh, 'opened', `${fc.name || fc.email} opened your email.`, fc.id);
     });
@@ -1695,6 +1800,7 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
       if (reclassifyCandidate(c).fixed) cleaned.add(c.id);
     }
     if (cleaned.size) fresh.events = fresh.events.filter((e) => !(e.type === 'replied' && cleaned.has(e.candidateId)));
+    if (!Object.keys(results).length && !cleaned.size) return false;
   });
   for (const { c, reply } of announce) {
     const preview = (reply.text || reply.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 140);
