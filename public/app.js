@@ -473,12 +473,18 @@
   // entirely, a reload always dumped you on the Dashboard however deep into
   // Texting you were, and there was no way to send somebody a link to a page.
   let currentView = 'dashboard';
+  // Set now as well as in show(), so the first paint is already the right
+  // width rather than reflowing the moment you navigate.
+  if (mainEl) mainEl.dataset.view = currentView;
   const scrollMemory = Object.create(null);
   function show(view, { record = true } = {}) {
     if (!$(`#view-${view}`)) return;
     if (currentView !== view) scrollMemory[currentView] = mainEl ? mainEl.scrollTop : 0;
     currentView = view;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
+    // Which page this is, for the stylesheet: Candidates is a table and wants
+    // the window, everything else is capped for reading.
+    if (mainEl) mainEl.dataset.view = view;
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
     // Anything that fell behind while you were on another page is drawn now,
     // rather than on every poll for six pages at once.
@@ -1135,8 +1141,13 @@
 
   // Jump from a group straight into the table with that filter applied.
   function openSegment(patch, { label = '' } = {}) {
-    // Every group is a fresh start, not a narrowing of whatever was last set.
+    // Every group is a fresh start, not a narrowing of whatever was last set —
+    // and that includes the order. Leaving the order alone was why "Everyone"
+    // looked exactly like "Best to text next": the ranked order carried over,
+    // so the same fifty people stayed on top and only the counter moved. A
+    // group that names an order gets it; every other one gets the plain one.
     filter = 'all'; industryFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; roleFilter = '';
+    sortBy = 'default';
     if (patch.status !== undefined) filter = patch.status;
     if (patch.industry !== undefined) industryFilter = patch.industry;
     if (patch.added !== undefined) addedFilter = patch.added;

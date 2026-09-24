@@ -244,7 +244,12 @@ button, input, select, textarea { font-family: var(--font); }
 
 /* ---------------- Main / pages ---------------- */
 /* `relative` so the bell's panel can anchor to the top right of the page. */
-.main { flex: 1; padding: 28px 36px 48px; max-width: 1200px; position: relative; }
+/* Reading and form pages are capped: a settings field or a paragraph 1,600
+   pixels wide is worse, not better. A table is the opposite — every column it
+   cannot have comes out of the one holding the name and the note about why
+   this person is worth texting, so Candidates takes the whole window. */
+.main { flex: 1; min-width: 0; padding: 28px 36px 48px; max-width: 1200px; position: relative; }
+.main[data-view="candidates"] { max-width: none; padding-left: 24px; padding-right: 24px; }
 .view { display: none; }
 .view.active { display: block; animation: fadeUp 0.22s ease; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -459,14 +464,37 @@ button, input, select, textarea { font-family: var(--font); }
 .table input[type="checkbox"] { accent-color: var(--blue); width: 15px; height: 15px; cursor: pointer; }
 
 .cand-name { font-weight: 600; color: var(--navy); }
-.cand-sub { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+.cand-sub { font-size: 11.5px; line-height: 1.45; color: var(--muted); margin-top: 2px; }
 .avatar {
   width: 30px; height: 30px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 11.5px; font-weight: 700;
   margin-right: 10px; vertical-align: middle;
 }
-.name-cell { display: flex; align-items: center; }
+/* The name column has to be told to take its share. Left to the table's own
+   arithmetic it gets whatever the other nine columns leave over, which on a
+   laptop was 159px — and the line under the name, the one saying why this
+   person is worth a text, came out three words at a time over six lines.
+   A minimum on the cell's contents is what makes the table give way. */
+.name-cell { display: flex; align-items: center; min-width: 300px; }
+.name-cell > div { min-width: 0; }
+
+/* The columns that can be read at a glance give up their width first, and
+   shorten with an ellipsis rather than stacking into three lines. */
+.table td[data-col="email"] { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table td[data-col="role"], .table td[data-col="company"] { max-width: 190px; }
+.table td[data-col="text"], .table td[data-col="last"] { white-space: nowrap; }
+
+/* On a window too narrow for the note AND all nine columns, the table scrolls
+   sideways inside its own box rather than spilling across the page — and
+   nothing is hidden to make it fit, because a column that quietly disappears
+   is worse than one you have to reach for. At a normal desktop width there is
+   no scrollbar here at all. */
+#candTableWrap { overflow-x: auto; }
+/* Ten columns of 14px side padding is 280px of the row spent on nothing.
+   Three either side buys back enough to fit a 1600-wide laptop without a
+   scrollbar, and nobody has ever noticed the difference. */
+#candTableWrap .table td, #candTableWrap .table th { padding-left: 11px; padding-right: 11px; }
 .status-select {
   -webkit-appearance: none; appearance: none;
   border: none; outline: none; cursor: pointer;
