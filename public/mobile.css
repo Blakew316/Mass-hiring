@@ -619,7 +619,9 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .modal-foot { flex-wrap: wrap; }
   .modal-foot .foot-left { order: 3; flex-basis: 100%; margin: 2px 0 0; padding: 6px 0; text-align: center; }
   .preset-row { flex-wrap: wrap; }
+  .preset-row .select { flex: 1 1 100%; }
   .preset-row .btn { flex: 1 1 auto; }
+  .preset-links .muted { flex-basis: 100%; margin-left: 0; }
 
   /* ---- the notifications panel is a sheet too ----
      It was absolutely positioned at right: 36px, which is the desktop

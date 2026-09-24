@@ -2584,7 +2584,7 @@
     const newest = list[0];
     $('#backupBadge').textContent = newest ? `last backup ${timeAgo(newest.at)}` : 'first backup today';
     $('#backupSummary').textContent = newest
-      ? `${n.toLocaleString()} candidates on your list. They are saved on the server as you work, and copied to a separate backup every day — the last ${list.length === 1 ? 'copy' : `${list.length} copies`} are kept.`
+      ? `${n.toLocaleString()} candidates on your list. They are saved on the server as you work, and copied to a separate backup every day. ${list.length === 1 ? 'One backup so far' : `${list.length} backups kept`} — the newest 20 are always kept.`
       : `${n.toLocaleString()} candidates on your list. They are saved on the server as you work; the first daily backup is made within the next few minutes, or press Back up now.`;
     const html = list.map((b) => `<li><span class="when">${esc(new Date(b.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}</span>` +
       `<span class="muted">${Number(b.count || 0).toLocaleString()} candidates · ${b.reason === 'daily' ? 'daily' : 'made by hand'}</span>` +
@@ -2856,9 +2856,10 @@
     $('#textComposeTitle').textContent = title || (people.length === 1
       ? `Text ${people[0].name || prettyPhone(textPhoneOf(people[0]))}`
       : `Text ${people.length.toLocaleString()} people`);
-    $('#textComposeTo').innerHTML = people.slice(0, 12).map((c) =>
+    const shown = people.length > 12 ? 4 : 12;
+    $('#textComposeTo').innerHTML = people.slice(0, shown).map((c) =>
       `<span class="to-chip">${esc(c.name || 'Unnamed')} <span class="muted">${esc(prettyPhone(textPhoneOf(c)))}</span></span>`).join('')
-      + (people.length > 12 ? `<span class="to-chip muted">+${people.length - 12} more</span>` : '');
+      + (people.length > shown ? `<span class="to-chip muted">+${(people.length - shown).toLocaleString()} more</span>` : '');
     const def = presetById('text', defaultPresetId('text'));
     $('#textComposeBody').value = (def && def.body) || (state.texting && state.texting.template && state.texting.template.body) || '';
     fillPresetSelect($('#textComposePreset'), 'text', def ? def.id : '');
