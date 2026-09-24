@@ -1140,7 +1140,7 @@
   }
 
   // Jump from a group straight into the table with that filter applied.
-  function openSegment(patch, { label = '' } = {}) {
+  function openSegment(patch) {
     // Every group is a fresh start, not a narrowing of whatever was last set —
     // and that includes the order. Leaving the order alone was why "Everyone"
     // looked exactly like "Best to text next": the ranked order carried over,
@@ -1158,7 +1158,9 @@
     selected.clear();
     syncFilterControls();
     renderCandidates();
-    if (label) toast(`Showing ${label}.`);
+    // No toast. The list in front of you is the answer to "what am I looking
+    // at" — a note in the corner repeating the name of the tab you just
+    // pressed is one more thing to read and then dismiss.
   }
 
   // Rewriting a <select>'s options closes it under the cursor of anybody who
@@ -1242,7 +1244,7 @@
       && (v.patch.sort === undefined || v.patch.sort === sortBy);
 
     const pills = views.map((v) => `
-      <button class="view-pill${active(v) ? ' on' : ''}" data-seg='${esc(JSON.stringify(v.patch))}' data-label="${esc(v.label)}">
+      <button class="view-pill${active(v) ? ' on' : ''}" data-seg='${esc(JSON.stringify(v.patch))}'>
         ${esc(v.label)}<span class="view-n">${v.n.toLocaleString()}</span>
       </button>`).join('');
     drawOnce($('#candViews'), pills);
@@ -1292,7 +1294,7 @@
   $('#candViews').addEventListener('click', (e) => {
     const b = e.target.closest('.view-pill');
     if (!b) return;
-    openSegment(JSON.parse(b.dataset.seg), { label: b.dataset.label.toLowerCase() });
+    openSegment(JSON.parse(b.dataset.seg));
   });
 
   for (const [id, set] of [['#industryFilter', (v) => { industryFilter = v; }], ['#addedFilter', (v) => { addedFilter = v; }],
@@ -2437,8 +2439,7 @@
   $('#attachRestore').addEventListener('click', async () => {
     try {
       await api('/api/template/attachments/restore-builtin', { method: 'POST' });
-      toast('The Account Executive flyer is attached again.');
-      await refresh();
+        await refresh();
     } catch (err) { oops(err); }
   });
   $('#attachAddBtn').addEventListener('click', () => $('#attachFile').click());
@@ -2457,7 +2458,6 @@
       if (blob.size > MAX_ATTACH) throw new Error('That file is over 4 MB. Export it smaller, or as a PDF.');
       const data = await toBase64(blob);
       await api('/api/template/attachments', { method: 'POST', body: { name, data } });
-      toast(`${name} will be attached to every email.`);
       await refresh();
     } catch (err) { oops(err); }
     finally { btn.disabled = false; renderAttachments(); }
@@ -2467,8 +2467,7 @@
     if (!btn) return;
     try {
       await api(`/api/template/attachments/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
-      toast('Attachment removed — emails will go out without it.');
-      await refresh();
+        await refresh();
     } catch (err) { oops(err); }
   });
 
@@ -2508,8 +2507,7 @@
       $('#tplBody').value = r.template.body;
       setTemplateDirty(false);
       renderTemplatePreview();
-      toast('Template reset to default.');
-    } catch (err) { oops(err); }
+      } catch (err) { oops(err); }
   });
 
   function debounce(fn, ms) {
@@ -2566,8 +2564,7 @@
       $('#fuBody').value = r.followUp.body;
       setFollowUpDirty(false);
       renderFollowUpPreview();
-      toast('Follow-up email reset to the default.');
-    } catch (err) { oops(err); }
+      } catch (err) { oops(err); }
   });
   $('#tplFollowUpBtn').addEventListener('click', () => {
     if (followUpDirty) openCompose(followUpDueIds(), { subject: $('#fuSubject').value, body: $('#fuBody').value }, { followUp: true });
@@ -3470,8 +3467,7 @@
       $('#txBody').value = r.textTemplate.body;
       textTemplateDirty = false;
       renderTextPreview();
-      toast('Message reset.');
-      await refresh();
+        await refresh();
     } catch (err) { oops(err); }
   });
 

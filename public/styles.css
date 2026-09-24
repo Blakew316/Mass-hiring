@@ -244,12 +244,11 @@ button, input, select, textarea { font-family: var(--font); }
 
 /* ---------------- Main / pages ---------------- */
 /* `relative` so the bell's panel can anchor to the top right of the page. */
-/* Reading and form pages are capped: a settings field or a paragraph 1,600
-   pixels wide is worse, not better. A table is the opposite — every column it
-   cannot have comes out of the one holding the name and the note about why
-   this person is worth texting, so Candidates takes the whole window. */
-.main { flex: 1; min-width: 0; padding: 28px 36px 48px; max-width: 1200px; position: relative; }
-.main[data-view="candidates"] { max-width: none; padding-left: 24px; padding-right: 24px; }
+/* Every page uses the window. The few things inside that genuinely read
+   worse when they are stretched — an email body, a message bubble, a line of
+   prose — are bounded where they are, rather than by holding the whole page
+   back to 1,200px on a 1,900px screen. */
+.main { flex: 1; min-width: 0; padding: 28px 24px 48px; position: relative; }
 .view { display: none; }
 .view.active { display: block; animation: fadeUp 0.22s ease; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -627,6 +626,7 @@ tr:hover .row-actions { opacity: 1; }
    difference — which was most of this page. Columns pack them instead: the
    browser balances the two and nothing is left hanging. */
 .settings-grid { display: block; column-count: 2; column-gap: 14px; }
+@media (min-width: 1500px) { .settings-grid { column-count: 3; }}
 .settings-grid .card { break-inside: avoid; margin: 0 0 14px; }
 @media (max-width: 980px) { .settings-grid { column-count: 1; }}
 
@@ -1062,7 +1062,7 @@ tr.row-muted { opacity: .55; }
 .msg-search { max-width: 220px; }
 .messenger {
   display: grid;
-  grid-template-columns: 268px 1fr;
+  grid-template-columns: clamp(268px, 22%, 400px) 1fr;
   gap: 0;
   /* It is the only thing on the page now, so it takes the page: as tall as the
      window allows, floored so a short laptop still shows a usable thread and
@@ -1140,6 +1140,8 @@ tr.row-muted { opacity: .55; }
   padding: 8px 13px; border-radius: 18px;
   font-size: 13.5px; line-height: 1.42;
   white-space: pre-wrap; word-break: break-word;
+  /* A line of a text message does not read better for being 1,200px long. */
+  max-width: 640px;
 }
 .msg.in .bubble { background: var(--bubble-in); color: var(--ink); border-bottom-left-radius: 5px; }
 .msg.out .bubble { background: linear-gradient(var(--bubble-out-top), var(--bubble-out-bottom)); color: #fff; border-bottom-right-radius: 5px; }
