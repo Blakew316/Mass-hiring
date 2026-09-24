@@ -642,7 +642,10 @@ app.post('/api/import/csv', asyncRoute(async (req, res) => {
 //   existing   – already in the list (optionally enriched with blank fields)
 //   duplicate  – the same address earlier in this same file
 //   invalid    – no usable email address anywhere in the row
-const emailKey = (e) => (address.normalize(e) || String(e || '').trim().toLowerCase());
+// Capitals never make a different mailbox in practice, and the page's own
+// repeat check ignores them, so Jane@X.com in a file is the jane@x.com
+// already on the list — not a second person to email.
+const emailKey = (e) => (address.normalize(e) || String(e || '').trim()).toLowerCase();
 function analyzeImport(candidates, rows, mapping, { lines = null, headerless = false } = {}) {
   const m = mapping || {};
   const col = (row, key) => (m[key] != null && m[key] >= 0 ? csv.cleanCell(row[m[key]]) : '');
