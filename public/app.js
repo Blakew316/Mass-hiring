@@ -340,6 +340,7 @@
     // in: carried into the next team, pressing Save would write them there.
     try {
       presetShown.email = ''; presetShown.text = '';
+      presetDraft.email = null; presetDraft.text = null;
       setTemplateDirty(false); setFollowUpDirty(false); setPresetDirty('text', false); setSettingsDirty(false);
     } catch { /* not declared yet: nothing to reset */ }
   }
@@ -1606,6 +1607,8 @@
     // Saved templates are for outreach; a follow-up has its own single letter.
     $('#composePresetRow').hidden = followUp;
     $('#composeSaveAsBtn').hidden = followUp;
+    $('#composeSaveAsRow').hidden = true;
+    $('#composeSaveAsName').value = '';
     if (!followUp) fillPresetSelect($('#composePreset'), 'email', override ? '' : defaultPresetId('email'));
     composeLoaded = { subject: $('#composeSubject').value, body: $('#composeBody').value, id: override ? '' : defaultPresetId('email') };
     const atts = followUp ? [] : ((state.template && state.template.attachments) || []);
@@ -1660,12 +1663,25 @@
     $('#composeBody').value = p.body || '';
     composeLoaded = { subject: p.subject || '', body: p.body || '', id: p.id };
   });
-  $('#composeSaveAsBtn').addEventListener('click', async () => {
-    const made = await saveAsPreset('email', { subject: $('#composeSubject').value, body: $('#composeBody').value });
+  // Save as new template: a name box opens in the window itself.
+  $('#composeSaveAsBtn').addEventListener('click', () => {
+    $('#composeSaveAsRow').hidden = false;
+    $('#composeSaveAsName').focus();
+  });
+  $('#composeSaveAsCancel').addEventListener('click', () => { $('#composeSaveAsRow').hidden = true; $('#composeSaveAsName').value = ''; });
+  async function composeSaveAs() {
+    const field = $('#composeSaveAsName');
+    const name = cleanPresetName(field.value);
+    if (!name) { nameMissing(field, 'email'); return; }
+    const made = await createPreset('email', name, { subject: $('#composeSubject').value, body: $('#composeBody').value });
     if (!made) return;
     fillPresetSelect($('#composePreset'), 'email', made.id);
     composeLoaded = { subject: made.subject, body: made.body, id: made.id };
-  });
+    $('#composeSaveAsRow').hidden = true;
+    field.value = '';
+  }
+  $('#composeSaveAsConfirm').addEventListener('click', composeSaveAs);
+  $('#composeSaveAsName').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); composeSaveAs(); } });
 
   // Sends in batches of 8 (each request must finish inside the server's
   // 10-second limit); the modal shows live progress and can be stopped
@@ -2551,11 +2567,14 @@
   });
 
   let templateDirty = false;
+  // A new template being made in an editor, not saved yet: what the editor
+  // held before + New was pressed, so Cancel can put it back.
+  const presetDraft = { email: null, text: null };
   function setTemplateDirty(d) {
     templateDirty = d;
-    $('#saveTemplateBtn').textContent = d ? 'Save template •' : 'Save template';
+    $('#saveTemplateBtn').textContent = presetDraft.email ? 'Save new template' : (d ? 'Save template •' : 'Save template');
   }
-  ['#tplSubject', '#tplBody'].forEach((s) =>
+  ['#tplSubject', '#tplBody', '#tplName'].forEach((s) =>
     $(s).addEventListener('input', () => { setTemplateDirty(true); debouncedPreview(); }));
   const debouncedPreview = debounce(renderTemplatePreview, 200);
   $('#previewCandidate').addEventListener('change', () => { renderTemplatePreview(); renderFollowUpPreview(); });
@@ -2571,18 +2590,7 @@
     renderTemplatePreview();
   }));
 
-  $('#saveTemplateBtn').addEventListener('click', async () => {
-    const p = currentPreset('email');
-    if (!p) { await saveOrphanedEdits('email'); return; }
-    try {
-      await api(`/api/templates/email/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { subject: $('#tplSubject').value, body: $('#tplBody').value } });
-      setTemplateDirty(false);
-      toast(p.id === defaultPresetId('email')
-        ? `“${p.name}” saved — the send window opens with it.`
-        : `“${p.name}” saved. Pick it under Template when you send.`);
-      await refresh();
-    } catch (err) { oops(err); }
-  });
+  $('#saveTemplateBtn').addEventListener('click', () => savePresetEditor('email'));
   $('#resetTemplateBtn').addEventListener('click', async () => {
     if (!confirm('Put the starter email back into your default template? Your current wording of it is replaced.')) return;
     try {
@@ -2667,6 +2675,23 @@
   function presetsOf(kind) { return (state && state.templates && state.templates[kind]) || []; }
   function defaultPresetId(kind) { return (state && state.templates && state.templates.defaults && state.templates.defaults[kind]) || ''; }
   function presetById(kind, id) { return presetsOf(kind).find((p) => p.id === id) || null; }
+  const nameField = (kind) => $(kind === 'email' ? '#tplName' : '#txName');
+  const cleanPresetName = (v) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  function editorWords(kind) {
+    return kind === 'email'
+      ? { subject: $('#tplSubject').value, body: $('#tplBody').value }
+      : { body: $('#txBody').value };
+  }
+  function setEditorWords(kind, w) {
+    if (kind === 'email') {
+      $('#tplSubject').value = w.subject || '';
+      $('#tplBody').value = w.body || '';
+      renderTemplatePreview();
+    } else {
+      $('#txBody').value = w.body || '';
+      renderTextPreview();
+    }
+  }
   // The template an editor is showing. If it is deleted elsewhere while the
   // editor holds unsaved words, the editor stays on it (shown as deleted) —
   // sliding to the default would make Save write those words over the default.
@@ -2681,7 +2706,7 @@
       ? { subject: $('#tplSubject').value, body: $('#tplBody').value }
       : { body: $('#txBody').value };
     if (!confirm('The template you were editing was deleted (perhaps in another tab). Save these words as a new template?')) return;
-    const made = await saveAsPreset(kind, words);
+    const made = await createPreset(kind, cleanPresetName(nameField(kind).value) || suggestName(kind), words);
     if (!made) return;
     presetShown[kind] = made.id;
     setPresetDirty(kind, false);
@@ -2700,18 +2725,34 @@
   // The row above an editor: the picker, and what can be done to the one shown.
   function renderPresetBar(kind) {
     const pre = kind === 'email' ? 'tpl' : 'tx';
+    const noun = kind === 'email' ? 'template' : 'text';
+    const saveBtn = $(kind === 'email' ? '#saveTemplateBtn' : '#txSave');
+    const sel = $(`#${pre}Preset`);
+    $(`#${pre}PresetCancel`).hidden = !presetDraft[kind];
+    if (presetDraft[kind]) {
+      // A new one being made: it has no place in the list until it is saved.
+      const html = `<option value="" selected>New ${noun} (not saved yet)</option>${presetOptions(kind, '')}`;
+      if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+      sel.value = '';
+      $(`#${pre}PresetDefault`).hidden = true;
+      $(`#${pre}PresetDelete`).hidden = true;
+      $(kind === 'email' ? '#resetTemplateBtn' : '#txReset').hidden = true;
+      $(`#${pre}PresetNote`).textContent = `Type a name, change the ${kind === 'email' ? 'subject and message' : 'message'} if you like, then press ${kind === 'email' ? 'Save new template' : 'Save new text'}.`;
+      saveBtn.textContent = kind === 'email' ? 'Save new template' : 'Save new text';
+      return;
+    }
     const p = currentPreset(kind);
     if (!p) {
       // Deleted elsewhere while being edited: say so, and offer nothing that would act on it.
-      const sel = $(`#${pre}Preset`);
       const html = `<option value="" selected>(deleted — unsaved)</option>${presetOptions(kind, '')}`;
       if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
       sel.value = '';
-      for (const id of ['PresetRename', 'PresetDefault', 'PresetDelete']) $(`#${pre}${id}`).hidden = true;
+      for (const id of ['PresetDefault', 'PresetDelete']) $(`#${pre}${id}`).hidden = true;
       $(`#${pre}PresetNote`).textContent = 'This template was deleted elsewhere. Save keeps your words as a new one.';
       return;
     }
-    $(`#${pre}PresetRename`).hidden = false;
+    // The name of the one shown, unless you are part-way through changing it.
+    if (!presetDirty(kind)) nameField(kind).value = p.name;
     const isDefault = p.id === defaultPresetId(kind);
     fillPresetSelect($(`#${pre}Preset`), kind, p.id);
     $(`#${pre}PresetDefault`).hidden = isDefault;
@@ -2727,79 +2768,107 @@
   const presetDirty = (kind) => (kind === 'email' ? templateDirty : textTemplateDirty);
   function setPresetDirty(kind, d) {
     if (kind === 'email') setTemplateDirty(d);
-    else { textTemplateDirty = d; $('#txSave').textContent = d ? 'Save message •' : 'Save message'; }
+    else { textTemplateDirty = d; $('#txSave').textContent = presetDraft.text ? 'Save new text' : (d ? 'Save message •' : 'Save message'); }
   }
   function loadPresetIntoEditor(kind) {
     const p = currentPreset(kind);
     if (!p) return;
-    if (kind === 'email') {
-      $('#tplSubject').value = p.subject || '';
-      $('#tplBody').value = p.body || '';
-      renderTemplatePreview();
-    } else {
-      $('#txBody').value = p.body || '';
-      renderTextPreview();
-    }
-  }
-  function askName(title, suggested) {
-    const name = (prompt(title, suggested) || '').replace(/\s+/g, ' ').trim();
-    return name.slice(0, 60);
+    setEditorWords(kind, p);
+    nameField(kind).value = p.name;
   }
   function suggestName(kind) {
     const base = kind === 'email' ? 'New email' : 'New text';
     const taken = new Set(presetsOf(kind).map((p) => p.name.toLowerCase()));
     for (let i = 1; ; i++) { const n = i === 1 ? base : `${base} ${i}`; if (!taken.has(n.toLowerCase())) return n; }
   }
-  // Save what is in front of you as a new template. Used by the editors and
-  // by both send windows; returns the new template, or null.
-  async function saveAsPreset(kind, words) {
-    const name = askName(`Name this ${kind === 'email' ? 'email' : 'text'} template:`, suggestName(kind));
-    if (!name) return null;
+  // Keep words as a new, named template. Used by the editors and by both
+  // send windows; returns the new template, or null.
+  async function createPreset(kind, name, words) {
     try {
       const r = await api(`/api/templates/${kind}`, { method: 'POST', body: { name, ...words } });
       state.templates = r.templates;
-      toast(`Saved as “${r.preset.name}”. It is in the Template list whenever you send.`);
+      toast(`Saved as “${r.preset.name}”. Pick it from the Template list whenever you ${kind === 'email' ? 'email' : 'text'}.`);
       refresh().catch(() => {});
       return r.preset;
     } catch (err) { oops(err); return null; }
+  }
+  function nameMissing(field, kind) {
+    toast(`Give the ${kind === 'email' ? 'template' : 'text'} a name first — it is how you find it in the Template list.`, true);
+    field.focus();
+  }
+  // Save on an editor: the new template being made, or the one shown —
+  // its name and words together.
+  async function savePresetEditor(kind) {
+    const name = cleanPresetName(nameField(kind).value);
+    if (presetDraft[kind]) {
+      if (!name) { nameMissing(nameField(kind), kind); return; }
+      const made = await createPreset(kind, name, editorWords(kind));
+      if (!made) return;
+      presetDraft[kind] = null;
+      presetShown[kind] = made.id;
+      setPresetDirty(kind, false);
+      renderPresetBar(kind);
+      return;
+    }
+    const p = currentPreset(kind);
+    if (!p) { await saveOrphanedEdits(kind); return; }
+    if (!name) { nameMissing(nameField(kind), kind); return; }
+    try {
+      const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { name, ...editorWords(kind) } });
+      state.templates = r.templates;
+      setPresetDirty(kind, false);
+      renderPresetBar(kind);
+      toast(p.id === defaultPresetId(kind)
+        ? `“${name}” saved — the ${kind === 'email' ? 'send window' : 'text composer'} opens with it.`
+        : `“${name}” saved. Pick it under Template when you ${kind === 'email' ? 'send' : 'text'}.`);
+      await refresh();
+    } catch (err) { oops(err); }
   }
   for (const kind of ['email', 'text']) {
     const pre = kind === 'email' ? 'tpl' : 'tx';
     $(`#${pre}Preset`).addEventListener('change', (e) => {
       const next = e.target.value;
-      const was = currentPreset(kind);
+      const was = presetDraft[kind] ? null : currentPreset(kind);
       if (!next) return;
-      if (presetDirty(kind) && !confirm(`Discard your unsaved changes${was ? ` to “${was.name}”` : ''}?`)) {
+      const question = presetDraft[kind]
+        ? `Discard the new ${kind === 'email' ? 'template' : 'text'} you were making?`
+        : `Discard your unsaved changes${was ? ` to “${was.name}”` : ''}?`;
+      if (presetDirty(kind) && !confirm(question)) {
         e.target.value = was ? was.id : '';
         return;
       }
+      presetDraft[kind] = null;
       presetShown[kind] = next;
       setPresetDirty(kind, false);
       loadPresetIntoEditor(kind);
       renderPresetBar(kind);
     });
-    $(`#${pre}PresetNew`).addEventListener('click', async () => {
-      const words = kind === 'email'
-        ? { subject: $('#tplSubject').value, body: $('#tplBody').value }
-        : { body: $('#txBody').value };
-      const made = await saveAsPreset(kind, words);
-      if (!made) return;
-      presetShown[kind] = made.id;
-      setPresetDirty(kind, false);
+    // + New: a new template starts as a copy of what the editor holds, with
+    // an empty name to fill in. Nothing is stored until Save.
+    $(`#${pre}PresetNew`).addEventListener('click', () => {
+      if (!presetDraft[kind]) {
+        presetDraft[kind] = {
+          fromId: presetShown[kind] || defaultPresetId(kind),
+          dirty: presetDirty(kind),
+          words: editorWords(kind),
+          name: nameField(kind).value,
+        };
+        nameField(kind).value = '';
+        setPresetDirty(kind, true);   // unsaved: kept through refreshes, and leaving asks first
+        renderPresetBar(kind);
+      }
+      nameField(kind).focus();
+    });
+    $(`#${pre}PresetCancel`).addEventListener('click', () => {
+      const d = presetDraft[kind];
+      if (!d) return;
+      presetDraft[kind] = null;
+      presetShown[kind] = d.fromId;
+      if (d.dirty) { setEditorWords(kind, d.words); nameField(kind).value = d.name; setPresetDirty(kind, true); }
+      else { setPresetDirty(kind, false); loadPresetIntoEditor(kind); }
       renderPresetBar(kind);
     });
-    $(`#${pre}PresetRename`).addEventListener('click', async () => {
-      const p = currentPreset(kind);
-      if (!p) return;
-      const name = askName('Rename this template:', p.name);
-      if (!name || name === p.name) return;
-      try {
-        const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { name } });
-        state.templates = r.templates;
-        renderPresetBar(kind);
-        toast(`Renamed to “${name}”.`);
-      } catch (err) { oops(err); }
-    });
+    nameField(kind).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); savePresetEditor(kind); } });
     $(`#${pre}PresetDefault`).addEventListener('click', async () => {
       const p = currentPreset(kind);
       if (!p) return;
@@ -2935,6 +3004,8 @@
     textComposeLoaded = { body: $('#textComposeBody').value, id: def ? def.id : '' };
     $('#textComposeSendBtn').textContent = people.length > 1 ? `Queue ${people.length.toLocaleString()} texts` : 'Send text';
     $('#textComposeNow').checked = false;   // never sticky between sends
+    $('#textComposeSaveAsRow').hidden = true;
+    $('#textComposeSaveAsName').value = '';
     openModal('#textComposeModal');
     renderTextComposePreview();
     setTimeout(() => $('#textComposeBody').focus(), 40);
@@ -2977,12 +3048,24 @@
     textComposeLoaded = { body: p.body || '', id: p.id };
     renderTextComposePreview();
   });
-  $('#textComposeSaveAsBtn').addEventListener('click', async () => {
-    const made = await saveAsPreset('text', { body: $('#textComposeBody').value });
+  $('#textComposeSaveAsBtn').addEventListener('click', () => {
+    $('#textComposeSaveAsRow').hidden = false;
+    $('#textComposeSaveAsName').focus();
+  });
+  $('#textComposeSaveAsCancel').addEventListener('click', () => { $('#textComposeSaveAsRow').hidden = true; $('#textComposeSaveAsName').value = ''; });
+  async function textComposeSaveAs() {
+    const field = $('#textComposeSaveAsName');
+    const name = cleanPresetName(field.value);
+    if (!name) { nameMissing(field, 'text'); return; }
+    const made = await createPreset('text', name, { body: $('#textComposeBody').value });
     if (!made) return;
     fillPresetSelect($('#textComposePreset'), 'text', made.id);
     textComposeLoaded = { body: made.body, id: made.id };
-  });
+    $('#textComposeSaveAsRow').hidden = true;
+    field.value = '';
+  }
+  $('#textComposeSaveAsConfirm').addEventListener('click', textComposeSaveAs);
+  $('#textComposeSaveAsName').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); textComposeSaveAs(); } });
   $('#textComposeNow').addEventListener('change', renderTextComposePreview);
   $$('.tc-token').forEach((b) => b.addEventListener('click', () => {
     const el = $('#textComposeBody');
@@ -3794,6 +3877,7 @@
   });
 
   $('#txBody').addEventListener('input', () => { setPresetDirty('text', true); renderTextPreview(); });
+  $('#txName').addEventListener('input', () => setPresetDirty('text', true));
   $$('.tx-token').forEach((b) => b.addEventListener('click', () => {
     const el = $('#txBody');
     const at = el.selectionStart ?? el.value.length;
@@ -3804,18 +3888,7 @@
     renderTextPreview();
   }));
 
-  $('#txSave').addEventListener('click', async () => {
-    const p = currentPreset('text');
-    if (!p) { await saveOrphanedEdits('text'); return; }
-    try {
-      await api(`/api/templates/text/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { body: $('#txBody').value } });
-      setPresetDirty('text', false);
-      toast(p.id === defaultPresetId('text')
-        ? `“${p.name}” saved — the text composer opens with it.`
-        : `“${p.name}” saved. Pick it under Template when you text.`);
-      await refresh();
-    } catch (err) { oops(err); }
-  });
+  $('#txSave').addEventListener('click', () => savePresetEditor('text'));
 
   $('#txReset').addEventListener('click', async () => {
     if (!confirm('Put the starter text back into your default text? Your current wording of it is replaced.')) return;

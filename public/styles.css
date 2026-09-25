@@ -1345,13 +1345,16 @@ tr.row-muted { opacity: .55; }
 .preset-bar { margin: 2px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--navy-tint); }
 .preset-bar .label { margin-top: 0; }
 .preset-row { display: flex; gap: 8px; align-items: center; }
-.preset-row .select { flex: 1; min-width: 0; }
+.preset-row .input { flex: 1; min-width: 0; }
 .preset-row .btn { flex: none; white-space: nowrap; }
 .preset-links { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 8px; }
 .preset-links .muted { margin-left: auto; }
 .link-danger { color: var(--red); }
 .compose-preset { margin-top: 12px; }
 .compose-preset .label { margin-top: 0; }
+.compose-saveas { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--navy-tint); }
+.compose-saveas .label { margin-top: 0; }
+.compose-saveas .btn-link { flex: none; }
 .modal-foot .foot-left { margin-right: auto; align-self: center; }
 
 /* ---- Candidate list backups ---- */

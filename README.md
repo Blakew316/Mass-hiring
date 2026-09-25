@@ -86,7 +86,8 @@ People who were emailed and never replied or booked become **due a follow-up** a
 
 Keep as many named emails and texts as you like and pick one each time you send.
 
-- **Making one.** In Settings, write the email (or text) and press **Save as new…**, or press **Save as template…** in the send window while you are writing to someone. Each team's templates are its own.
+- **Making one.** In Settings → *Email template* (or the text *Message* card), press **+ New template** (**+ New text**) beside the list, type a name in the **Template name** box, change the subject and message if you like, and press **Save new template**. It starts as a copy of whatever was in the editor; **Cancel new template** throws it away. From a send window, **Save as new template** opens a name box in the window itself. Each team's templates are its own.
+- **Naming and renaming.** The name box always shows the name of the template you are looking at; change it and press **Save template** to rename. The list beside it shows every saved template by name, so choosing one loads it for editing.
 - **Using one.** The email send window and the text composer both have a **Template** list; choosing one fills in the subject and message, which you can still change for that send. **Text everyone with a number** now opens the composer too, so you choose and read the message before anything is queued.
 - **The default.** One email and one text are marked *default*: the send window opens with it, and the queue uses it when nothing else was chosen. **Make default** switches it; the default cannot be deleted until another one is.
 - Editing or deleting a template never changes a message that is already queued — it goes out as it was written. Attachments belong to the team and go with every outreach email, whichever template it started from. The follow-up email keeps its own single template.

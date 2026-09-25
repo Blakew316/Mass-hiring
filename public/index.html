@@ -762,12 +762,14 @@
               <label class="label" for="tplPreset">Saved templates</label>
               <div class="preset-row">
                 <select id="tplPreset" class="input select" data-no-dirty></select>
-                <button class="btn" id="tplPresetNew" title="Save what is in the editor as a new template">Save as new…</button>
+                <button class="btn" id="tplPresetNew" type="button" title="Start another email template with its own name">+ New template</button>
               </div>
+              <label class="label" for="tplName">Template name</label>
+              <input type="text" id="tplName" class="input" data-no-dirty maxlength="60" autocomplete="off" placeholder="Name it so you can pick it later, e.g. Houston account executives">
               <div class="preset-links">
-                <button class="btn-link" id="tplPresetRename">Rename</button>
-                <button class="btn-link" id="tplPresetDefault">Make default</button>
-                <button class="btn-link link-danger" id="tplPresetDelete">Delete</button>
+                <button class="btn-link" id="tplPresetDefault" type="button">Make default</button>
+                <button class="btn-link link-danger" id="tplPresetDelete" type="button">Delete</button>
+                <button class="btn-link" id="tplPresetCancel" type="button" hidden>Cancel new template</button>
                 <span class="muted small" id="tplPresetNote"></span>
               </div>
             </div>
@@ -929,12 +931,14 @@
               <label class="label" for="txPreset">Saved texts</label>
               <div class="preset-row">
                 <select id="txPreset" class="input select" data-no-dirty></select>
-                <button class="btn" id="txPresetNew" title="Save what is in the editor as a new text">Save as new…</button>
+                <button class="btn" id="txPresetNew" type="button" title="Start another text template with its own name">+ New text</button>
               </div>
+              <label class="label" for="txName">Text name</label>
+              <input type="text" id="txName" class="input" data-no-dirty maxlength="60" autocomplete="off" placeholder="Name it so you can pick it later, e.g. First touch">
               <div class="preset-links">
-                <button class="btn-link" id="txPresetRename">Rename</button>
-                <button class="btn-link" id="txPresetDefault">Make default</button>
-                <button class="btn-link link-danger" id="txPresetDelete">Delete</button>
+                <button class="btn-link" id="txPresetDefault" type="button">Make default</button>
+                <button class="btn-link link-danger" id="txPresetDelete" type="button">Delete</button>
+                <button class="btn-link" id="txPresetCancel" type="button" hidden>Cancel new text</button>
                 <span class="muted small" id="txPresetNote"></span>
               </div>
             </div>
@@ -978,6 +982,15 @@
         <label class="label" for="composePreset">Template</label>
         <select id="composePreset" class="input select"></select>
       </div>
+      <div class="compose-saveas" id="composeSaveAsRow" hidden>
+        <label class="label" for="composeSaveAsName">Name for the new template</label>
+        <div class="preset-row">
+          <input type="text" id="composeSaveAsName" class="input" maxlength="60" autocomplete="off" placeholder="e.g. Houston account executives">
+          <button class="btn" id="composeSaveAsConfirm" type="button">Save template</button>
+          <button class="btn-link" id="composeSaveAsCancel" type="button">Cancel</button>
+        </div>
+        <div class="hint">Keeps the subject and message below under this name, in every Template list.</div>
+      </div>
       <label class="label">Subject</label>
       <input type="text" id="composeSubject" class="input">
       <label class="label">Message <span class="muted small">(placeholders are filled per recipient)</span></label>
@@ -988,7 +1001,7 @@
       <div class="send-progress" id="sendProgress" hidden></div>
     </div>
     <div class="modal-foot">
-      <button class="btn-link foot-left" id="composeSaveAsBtn" title="Keep this subject and message as a template to use again">Save as template…</button>
+      <button class="btn-link foot-left" id="composeSaveAsBtn" type="button" title="Keep this subject and message as a named template to use again">Save as new template</button>
       <button class="btn" id="composeCancelBtn" data-close>Cancel</button>
       <button class="btn btn-primary" id="composeSendBtn">Send</button>
     </div>
@@ -1048,6 +1061,15 @@
         <label class="label" for="textComposePreset">Template</label>
         <select id="textComposePreset" class="input select"></select>
       </div>
+      <div class="compose-saveas" id="textComposeSaveAsRow" hidden>
+        <label class="label" for="textComposeSaveAsName">Name for the new text template</label>
+        <div class="preset-row">
+          <input type="text" id="textComposeSaveAsName" class="input" maxlength="60" autocomplete="off" placeholder="e.g. First touch">
+          <button class="btn" id="textComposeSaveAsConfirm" type="button">Save template</button>
+          <button class="btn-link" id="textComposeSaveAsCancel" type="button">Cancel</button>
+        </div>
+        <div class="hint">Keeps the message below under this name, in every Template list.</div>
+      </div>
       <label class="label">Message <span class="muted small">(placeholders are filled per person)</span></label>
       <textarea id="textComposeBody" class="input textarea" rows="6"></textarea>
       <div class="token-row">
@@ -1061,7 +1083,7 @@
       <div class="hint" id="textComposeHint"></div>
     </div>
     <div class="modal-foot">
-      <button class="btn-link foot-left" id="textComposeSaveAsBtn" title="Keep this message as a template to use again">Save as template…</button>
+      <button class="btn-link foot-left" id="textComposeSaveAsBtn" type="button" title="Keep this message as a named template to use again">Save as new template</button>
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="textComposeSendBtn">Send text</button>
     </div>
