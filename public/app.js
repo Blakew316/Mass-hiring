@@ -1110,7 +1110,9 @@
     }
     const roles = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].label.localeCompare(b[1].label));
     const missing = state.candidates.filter((c) => !roleKey(c.role)).length;
-    if (roleFilter && !counts.has(roleFilter)) roleFilter = '';     // that role is gone from the list
+    // That role is gone from the list. "No role on file" is not a role, so it
+    // stays chosen while anybody still has no role, whatever a refresh brings.
+    if (roleFilter === '__none' ? !missing : roleFilter && !counts.has(roleFilter)) roleFilter = '';
     setOptions(sel, `<option value="">All roles (${state.candidates.length})</option>`
       + roles.map(([key, r]) => `<option value="${esc(key)}">${esc(r.label)} (${r.n})</option>`).join('')
       + (missing ? `<option value="__none">No role on file (${missing})</option>` : ''), roleFilter);
