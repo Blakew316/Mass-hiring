@@ -240,6 +240,11 @@ function maskedSettings(s, fromAddress) {
     // /api/settings either. Anyone holding it can forge an "opened" event for
     // any candidate, which is the one thing this key protects against.
     trackingSecret: undefined,
+    // The Sales IQ connection token. Removed rather than masked: the page gets
+    // it, inside the connection code, only from /api/salesiq-connection when
+    // Settings asks for it, never on the payload polled every 30 seconds. Nor
+    // is it writable through /api/settings — it is generated, never typed.
+    salesiqToken: undefined,
     // Texting pace, shown already clamped for the same reason as the email pace.
     ...textQueue.normalizeTextSettings({
       textDailyLimit: s.textDailyLimit, textMinGap: s.textMinGap, textMaxGap: s.textMaxGap,
@@ -2033,6 +2038,7 @@ async function applyCalendlyEvent(req, db) {
           uri: ev.uri, name: eventName, status: 'active', start: startTime || new Date().toISOString(), end: ev.end_time || null,
           joinUrl: (ev.location && ev.location.join_url) || null, inviteeName: p.name || '', inviteeEmail: p.email || '',
           candidateId: c ? c.id : null, rescheduleUrl: p.reschedule_url || '', cancelUrl: p.cancel_url || '',
+          inviteePhone: calendly.phoneFrom(p), bookedAt: p.created_at || null,
         });
         fresh.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
       }
@@ -2139,19 +2145,21 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
 
 // ---------- Calendly sync: pull scheduled interviews, match to candidates ----------
 const DAY_MS = 24 * 3600 * 1000;
-app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
+// Shared by the dashboard's sync button and by Sales IQ, which asks for one
+// so that a booking reaches it while nobody has this dashboard open. Returns
+// the body the dashboard's route has always answered with.
+async function syncCalendly() {
   const db = await store.load();
   const token = db.settings.calendlyToken;
-  if (!token) return res.json({ ok: true, unavailable: 'Add your Calendly token in Settings to sync interviews.' });
+  if (!token) return { ok: true, unavailable: 'Add your Calendly token in Settings to sync interviews.' };
+  const minStart = new Date(Date.now() - 14 * DAY_MS);
+  const maxStart = new Date(Date.now() + 120 * DAY_MS);
   let result;
   try {
-    result = await calendly.listInterviews(token, {
-      minStart: new Date(Date.now() - 14 * DAY_MS),
-      maxStart: new Date(Date.now() + 120 * DAY_MS),
-    });
+    result = await calendly.listInterviews(token, { minStart, maxStart });
   } catch (err) {
     await store.update((d) => { d.calendlySyncError = err.message; d.calendlyLastSyncAt = new Date().toISOString(); });
-    return res.json({ ok: false, error: err.message });
+    return { ok: false, error: err.message };
   }
   const announce = [];
   await store.update((fresh) => {
@@ -2169,6 +2177,7 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
           uri: ev.uri, name: ev.name, status: active ? 'active' : 'canceled', start: ev.start, end: ev.end,
           joinUrl: ev.joinUrl, inviteeName: inv.name || '', inviteeEmail: inv.email || '',
           candidateId: c ? c.id : null, rescheduleUrl: inv.rescheduleUrl || '', cancelUrl: inv.cancelUrl || '',
+          inviteePhone: inv.phone || '', bookedAt: inv.createdAt || null,
         });
         if (!c) continue;
         if (active) {
@@ -2188,6 +2197,23 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
         }
       }
     }
+    // What this sync did not read is kept as it was, rather than replaced by
+    // nothing: an event it listed but had no allowance left for (only a
+    // cancellation is carried over), and, when the listing stopped short of
+    // the window's end, anything it never reached. A booking the webhook has
+    // just brought in is one of those, and Sales IQ, which asks for a sync
+    // every time it looks, would otherwise see it vanish. Only what a full
+    // listing no longer has, or what has left the window, is let go.
+    const read = new Set(result.interviews.map((ev) => ev.uri));
+    const skipped = new Map((result.skipped || []).map((ev) => [ev.uri, ev]));
+    for (const i of fresh.interviews || []) {
+      if (!i || read.has(i.uri)) continue;
+      const at = new Date(i.start).getTime();
+      if (!(at >= minStart.getTime() && at <= maxStart.getTime())) continue;
+      const ev = skipped.get(i.uri);
+      if (!ev && result.complete) continue;
+      list.push(ev && ev.status !== 'active' ? { ...i, status: 'canceled' } : i);
+    }
     fresh.interviews = list.sort((a, b) => String(a.start).localeCompare(String(b.start)));
     fresh.calendlyLastSyncAt = new Date().toISOString();
     fresh.calendlySyncError = '';
@@ -2201,7 +2227,180 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
       a.at || null
     );
   }
-  res.json({ ok: true, interviews: result.interviews.length, newBookings: announce.filter((a) => !a.canceled).length });
+  return { ok: true, interviews: result.interviews.length, newBookings: announce.filter((a) => !a.canceled).length };
+}
+
+app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
+  res.json(await syncCalendly());
+}));
+
+// ---------- Sales IQ: booked interviewees, and nothing else ----------
+// The Sales IQ hiring dashboard lists everyone who has booked an interview on
+// this team's Calendly so the manager can send them a questionnaire. That list
+// is ALL it gets from here: no candidate ids, notes, replies, statuses, or
+// anything else from outreach. /api/salesiq/* answers only to the connection
+// code's token (see lib/auth.js); /api/salesiq-connection, which hands that
+// code out, answers only to a signed-in dashboard, and deliberately sits
+// outside that prefix.
+const SALESIQ_CODE_PREFIX = 'WPSIQ1.';
+const SALESIQ_MAX_BOOKINGS = 300;
+const SALESIQ_SYNC_EVERY_MS = 90 * 1000;
+
+// Everything Sales IQ needs to find this deploy and prove which team it is
+// reading for, in one string that survives being pasted into a text box.
+function salesiqCode(team, token) {
+  const body = { u: google.baseUrl(), k: token, t: team.name, i: team.id };
+  return SALESIQ_CODE_PREFIX + Buffer.from(JSON.stringify(body)).toString('base64url');
+}
+
+// Connected means the code shown would actually be let in: a token in the
+// team's settings AND its fingerprint in the registry, which is what the
+// bearer check reads. A write that failed half way leaves the two apart, and a
+// code that is shown but refused is worse than an honest "Not connected" with
+// a button that fixes it.
+function salesiqConnection(team, token) {
+  const live = Boolean(token) && Boolean(team && team.salesiqTokenHash) && team.salesiqTokenHash === teams.fingerprint(token);
+  return {
+    connected: live,
+    code: live ? salesiqCode(team, token) : '',
+    team: teamName(team),
+    baseUrl: google.baseUrl(),
+  };
+}
+
+app.get('/api/salesiq-connection', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  res.set('Cache-Control', 'no-store');
+  res.json(salesiqConnection(req.team, db.settings.salesiqToken || ''));
+}));
+
+// A change answers with what is stored once its writes are done, read back,
+// not with the token it just made. Two Generates at once can end with one's
+// fingerprint in the registry and the other's token in settings, and the
+// request that lost must say "Not connected" rather than show a code the
+// bearer check refuses.
+async function storedSalesiqConnection(id) {
+  const [team, db] = await Promise.all([teams.byId(id), store.load()]);
+  return salesiqConnection(team, db.settings.salesiqToken || '');
+}
+
+// Always a new token: whoever holds the old code loses access the moment this
+// returns. The registry is written first because it is what the bearer check
+// reads — so if the second write fails, the old code has still stopped
+// working, rather than the dashboard offering a new code that is refused while
+// the old one carries on.
+app.post('/api/salesiq-connection', asyncRoute(async (req, res) => {
+  const id = tenant.currentOrThrow('a Sales IQ connection');
+  const token = crypto.randomBytes(32).toString('base64url');
+  await teams.setSalesiqToken(id, token);
+  auth.forgetSalesiqSecret();
+  await store.update((db) => { db.settings.salesiqToken = token; });
+  res.set('Cache-Control', 'no-store');
+  res.json(await storedSalesiqConnection(id));
+}));
+
+// Disconnecting revokes in the same order: the fingerprint goes first, so the
+// code stops working even if clearing the stored copy then fails.
+app.delete('/api/salesiq-connection', asyncRoute(async (req, res) => {
+  const id = tenant.currentOrThrow('a Sales IQ connection');
+  await teams.setSalesiqToken(id, '');
+  auth.forgetSalesiqSecret();
+  await store.update((db) => {
+    if (!db.settings.salesiqToken) return false;
+    db.settings.salesiqToken = '';
+  });
+  res.set('Cache-Control', 'no-store');
+  res.json(await storedSalesiqConnection(id));
+}));
+
+// A stable id for one person's booking of one event: the same booking is the
+// same row in Sales IQ however often it is fetched or re-synced, and the id
+// gives away nothing about the candidate record behind it.
+const salesiqKey = (i) => crypto.createHash('sha256')
+  .update(`${String(i.uri || '')}|${normEmail(i.inviteeEmail)}`)
+  .digest('hex')
+  .slice(0, 24);
+
+app.get('/api/salesiq/bookings', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const byId = new Map(db.candidates.map((c) => [c.id, c]));
+  const seen = new Set();
+  const bookings = [];
+  // Newest interview first, so the cap drops the oldest ones.
+  const list = (db.interviews || [])
+    .filter((i) => i && normEmail(i.inviteeEmail))
+    .sort((a, b) => String(b.start || '').localeCompare(String(a.start || '')));
+  for (const i of list) {
+    if (bookings.length >= SALESIQ_MAX_BOOKINGS) break;
+    const key = salesiqKey(i);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const c = i.candidateId ? byId.get(i.candidateId) : null;
+    const email = String(i.inviteeEmail).trim();
+    bookings.push({
+      key,
+      name: String(i.inviteeName || (c && c.name) || email),
+      email,
+      phone: String(i.inviteePhone || (c && c.phone) || ''),
+      interviewAt: i.start || null,
+      eventName: String(i.name || ''),
+      bookedAt: i.bookedAt || null,
+      status: i.status === 'active' ? 'active' : 'canceled',
+    });
+  }
+  res.json({
+    ok: true,
+    team: teamName(req.team),
+    syncedAt: db.calendlyLastSyncAt || null,
+    calendly: {
+      sync: Boolean(db.settings.calendlyToken),
+      webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
+    },
+    bookings,
+  });
+}));
+
+// Sales IQ asks for this whenever it looks, and it may be open in several tabs
+// on several machines; Calendly's API is shared by all of them. So a sync runs
+// only when the last one — from anywhere, the dashboard included — is more
+// than a minute and a half old. A failed sync stamps the time too, so a broken
+// Calendly token is not retried on every look either. A stamp in the future
+// is not believed.
+//
+// The slot is claimed before Calendly is called, in a conditional write, and
+// not merely checked: a sync takes dozens of calls, and everyone who asked
+// while it ran used to see the old stamp and start one of their own. Within
+// one instance, whoever asks while that team's sync is running waits for it
+// and shares its answer.
+const salesiqSyncing = new Map();   // team id -> the sync under way
+const recentStamp = (iso) => {
+  const age = Date.now() - new Date(iso || 0).getTime();
+  return Boolean(iso) && Number.isFinite(age) && age >= 0 && age < SALESIQ_SYNC_EVERY_MS;
+};
+
+async function salesiqSync() {
+  let claimed = false;
+  const db = await store.update((d) => {
+    claimed = false;   // the mutator re-runs on a conflict
+    if (!d.settings.calendlyToken) return false;
+    if (recentStamp(d.calendlyLastSyncAt) || recentStamp(d.salesiqSyncClaimedAt)) return false;
+    d.salesiqSyncClaimedAt = new Date().toISOString();
+    claimed = true;
+  });
+  if (!claimed) return { ok: true, ran: false, syncedAt: db.calendlyLastSyncAt || null };
+  const result = await syncCalendly();
+  const syncedAt = (await store.load()).calendlyLastSyncAt || null;
+  return { ok: true, ran: true, syncedAt, ...result };
+}
+
+app.post('/api/salesiq/sync', asyncRoute(async (req, res) => {
+  const id = req.team.id;
+  let running = salesiqSyncing.get(id);
+  if (!running) {
+    running = salesiqSync().finally(() => salesiqSyncing.delete(id));
+    salesiqSyncing.set(id, running);
+  }
+  res.json(await running);
 }));
 
 // ---------- Phone notification test ----------

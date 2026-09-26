@@ -723,6 +723,25 @@
             <div class="hint" id="calendlyHint">Bookings flip the candidate to “Booked” and push to your phone; your upcoming interviews sync into the Interviews booked tile every few minutes.</div>
           </div>
 
+          <div class="card" id="salesiqCard">
+            <div class="card-head">
+              <h2><span class="card-ico tone-green" data-icon="users" data-size="15"></span>Sales IQ</h2>
+              <span class="badge" id="salesiqChip">checking…</span>
+            </div>
+            <div class="hint">Sends everyone who books an interview on your Calendly to the Sales IQ hiring dashboard — name, email, phone and interview time, nothing else.</div>
+            <label class="label" for="salesiqCodeInput">Connection code</label>
+            <div class="field-row">
+              <input type="text" id="salesiqCodeInput" class="input" data-no-dirty readonly autocomplete="off" spellcheck="false" placeholder="No code yet — generate one">
+              <button class="btn" id="salesiqShow" type="button" disabled>Show</button>
+              <button class="btn" id="salesiqCopy" type="button" disabled>Copy</button>
+            </div>
+            <div class="hint">Paste this code into Sales IQ → Interview bookings → Connect. Anyone with it can see this team's booked interviewees, so share it only with Sales IQ.</div>
+            <div class="card-actions">
+              <button class="btn btn-danger-ghost" id="salesiqDisconnect" type="button" hidden>Disconnect</button>
+              <button class="btn btn-primary" id="salesiqGen" type="button" disabled>Generate</button>
+            </div>
+          </div>
+
           <div class="card">
             <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
             <div class="grid-2">
