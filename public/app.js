@@ -125,6 +125,12 @@
     // Anything kept per team has to be re-read when the team changes, or the
     // new team inherits the old one's view of things.
     if (changed) feedChannel = readFeedChannel();
+    // The Sales IQ card holds a live secret and a Disconnect button. A session
+    // that lapses and signs in to another team never goes through signedOut(),
+    // and until the new team's answer arrives — or for good, if it fails — the
+    // card would offer the last team's code to copy and send Disconnect under
+    // this team's session.
+    if (changed) { try { clearSalesiq(); } catch { /* not declared yet: nothing shown */ } }
     renderTeamChip();
   }
 
@@ -342,6 +348,7 @@
       presetShown.email = ''; presetShown.text = '';
       presetDraft.email = null; presetDraft.text = null;
       setTemplateDirty(false); setFollowUpDirty(false); setPresetDirty('text', false); setSettingsDirty(false);
+      clearSalesiq();
     } catch { /* not declared yet: nothing to reset */ }
   }
 
@@ -503,7 +510,7 @@
     // rather than on every poll for six pages at once.
     if (staleViews.has(view)) renderView(view);
     // The editors moved to Settings; Email and Texting are conversations only.
-    if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); placeAccountControls(); }
+    if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls(); }
     if (view === 'texting') renderTexting();
     // Arriving at a page is arriving at its list, never at whatever thread was
     // open the last time you were here.
@@ -4037,6 +4044,9 @@
       teamsRefreshedAt = Date.now();
       loadTeams().then(renderTeamSettings).catch(() => {});
     }
+    // Signing back in while Settings is on screen never passes through show(),
+    // so the Sales IQ card would sit on the last team's answer, or none.
+    if (currentView === 'settings' && salesiqFor !== (currentTeam ? currentTeam.id : '')) loadSalesiq();
     const s = state.settings;
     // Never overwrite what the user is typing: skip the form while it has unsaved edits.
     const setIf = (sel, val) => { const el = $(sel); if (!settingsDirty && document.activeElement !== el) el.value = val || ''; };
@@ -4186,6 +4196,157 @@
         : 'Calendly webhook registered. Bookings will update the pipeline and ping your phone.');
       await refresh();
     } catch (err) { oops(err); }
+  });
+
+  // ---------------- Sales IQ ----------------
+  // The one thing this app shares with the Sales IQ hiring dashboard is who
+  // booked an interview. The connection code is the bearer secret for exactly
+  // that, so it lives in these variables and the field below and nowhere else:
+  // not /api/state, not storage, not a toast.
+  const SALESIQ_MASK = '••••••••••••••••••••';
+  let salesiqCode = '';
+  let salesiqConnected = false;
+  let salesiqShown = false;
+  let salesiqStatus = 'checking';   // 'checking' | 'ok' | 'error'
+  let salesiqBusy = false;
+  let salesiqFor = null;            // the team whose answer the card is showing
+  // Bumped by every request and by signing out, so an answer that lands after
+  // something newer — a load racing a Regenerate, or the last team's code
+  // arriving after a switch — is dropped rather than shown.
+  let salesiqGen = 0;
+
+  function renderSalesiq() {
+    const chip = $('#salesiqChip');
+    if (salesiqStatus === 'checking') {
+      chip.className = 'badge';
+      chip.textContent = 'checking…';
+    } else if (salesiqStatus === 'error') {
+      chip.className = 'badge tint-amber';
+      chip.textContent = 'could not check';
+    } else {
+      chip.className = `badge ${salesiqConnected ? 'tint-green' : 'tint-navy'}`;
+      chip.textContent = salesiqConnected ? 'Connected' : 'Not connected';
+    }
+    const has = Boolean(salesiqCode);
+    $('#salesiqCodeInput').value = has ? (salesiqShown ? salesiqCode : SALESIQ_MASK) : '';
+    $('#salesiqShow').textContent = has && salesiqShown ? 'Hide' : 'Show';
+    $('#salesiqShow').disabled = !has;
+    $('#salesiqCopy').disabled = !has;
+    // Until the server has said whether a code exists, Generate cannot know
+    // whether it is about to break a working connection without asking.
+    const gen = $('#salesiqGen');
+    gen.textContent = salesiqConnected ? 'Regenerate' : 'Generate';
+    gen.classList.toggle('btn-primary', !salesiqConnected);
+    gen.disabled = salesiqBusy || salesiqStatus !== 'ok';
+    $('#salesiqDisconnect').hidden = !salesiqConnected;
+    $('#salesiqDisconnect').disabled = salesiqBusy;
+  }
+
+  function takeSalesiq(r) {
+    const code = r && r.connected ? String(r.code || '') : '';
+    // A new code starts hidden like the first one did.
+    if (code !== salesiqCode) salesiqShown = false;
+    salesiqCode = code;
+    salesiqConnected = Boolean(r && r.connected);
+    salesiqStatus = 'ok';
+  }
+
+  function clearSalesiq() {
+    salesiqGen++;
+    salesiqCode = '';
+    salesiqConnected = false;
+    salesiqShown = false;
+    salesiqStatus = 'checking';
+    salesiqBusy = false;
+    salesiqFor = null;
+    renderSalesiq();
+  }
+
+  // The answer carries the code, so it is fetched with no-store: whatever
+  // headers the server sends, it must not land in the browser's HTTP cache.
+  async function loadSalesiq() {
+    if (salesiqBusy) return;
+    const mine = ++salesiqGen;
+    const team = currentTeam ? currentTeam.id : '';
+    salesiqFor = team;
+    try {
+      const r = await api('/api/salesiq-connection', { cache: 'no-store' });
+      if (mine !== salesiqGen) return;
+      if (team && r.team && r.team.id !== team) return;
+      takeSalesiq(r);
+      // Every visit to Settings starts with the code covered.
+      salesiqShown = false;
+    } catch {
+      if (mine !== salesiqGen) return;
+      salesiqStatus = 'error';
+      // A lapsed session lands here too; the render after signing back in
+      // should ask again rather than keep saying it could not check.
+      salesiqFor = null;
+    }
+    renderSalesiq();
+  }
+
+  async function changeSalesiq(method) {
+    const mine = ++salesiqGen;
+    salesiqBusy = true;
+    renderSalesiq();
+    try {
+      const r = await api('/api/salesiq-connection', { method, cache: 'no-store' });
+      if (mine !== salesiqGen) return false;
+      takeSalesiq(r);
+      return true;
+    } finally {
+      if (mine === salesiqGen) { salesiqBusy = false; renderSalesiq(); }
+    }
+  }
+
+  $('#salesiqShow').addEventListener('click', () => {
+    if (!salesiqCode) return;
+    salesiqShown = !salesiqShown;
+    renderSalesiq();
+  });
+
+  $('#salesiqCopy').addEventListener('click', async () => {
+    if (!salesiqCode) return;
+    try {
+      await navigator.clipboard.writeText(salesiqCode);
+      toast('Connection code copied — paste it into Sales IQ → Interview bookings → Connect.');
+    } catch {
+      // There is no clipboard API off HTTPS, and Safari refuses it often
+      // enough. Leave the code on screen and selected so ⌘C or a long-press
+      // finishes the job.
+      salesiqShown = true;
+      renderSalesiq();
+      const input = $('#salesiqCodeInput');
+      input.focus();
+      input.select();
+      input.setSelectionRange(0, input.value.length);
+      toast('The code is selected — copy it, then paste it into Sales IQ → Interview bookings → Connect.');
+    }
+  });
+
+  $('#salesiqGen').addEventListener('click', async () => {
+    if (salesiqConnected && !confirm('Generate a new connection code? The current one stops working straight away, and Sales IQ gets no new bookings until you paste the new code into it.')) return;
+    try {
+      if (!(await changeSalesiq('POST'))) return;
+      toast('New connection code ready — press Copy, then paste it into Sales IQ → Interview bookings → Connect.');
+    } catch (err) {
+      // The server may have rotated before the answer was lost, so ask it
+      // rather than trust what is on screen.
+      oops(err);
+      loadSalesiq();
+    }
+  });
+
+  $('#salesiqDisconnect').addEventListener('click', async () => {
+    if (!confirm('Disconnect Sales IQ? Its connection code stops working straight away and no more bookings are sent to it.')) return;
+    try {
+      if (!(await changeSalesiq('DELETE'))) return;
+      toast('Sales IQ disconnected.');
+    } catch (err) {
+      oops(err);
+      loadSalesiq();
+    }
   });
 
   // ---------------- Modals ----------------
