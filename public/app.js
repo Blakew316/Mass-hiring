@@ -3732,7 +3732,6 @@
     // The funnel strip that used to sit here said exactly what the dashboard's
     // Channels card says, on a page that is now only conversations.
     const n = textableIds().length;
-    setNavCount('#navTextCount', n || 0);
     const btn = $('#textSendAllBtn');
     btn.textContent = n ? `Text ${n} with a number` : 'Nobody left to text';
     btn.disabled = n === 0;
@@ -4538,8 +4537,10 @@
     el.textContent = n ? n.toLocaleString() : '';
     el.dataset.short = n ? (n > 9999 ? '9,999+' : n.toLocaleString()) : '';
   }
+  // Only unread replies are counted on a tab. How many candidates there are,
+  // or how many are left to email or text, is not a count anyone needs on a
+  // tab at all times, so no tab carries one.
   function renderNavCounts() {
-    setNavCount('#navCount', (state.stats && state.stats.total) || 0);
     setNavCount('#navEmailCount', mailUnreadCount() || 0);
   }
 
