@@ -82,6 +82,25 @@ Each row shows what that person did **before** their current job, the search box
 
 People who were emailed and never replied or booked become **due a follow-up** after a wait (Settings → Sending pace: *Follow up after N days*, default 3; *Follow-ups per person*, default 2). The **Follow up** button on the Dashboard, the Candidates page, the Emailed tile and the Email Template page shows how many are due and sends them the follow-up email — as a **reply in the same conversation** (the subject becomes *Re:* the email they received, with the proper In-Reply-To/References headers, so it lands in the same thread in their inbox), without the attachment. Each person can also be followed up individually from their row. The follow-up text has its own editor and preview on the Email Template page; `{{originalSubject}}` stands for the subject they got. Anyone who replies or books while a follow-up is queued is skipped.
 
+## Saved templates
+
+Keep as many named emails and texts as you like and pick one each time you send.
+
+- **Making one.** In Settings → *Email template* (or the text *Message* card), press **+ New template** (**+ New text**) beside the list, type a name in the **Template name** box, change the subject and message if you like, and press **Save new template**. It starts as a copy of whatever was in the editor; **Cancel new template** throws it away. From a send window, **Save as new template** opens a name box in the window itself. Each team's templates are its own.
+- **Naming and renaming.** The name box always shows the name of the template you are looking at; change it and press **Save template** to rename. The list beside it shows every saved template by name, so choosing one loads it for editing.
+- **Using one.** The email send window and the text composer both have a **Template** list; choosing one fills in the subject and message, which you can still change for that send. **Text everyone with a number** now opens the composer too, so you choose and read the message before anything is queued.
+- **The default.** One email and one text are marked *default*: the send window opens with it, and the queue uses it when nothing else was chosen. **Make default** switches it; the default cannot be deleted until another one is.
+- Editing or deleting a template never changes a message that is already queued — it goes out as it was written. Attachments belong to the team and go with every outreach email, whichever template it started from. The follow-up email keeps its own single template.
+
+## Keeping the candidate list safe
+
+- **Every change is checked.** Saves are made against the exact version that was read, so two changes at the same moment can never overwrite each other; each save is confirmed by the store before the page is told it worked; and a save that would leave out anybody who was not deliberately deleted is refused outright, with nothing written. Deleting someone from their row is the only way a candidate leaves the list.
+- **No silent fallback.** If Netlify Blobs were ever unavailable, the app now stops with a storage error instead of showing (and saving to) an empty temporary list.
+- **Daily backups.** Once a day the list is copied to a separate entry that nothing else writes, and the last 20 copies are kept (Settings → *Candidate list backups*). **Back up now** makes one on demand; **Restore missing** adds back anybody in a copy who is not on the list now — it never removes or changes anyone already there.
+- **Your own copy.** **Download all candidates (CSV)** in the same card exports the whole list as a spreadsheet.
+- **Sends are never forgotten.** Each email or text is recorded, together with what it changes on the candidate (Emailed, when, the Gmail thread), in the same save that logs the send. If the sender is cut off before it updates the candidate list, the next run (within a minute) finishes the update, so nobody who was contacted is left showing as *Not contacted* or gets a second copy from **Email all not contacted**.
+- **Imports.** A batch that meets a busy moment is retried automatically; the page asks before you close it mid-import, never reloads itself for an update during one, and afterwards shows the new people first along with the total now on your list.
+
 ## Opens and replies
 
 - Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email". The feed is ordered by when things actually happened (a reply is dated when it was sent, a booking when it was made), even if the app only noticed later.
@@ -98,9 +117,23 @@ With a Calendly personal access token saved in Settings, the app pulls your sche
 
 Matching is by email first (any address the person has booked with before counts), then by full name when the name is unique in your list — people often book with a work address when the sheet has their personal one. A booking the app still cannot place shows **Link to candidate** in the tile: type part of the name or email, click the person, and the address is remembered for next time.
 
+## Teams
+
+Everything in this app belongs to exactly one team: its candidates, templates, settings, Gmail connection, Calendly registration, text threads and history. Signing in means choosing a team and entering its **four-digit PIN**, and from that point nothing another team owns is reachable — not by the dashboard, not by a candidate id typed into a URL, not by a cached response.
+
+- **The first team.** Everything stored before teams existed belongs to **Team Maverick**, which is adopted automatically on first run. Its data is not moved anywhere: it keeps the storage keys it has always had.
+- **A new team starts empty.** No candidates, no history, no interviews, no attachments, no connections, a blank sender name, and its own tracking secret. It gets generic starter copy for the outreach email and text — generic meaning it names nobody and no company — and the setup checklist says the template still needs writing, because it does.
+- **Making one.** *Start a new team* on the sign-in screen, or the Team card in Settings. Both ask for the **admin password**, which is what `APP_PASSWORD` now is: it does not sign you in anywhere, it is what lets you create and delete teams. Team Maverick has no PIN of its own yet, so it still signs in with `APP_PASSWORD` until you give it four digits in Settings.
+- **The PIN.** Exactly four digits, so it can be handed to a team and tapped on a phone. Four of the same digit and runs like 1234 are refused — they are the first thing anybody guessing would try. What actually protects four digits is the lockout below, which is why it is written to storage rather than kept in one server's memory.
+- **Switching.** The team's name sits in the header of every page. Tap it to sign out and pick another.
+
 ## Protecting the dashboard
 
-Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in (sessions last 30 days; *Sign out* revokes every device; five wrong passwords lock that address for 15 minutes). A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
+Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in: a team, then that team's four-digit PIN. Sessions last 30 days. *Sign out* ends this browser's session only; *Sign out on every device* in the Team card ends all of them, for that team alone.
+
+Five wrong PINs from one address lock that address for 15 minutes, counted across every team and **kept in storage**, so the count survives a cold start or a request landing on a different instance — without that, a four-digit PIN would hand out a fresh allowance every few minutes. Coming back and guessing again re-locks it immediately. Sustained guessing at one team also lengthens the pause before every answer, but never denies one: team names are listed on the sign-in screen, so a team-wide lock would let anyone read a name off it and keep that team out of its own dashboard all day.
+
+A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
 
 ## 3. Calendly + phone notifications
 

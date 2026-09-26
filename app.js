@@ -1,12 +1,18 @@
 // The Express app. Run locally via server.js, or on Netlify wrapped as a
 // serverless function (netlify/functions/api.js).
-require('dotenv').config();
-const express = require('express');
 const path = require('path');
+// Only when there is a file to read. dotenv looks for .env in the working
+// directory and quietly does nothing when it is absent -- which is always, on
+// Netlify -- so this is the same behaviour without 16 ms of every cold start
+// spent loading a parser for a file that is not there.
+if (require('fs').existsSync(path.join(process.cwd(), '.env'))) require('dotenv').config();
+const express = require('express');
 
 const store = require('./lib/store');
 const storage = require('./lib/storage');
 const auth = require('./lib/auth');
+const teams = require('./lib/teams');
+const tenant = require('./lib/tenant');
 const csv = require('./lib/csv');
 const google = require('./lib/google');
 const mailer = require('./lib/mailer');
@@ -19,8 +25,11 @@ const attachments = require('./lib/attachments');
 const address = require('./lib/email-address');
 const textQueue = require('./lib/text-queue');
 const phone = require('./lib/phone');
+const priority = require('./lib/priority');
+const backups = require('./lib/backups');
+const presets = require('./lib/presets');
 const crypto = require('crypto');
-const { renderEmail, renderText } = require('./lib/template');
+const { renderEmail, renderText, escapeHtml } = require('./lib/template');
 
 const app = express();
 // Exact-case routes only, so /API/... cannot reach a handler by a path the
@@ -33,41 +42,184 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(auth.middleware);
 
 const asyncRoute = (fn) => (req, res) => fn(req, res).catch((err) => {
-  res.status(400).json({ error: err.message || String(err) });
+  // A conflict (409) or a storage failure is not the caller's mistake, and the
+  // page treats it differently from a bad request.
+  // A refusal to drop candidates is a fault that no retry will fix.
+  const status = err.status === 409 ? 409 : err.storage ? 503 : (err.guard || err.status === 500) ? 500 : 400;
+  res.status(status).json({ error: err.message || String(err), retry: status === 409 || status === 503 });
 });
 
-// ---------- Sign-in (only enforced when APP_PASSWORD is set) ----------
+// ---------- Teams and sign-in ----------
+// Sign-in is choosing a team and entering its PIN. APP_PASSWORD is the admin
+// password: it is what lets you make a team or delete one, and — for Team
+// Maverick, which predates teams and has no PIN of its own — it is still the
+// way in. See lib/auth.js.
+// What a signed-in dashboard may know about its own team.
+const teamPublic = (t) => (t ? { id: t.id, name: t.name, usesAppPassword: teams.usesAppPassword(t) } : null);
+// What anyone at all may know: a name to pick from the sign-in screen, and
+// nothing else. Names are not secrets; which team signs in with the admin
+// password — the one secret that also creates and deletes teams — is.
+const teamName = (t) => (t ? { id: t.id, name: t.name } : null);
+
 app.get('/api/auth/status', asyncRoute(async (req, res) => {
+  // Nothing is created or read until a password exists: on a public deploy
+  // without one the only correct answer is "finish setting this up".
+  if (auth.setupRequired()) {
+    return res.json({ required: false, setupRequired: true, authed: false, team: null, teams: [] });
+  }
+  const team = await auth.sessionTeam(req).catch(() => null);
   res.json({
     required: auth.required(),
-    setupRequired: auth.setupRequired(),
-    authed: await auth.isAuthed(req),
+    setupRequired: false,
+    authed: Boolean(team),
+    team: teamName(team),
+    teams: await teams.publicList(),
+    numericPins: teams.allPinsNumeric(await teams.all()),
   });
+}));
+
+// The sign-in screen needs the names to choose between. Names are not secrets
+// — the PIN is — and a list you cannot see is a list you cannot sign in from.
+app.get('/api/teams', asyncRoute(async (_req, res) => {
+  if (auth.setupRequired()) return res.json({ teams: [], numericPins: false });
+  res.json({ teams: await teams.publicList(), numericPins: teams.allPinsNumeric(await teams.all()) });
 }));
 
 app.post('/api/login', asyncRoute(async (req, res) => {
   if (auth.setupRequired()) {
     return res.status(403).json({ error: 'Set APP_PASSWORD in Netlify first.', setupRequired: true });
   }
-  if (!auth.required()) return res.json({ ok: true });
-  const locked = auth.loginLockedFor(req);
+  const list = await teams.all();
+  if (!auth.required()) {
+    // No password means no way to tell two teams apart, so there is nothing
+    // here to sign in to unless there is exactly one of them.
+    if (list.length !== 1) {
+      return res.status(403).json({ error: 'Set APP_PASSWORD before signing in — with more than one team and no password there is no way to tell who you are.', setupRequired: true });
+    }
+    return res.json({ ok: true, team: teamPublic(list[0]) });
+  }
+  let teamId = String(req.body.team || '').trim();
+  // An app shell installed before teams existed posts a bare password and no
+  // team. While there is only one team that is not ambiguous, so let it in
+  // rather than make someone reinstall the app to sign in.
+  if (!teamId && list.length === 1) teamId = list[0].id;
+  const pin = req.body.pin != null ? req.body.pin : req.body.password;
+  const locked = await auth.loginLockedFor(req, teamId);
   if (locked) {
     return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(locked / 60)} min.` });
   }
-  if (!auth.checkPassword(req.body.password)) {
-    auth.recordLoginFailure(req);
-    await auth.failDelay();
-    return res.status(401).json({ error: 'Incorrect password.' });
+  const team = list.find((t) => t.id === teamId) || null;
+  if (!team || !teams.verifyPin(team, pin)) {
+    await auth.recordLoginFailure(req, teamId);
+    await auth.failDelay(req, teamId);
+    return res.status(401).json({ error: team ? 'That PIN is not right.' : 'Choose your team.' });
   }
-  auth.clearLoginFailures(req);
-  await auth.setSessionCookie(req, res);
+  await auth.clearLoginFailures(req, teamId);
+  auth.setSessionCookie(req, res, team);
+  res.json({ ok: true, team: teamPublic(team) });
+}));
+
+// Signs this browser out. Other devices on the same team keep working — on a
+// shared PIN, one person leaving must not throw the whole team out. To do
+// that on purpose there is "Sign out everywhere" below.
+app.post('/api/logout', asyncRoute(async (req, res) => {
+  auth.clearSessionCookie(req, res);
   res.json({ ok: true });
 }));
 
-// Signs out every device (the session salt rotates).
-app.post('/api/logout', asyncRoute(async (req, res) => {
-  await auth.revokeAllSessions(req, res);
+app.post('/api/teams/sign-out-all', asyncRoute(async (req, res) => {
+  await auth.revokeTeamSessions(req, res, req.team.id);
   res.json({ ok: true });
+}));
+
+// ---------- making and unmaking teams ----------
+// Creating a team is reachable without being signed in — you have to be able
+// to make the first one from the sign-in screen — so it is the admin password
+// that guards it, throttled like any other secret typed into a public page.
+async function requireAdmin(req, res, given) {
+  if (auth.setupRequired()) {
+    res.status(403).json({ error: 'Set APP_PASSWORD in Netlify first.', setupRequired: true });
+    return false;
+  }
+  if (!auth.required()) {
+    res.status(403).json({ error: 'Set an APP_PASSWORD before making teams — without one there is nothing to stop anyone making them.' });
+    return false;
+  }
+  const locked = await auth.loginLockedFor(req, auth.ADMIN_BUCKET);
+  if (locked) {
+    res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(locked / 60)} min.` });
+    return false;
+  }
+  if (!auth.checkAdminPassword(given)) {
+    await auth.recordLoginFailure(req, auth.ADMIN_BUCKET);
+    await auth.failDelay(req, auth.ADMIN_BUCKET);
+    res.status(401).json({ error: 'That admin password is not right.' });
+    return false;
+  }
+  await auth.clearLoginFailures(req, auth.ADMIN_BUCKET);
+  return true;
+}
+
+app.post('/api/teams/create', asyncRoute(async (req, res) => {
+  if (!await requireAdmin(req, res, req.body.adminPassword)) return;
+  const signedInAs = await auth.sessionTeam(req).catch(() => null);
+  const team = await teams.create(
+    { name: req.body.name, pin: req.body.pin },
+    () => store.seedTeam(),
+  );
+  // Made from the sign-in screen, this is how you get in. Made from Settings
+  // while already in a team, it must not tip you out of the one you are using.
+  if (!signedInAs) auth.setSessionCookie(req, res, team);
+  res.json({ ok: true, team: teamPublic(team), signedIn: !signedInAs });
+}));
+
+app.post('/api/teams/rename', asyncRoute(async (req, res) => {
+  const name = teams.cleanName(req.body.name);
+  if (!name) throw new Error('Give the team a name.');
+  const team = await teams.edit(req.team.id, (t, reg) => {
+    if (reg.teams.some((o) => o.id !== t.id && o.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`There is already a team called “${name}”.`);
+    }
+    if (t.name === name) return false;
+    t.name = name;
+  });
+  res.json({ ok: true, team: teamPublic(team) });
+}));
+
+// Changing the PIN needs the current one — or the admin password, which is
+// the way back in for a team that has forgotten theirs.
+app.post('/api/teams/pin', asyncRoute(async (req, res) => {
+  const next = teams.checkPin(req.body.pin);
+  const current = req.body.current;
+  const ok = teams.verifyPin(req.team, current) || auth.checkAdminPassword(current);
+  if (!ok) {
+    await auth.recordLoginFailure(req, req.team.id);
+    await auth.failDelay(req, req.team.id);
+    return res.status(401).json({ error: 'That is not the current PIN (the admin password works too).' });
+  }
+  await auth.clearLoginFailures(req, req.team.id);
+  const team = await teams.edit(req.team.id, (t) => { t.pin = teams.pinRecord(next); });
+  // The PIN changed, so every cookie signed under the old arrangement goes
+  // with it — including, deliberately, the one in this browser.
+  await auth.revokeTeamSessions(req, res, team.id);
+  res.json({ ok: true, team: teamPublic(team) });
+}));
+
+// Deleting a team erases everything it owns and cannot be undone, so it wants
+// the admin password AND the team's name typed out.
+app.post('/api/teams/delete', asyncRoute(async (req, res) => {
+  if (!await requireAdmin(req, res, req.body.adminPassword)) return;
+  const id = String(req.body.id || req.team.id);
+  const target = await teams.byId(id);
+  if (!target) throw new Error('That team no longer exists.');
+  if (teams.cleanName(req.body.confirm).toLowerCase() !== target.name.toLowerCase()) {
+    throw new Error(`Type the team's name (${target.name}) to confirm.`);
+  }
+  const remaining = (await teams.all()).length;
+  if (remaining <= 1) throw new Error('This is the only team — there would be nothing left to sign in to.');
+  await teams.remove(id);
+  if (id === req.team.id) auth.clearSessionCookie(req, res);
+  res.json({ ok: true, signedOut: id === req.team.id });
 }));
 
 function maskedSettings(s, fromAddress) {
@@ -79,15 +231,45 @@ function maskedSettings(s, fromAddress) {
     smtpPass: s.smtpPass ? '••••••••' : '',
     googleClientSecret: s.googleClientSecret ? '••••••••' : '',
     calendlySigningKey: s.calendlySigningKey ? '••••••••' : '',
+    calendlySigningKeys: undefined,
     calendlyToken: s.calendlyToken ? '••••••••' : '',
     apolloApiKey: s.apolloApiKey ? '••••••••' : '',
     relayToken: s.relayToken ? '••••••••' : '',
+    // The HMAC key the open-tracking pixel is signed with. Not masked but
+    // removed: nothing in the browser reads it, and it is not writable through
+    // /api/settings either. Anyone holding it can forge an "opened" event for
+    // any candidate, which is the one thing this key protects against.
+    trackingSecret: undefined,
+    // The Sales IQ connection token. Removed rather than masked: the page gets
+    // it, inside the connection code, only from /api/salesiq-connection when
+    // Settings asks for it, never on the payload polled every 30 seconds. Nor
+    // is it writable through /api/settings — it is generated, never typed.
+    salesiqToken: undefined,
     // Texting pace, shown already clamped for the same reason as the email pace.
     ...textQueue.normalizeTextSettings({
       textDailyLimit: s.textDailyLimit, textMinGap: s.textMinGap, textMaxGap: s.textMaxGap,
       textStartHour: s.textStartHour, textEndHour: s.textEndHour,
     }),
   };
+}
+
+// The text queue's running order, and the reason each person is where they are.
+function textPriority(db, q) {
+  const ranked = priority.rank(db.candidates, {
+    maxFollowUps: followUpSettings(db.settings).max,
+    optOut: (q && q.optOut) || [],
+  });
+  const order = {};
+  // rank and reason only: the score and the fit bucket are what the ranking was
+  // computed from, and nothing on the page ever reads them back.
+  ranked.forEach((r, i) => { order[r.id] = { rank: i + 1, reason: r.reason }; });
+  const blocked = {};
+  for (const c of db.candidates) {
+    if (order[c.id]) continue;
+    const why = priority.blockedReason(c, { optOut: new Set(((q && q.optOut) || [])) });
+    if (why && why !== 'no phone number') blocked[c.id] = why;
+  }
+  return { order, blocked, textable: ranked.length };
 }
 
 function stats(db) {
@@ -123,41 +305,146 @@ function followUpDueIds(db) {
 // Immediate sends (small selections) go out at most this many per request.
 const MAX_PER_REQUEST = 8;
 
+// The feed the dashboard tile draws from. It is one chronological list, but
+// the two channels run at wildly different volumes: a few thousand sent emails
+// produce opens all day, so a text reply from this morning falls off the end
+// within minutes and the tile looks as though texting never happens. The
+// window is therefore the most recent of everything PLUS the most recent
+// texting entries on top, which is what keeps the tile's Texting filter
+// showing something whenever there is anything to show.
+const FEED_WINDOW = 60;
+const TEXT_WINDOW = 25;
+function feedWindow(events) {
+  const feed = (events || [])
+    .filter((e) => store.FEED_TYPES.has(e.type))
+    .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+  const keep = new Map(feed.slice(0, FEED_WINDOW).map((e) => [e.id, e]));
+  for (const e of feed.filter((e) => store.EVENT_CHANNEL[e.type] === 'text').slice(0, TEXT_WINDOW)) keep.set(e.id, e);
+  return [...keep.values()].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+}
+
 // ---------- App state ----------
-app.get('/api/state', asyncRoute(async (_req, res) => {
+// What a candidate looks like to the browser. An allowlist rather than a
+// spread, because the browser polls this for every candidate every 30 seconds:
+// a field added to the store for the server's own use would otherwise start
+// riding along on a payload that is already the largest thing the app sends.
+// Anything not here is deliberately server-side only — the record the browser
+// never reads (messageId, threadId, sheetRow, city, altEmails, lastFollowUpAt,
+// calendlyEventUri). If the UI needs one of them, add it here on purpose.
+const CANDIDATE_FIELDS = [
+  'id', 'name', 'firstName', 'lastName', 'email', 'phone',
+  'role', 'pastRoles', 'company', 'location', 'notes', 'source',
+  'status', 'addedAt',
+  'lastEmailedAt', 'openedAt', 'lastReplyAt', 'lastSubject', 'gmailThreadId',
+  'emailUnread', 'followUpCount',
+  'lastTextedAt', 'textStatus', 'textUnread',
+  'textDeliveredAt', 'textReadAt', 'textRepliedAt',
+  'bookedAt', 'bookedEvent', 'bookedJoinUrl',
+];
+
+function publicCandidate(c) {
+  const out = {};
+  for (const k of CANDIDATE_FIELDS) if (c[k] !== undefined) out[k] = c[k];
+  const thread = c.textThread;
+  const last = thread && thread.length ? thread[thread.length - 1] : null;
+  const real = (c.replies || []).filter((r) => !r.kind);
+  const lastReply = real[real.length - 1] || null;
+  // Industry is derived, never stored — it is a view of role/company/history
+  // and must not drift out of date behind a saved copy of itself.
+  out.industry = priority.industry(c).code;
+  out.textCount = thread ? thread.length : 0;
+  out.textLast = last ? { dir: last.dir, ts: last.ts, text: last.text.slice(0, 120) } : null;
+  // Email's conversation lives in Gmail, so what rides along here is only
+  // enough to list and sort it: how many real replies, and the last one.
+  out.emailReplies = real.length;
+  out.emailBounced = (c.replies || []).some((r) => r.kind === 'bounce');
+  out.emailLast = lastReply
+    ? { ts: lastReply.date || c.lastReplyAt || '', text: String(lastReply.text || lastReply.snippet || '').slice(0, 160) }
+    : null;
+  return out;
+}
+
+app.get('/api/state', asyncRoute(async (req, res) => {
   const db = await store.load();
   const lastError = db.events.find((e) => e.type === 'error' && Date.now() - new Date(e.ts).getTime() < 24 * 3600 * 1000);
-  const sendingNow = await mailer.sendStatus(db.settings);
-  res.json({
-    candidates: db.candidates,
-    events: db.events.filter((e) => store.FEED_TYPES.has(e.type)).sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 60),
+  // Four independent reads. On Netlify Blobs each one is its own round trip, so
+  // awaiting them in a line made this route as slow as the sum of them; nothing
+  // here depends on anything else here.
+  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList] = await Promise.all([
+    google.status(db.settings),
+    textQueue.loadQ(),
+    queue.loadQ(),
+    storage.getJson('relay').catch(() => null),
+    storage.backend(),
+    backups.list().catch(() => []),
+  ]);
+  // Derived from the status above rather than fetching it a second time.
+  const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
+  const payload = {
+    candidates: db.candidates.map(publicCandidate),
+    industries: priority.INDUSTRY_LABELS,
+    events: feedWindow(db.events),
     lastError: lastError ? lastError.message : '',
     template: db.template,
+    templates: presets.publicView(db),
+    // Whether this team has written its own outreach letter yet, for the
+    // setup checklist. A team old enough to predate the flag counts as done.
+    templateEdited: !db.settings.templateSeeded,
     followUp: { template: db.followUp, dueIds: followUpDueIds(db), ...followUpSettings(db.settings) },
     settings: maskedSettings(db.settings, sendingNow.from),
-    google: await google.status(db.settings),
+    google: googleStatus,
     sending: sendingNow,
     stats: stats(db),
     baseUrl: google.baseUrl(),
-    storage: await storage.backend(),
+    storage: storageBackend,
+    backups: backupList.map((b) => ({ key: b.key, at: b.at, reason: b.reason, count: b.count })),
     auth: { required: auth.required() },
-    queue: queue.status(await queue.loadQ(), db.settings, sendingNow.from),
+    team: teamPublic(req.team),
+    queue: queue.status(emailQ, db.settings, sendingNow.from),
     maxImmediate: MAX_PER_REQUEST,
     interviews: db.interviews || [],
     apollo: { configured: Boolean(db.settings.apolloApiKey), maxPerPull: apollo.MAX_PER_PULL, batch: apollo.ENRICH_BATCH },
     texting: {
       template: db.textTemplate,
       withPhone: db.candidates.filter((c) => phone.normalize(c.phone)).length,
-      queue: textQueue.status(await textQueue.loadQ(), db.settings, await storage.getJson('relay').catch(() => null)),
-      tokenSet: Boolean(db.settings.relayToken || (process.env.RELAY_TOKEN || '').trim()),
+      // id -> { rank, score, reason } for everyone worth texting, plus why
+      // anyone else is not. Sent as a small map rather than on each candidate
+      // so the candidate list stays the same shape it has always been.
+      priority: textPriority(db, textQ),
+      queue: textQueue.status(textQ, db.settings, relay),
+      tokenSet: Boolean(db.settings.relayToken || (tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim())),
     },
     calendly: {
       syncEnabled: Boolean(db.settings.calendlyToken),
-      webhook: Boolean(db.settings.calendlySigningKey),
+      webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
       lastSyncAt: db.calendlyLastSyncAt || null,
       error: db.calendlySyncError || '',
     },
-  });
+  };
+
+  // The browser asks for this every 30 seconds and most of the time nothing
+  // has changed. The body is byte-stable for a given state, so hashing it lets
+  // an unchanged poll cost 304 bytes instead of megabytes — and the browser,
+  // seeing no new state, skips the re-render too. Weak tag: this is semantic
+  // equality of the payload, not of the bytes on any particular encoding.
+  const body = JSON.stringify(payload);
+  // The Mac says hello every 30 seconds, and that timestamp rode in the hash —
+  // so while the relay was running, which is the normal state, the tag changed
+  // on every poll and the conditional request below could never answer 304.
+  // It is only ever displayed once the relay has *stopped* checking in, and by
+  // then it has stopped moving; what the page actually reacts to is the
+  // `online` flag beside it, which is in the hash and flips when it should.
+  const stable = JSON.stringify(payload, (k, v) => (k === 'lastSeenAt' ? null : v));
+  // The team goes into the hash explicitly. The payload names it too, so two
+  // teams could not collide by accident — but a tag that answers 304 for the
+  // wrong team would show one team the other's dashboard, and that is not a
+  // thing to leave resting on a field happening to be in the body.
+  const etag = `W/"${crypto.createHash('sha1').update(`${tenant.current() || '-'}:${stable}`).digest('base64url')}"`;
+  res.set('ETag', etag);
+  // Revalidate every time — never serve this from cache without asking.
+  res.set('Cache-Control', 'no-cache, private');
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  return res.type('application/json').send(body);
 }));
 
 // ---------- Settings & template ----------
@@ -187,16 +474,28 @@ const SETTING_REASONS = {
 };
 
 app.post('/api/settings', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  const before = { ...db.settings };
-  const sender = (await mailer.sendStatus(db.settings)).from;
-  const allowed = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
-    'googleClientId', 'googleClientSecret', 'calendlySigningKey', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone',
-    ...TEXT_NUMERIC, 'textSunday'];
+  const sender = (await mailer.sendStatus((await store.load()).settings)).from;
+  let before = null;
+  let adjusted = [];
+  const db = await store.update((d) => { before = { ...d.settings }; adjusted = applySettings(d, req.body, sender); });
+  // A raised daily limit lifts the daily-limit pause at once instead of waiting
+  // it out; new mail credentials lift the "not set up" pause.
+  const kinds = [];
+  if (db.settings.dailyLimit !== before.dailyLimit) kinds.push('daily');
+  if (['smtpUser', 'smtpPass', 'googleClientId', 'googleClientSecret'].some((k) => db.settings[k] !== before[k])) kinds.push('not-ready');
+  if (kinds.length) await queue.updateQ((f) => queue.clearPause(f, kinds) || false);
+  res.json({ ok: true, settings: maskedSettings(db.settings, sender), adjusted });
+}));
+
+const SETTINGS_ALLOWED = ['calendlyUrl', 'fromName', 'gmailSignature', 'dailyLimit', 'perMinute', 'followUpDays', 'maxFollowUps', 'ntfyTopic', 'smtpUser', 'smtpPass',
+  'googleClientId', 'googleClientSecret', 'calendlyToken', 'apolloApiKey', 'lastSheetUrl', 'timeZone',
+  ...TEXT_NUMERIC, 'textSunday'];
+// Apply a settings form to a document; returns what had to be adjusted.
+function applySettings(db, body, sender) {
   const adjusted = [];
-  for (const k of allowed) {
-    if (!(k in req.body) || req.body[k] === '••••••••') continue;
-    const v = req.body[k];
+  for (const k of SETTINGS_ALLOWED) {
+    if (!(k in body) || body[k] === '••••••••') continue;
+    const v = body[k];
     let val = typeof v === 'boolean' ? v : String(v ?? '').trim();
     if (k in NUMERIC_SETTINGS && val !== '') {
       const range = NUMERIC_SETTINGS[k];
@@ -210,32 +509,73 @@ app.post('/api/settings', asyncRoute(async (req, res) => {
     }
     db.settings[k] = val;
   }
-  await store.save(db);
-  // A raised daily limit lifts the daily-limit pause at once instead of waiting
-  // it out; new mail credentials lift the "not set up" pause.
-  const kinds = [];
-  if (db.settings.dailyLimit !== before.dailyLimit) kinds.push('daily');
-  if (['smtpUser', 'smtpPass', 'googleClientId', 'googleClientSecret'].some((k) => db.settings[k] !== before[k])) kinds.push('not-ready');
-  if (kinds.length) await queue.updateQ((f) => queue.clearPause(f, kinds) || false);
-  res.json({ ok: true, settings: maskedSettings(db.settings, sender), adjusted });
-}));
+  return adjusted;
+}
 
+// The default email: what the send window opens with and the queue falls
+// back to. Kept for the editors and anything else that knows only one.
 app.post('/api/template', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  db.template = {
-    ...db.template,   // attachments are managed by their own routes
-    subject: String(req.body.subject ?? db.template.subject),
-    body: String(req.body.body ?? db.template.body),
-  };
-  await store.save(db);
-  res.json({ ok: true, template: db.template });
+  const db = await store.update((d) => {
+    d.template = {
+      ...d.template,   // attachments are managed by their own routes
+      subject: String(req.body.subject ?? d.template.subject),
+      body: String(req.body.body ?? d.template.body),
+    };
+    // Somebody has now written this team's letter, whatever it says.
+    d.settings.templateSeeded = false;
+    touchDefault(d, 'email');
+    presets.normalize(d);   // the named default follows, in this reply too
+  });
+  res.json({ ok: true, template: db.template, templates: presets.publicView(db) });
 }));
 
 app.post('/api/template/reset', asyncRoute(async (_req, res) => {
-  const db = await store.load();
-  db.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: db.template.attachments };
-  await store.save(db);
-  res.json({ ok: true, template: db.template });
+  const db = await store.update((d) => {
+    d.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: d.template.attachments };
+    touchDefault(d, 'email');
+    presets.normalize(d);   // the named default follows, in this reply too
+  });
+  res.json({ ok: true, template: db.template, templates: presets.publicView(db) });
+}));
+
+function touchDefault(db, kind) {
+  const p = db[presets.KINDS[kind].list].find((x) => x.id === db.templateDefaults[kind]);
+  if (p) p.updatedAt = new Date().toISOString();
+}
+
+// ---------- Saved templates (email and text) ----------
+// Every change is a retried read-modify-write of the team's document, and the
+// answer carries the whole list, so the page never has to guess what is saved.
+const templateKind = (req) => {
+  const kind = String(req.params.kind || '');
+  if (!Object.hasOwn(presets.KINDS, kind)) throw new Error('Unknown kind of template.');
+  return kind;
+};
+const templatesReply = (db, extra = {}) => ({
+  ok: true, ...extra, templates: presets.publicView(db), template: db.template, textTemplate: db.textTemplate,
+});
+app.post('/api/templates/:kind', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  let made = null;
+  const db = await store.update((d) => { made = presets.create(d, kind, req.body || {}); });
+  res.json(templatesReply(db, { preset: made }));
+}));
+app.patch('/api/templates/:kind/:id', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  let p = null;
+  const db = await store.update((d) => { p = presets.update(d, kind, req.params.id, req.body || {}); });
+  res.json(templatesReply(db, { preset: p }));
+}));
+app.post('/api/templates/:kind/:id/default', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  let p = null;
+  const db = await store.update((d) => { p = presets.setDefault(d, kind, req.params.id); });
+  res.json(templatesReply(db, { preset: p }));
+}));
+app.delete('/api/templates/:kind/:id', asyncRoute(async (req, res) => {
+  const kind = templateKind(req);
+  const db = await store.update((d) => { presets.remove(d, kind, req.params.id); });
+  res.json(templatesReply(db));
 }));
 
 app.post('/api/followup', asyncRoute(async (req, res) => {
@@ -367,7 +707,10 @@ app.post('/api/import/csv', asyncRoute(async (req, res) => {
 //   existing   – already in the list (optionally enriched with blank fields)
 //   duplicate  – the same address earlier in this same file
 //   invalid    – no usable email address anywhere in the row
-const emailKey = (e) => (address.normalize(e) || String(e || '').trim().toLowerCase());
+// Capitals never make a different mailbox in practice, and the page's own
+// repeat check ignores them, so Jane@X.com in a file is the jane@x.com
+// already on the list — not a second person to email.
+const emailKey = (e) => (address.normalize(e) || String(e || '').trim()).toLowerCase();
 function analyzeImport(candidates, rows, mapping, { lines = null, headerless = false } = {}) {
   const m = mapping || {};
   const col = (row, key) => (m[key] != null && m[key] >= 0 ? csv.cleanCell(row[m[key]]) : '');
@@ -549,13 +892,9 @@ app.post('/api/apollo/import', asyncRoute(async (req, res) => {
 
 // ---------- Candidates ----------
 app.post('/api/candidates', asyncRoute(async (req, res) => {
-  const db = await store.load();
   const b = req.body;
   const email = address.normalize(b.email);
   if (!email) throw new Error('A valid email address is required.');
-  if (db.candidates.some((c) => c.email.toLowerCase() === email.toLowerCase())) {
-    throw new Error('A candidate with that email already exists.');
-  }
   const c = {
     id: store.rid(),
     name: String(b.name || '').trim(),
@@ -573,32 +912,88 @@ app.post('/api/candidates', asyncRoute(async (req, res) => {
     lastEmailedAt: null,
     bookedAt: null,
   };
-  db.candidates.push(c);
-  await store.save(db);
+  await store.update((db) => {
+    if (db.candidates.some((x) => x.email.toLowerCase() === email.toLowerCase())) {
+      throw new Error('A candidate with that email already exists.');
+    }
+    db.candidates.push(c);
+  });
   res.json({ ok: true, candidate: c });
 }));
 
 app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  const c = db.candidates.find((x) => x.id === req.params.id);
-  if (!c) throw new Error('Candidate not found.');
-  const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
-  for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
-  if ('email' in req.body) {
-    const email = address.normalize(req.body.email);
-    if (!email) throw new Error('That is not a valid email address.');
-    c.email = email;
+  const email = 'email' in req.body ? address.normalize(req.body.email) : null;
+  if ('email' in req.body && !email) throw new Error('That is not a valid email address.');
+  let c = null;
+  let wasDeclined = false;
+  await store.update((db) => {
+    c = db.candidates.find((x) => x.id === req.params.id);
+    if (!c) throw new Error('Candidate not found.');
+    wasDeclined = c.status === 'declined';
+    const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
+    for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
+    if (email) c.email = email;
+  });
+  // Marking somebody "Not interested" has to stop a text that is already
+  // waiting to go out. The ranking reads the status, but the queue does not —
+  // it only consults its own opt-out list — so a text queued before the change
+  // was still handed to the Mac and sent to somebody who had said no. This is
+  // the one mistake the daily cap exists to avoid.
+  if (!wasDeclined && c.status === 'declined' && phone.normalize(c.phone)) {
+    await textQueue.updateQ((q) => { if (!textQueue.addOptOut(q, c.phone)) return false; });
   }
-  await store.save(db);
   res.json({ ok: true, candidate: c });
 }));
 
-app.delete('/api/candidates/:id', asyncRoute(async (req, res) => {
+// ---------- Keeping the list safe ----------
+// The whole list as a spreadsheet, for a copy of your own.
+const EXPORT_COLUMNS = [
+  ['First Name', 'firstName'], ['Last Name', 'lastName'], ['Email', 'email'], ['Phone', 'phone'],
+  ['Location', 'location'], ['Role', 'role'], ['Company', 'company'], ['Status', 'status'],
+  ['Notes', 'notes'], ['Source', 'source'], ['Added', 'addedAt'], ['Last emailed', 'lastEmailedAt'],
+  ['Last texted', 'lastTextedAt'], ['Last reply', 'lastReplyAt'], ['Booked', 'bookedAt'],
+];
+function csvCell(v) {
+  // Typed by strangers on a job board: a cell starting = + - @ is a formula to
+  // Excel, so it gets a leading space, which the importer trims again.
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = ` ${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+app.get('/api/candidates/export', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const idx = db.candidates.findIndex((x) => x.id === req.params.id);
-  if (idx === -1) throw new Error('Candidate not found.');
-  db.candidates.splice(idx, 1);
-  await store.save(db);
+  const lines = [EXPORT_COLUMNS.map(([h]) => h).join(',')];
+  for (const c of db.candidates) {
+    const first = c.firstName || (c.name || '').split(' ')[0] || '';
+    const last = c.lastName || (c.firstName ? '' : (c.name || '').split(' ').slice(1).join(' '));
+    lines.push(EXPORT_COLUMNS.map(([, k]) => csvCell(k === 'firstName' ? first : k === 'lastName' ? last : c[k])).join(','));
+  }
+  const team = (req.team && req.team.name ? req.team.name : 'candidates').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'candidates';
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${team}-candidates-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.set('Cache-Control', 'no-store');
+  // A byte-order mark so Excel reads accents correctly; CRLF because Excel expects it.
+  res.send(`\uFEFF${lines.join('\r\n')}\r\n`);
+}));
+
+app.get('/api/backups', asyncRoute(async (_req, res) => {
+  res.json({ ok: true, backups: await backups.list() });
+}));
+app.post('/api/backups', asyncRoute(async (_req, res) => {
+  const b = await backups.snapshot('manual');
+  res.json({ ok: true, backup: b, backups: await backups.list() });
+}));
+// Add back anybody who is in a backup and not on the list now. Never removes
+// or changes anyone already on it. dryRun says how many that would be.
+app.post('/api/backups/restore', asyncRoute(async (req, res) => {
+  const r = await backups.restoreMissing(String((req.body && req.body.key) || ''), { dryRun: Boolean(req.body && req.body.dryRun) });
+  res.json({ ok: true, ...r });
+}));
+
+app.delete('/api/candidates/:id', asyncRoute(async (req, res) => {
+  await store.update((db) => {
+    if (!store.removeCandidate(db, req.params.id)) throw new Error('Candidate not found.');
+  });
   res.json({ ok: true });
 }));
 
@@ -657,13 +1052,13 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     return res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
   }
   if (!db.settings.trackingSecret) {
-    await store.update((d) => { if (!d.settings.trackingSecret) d.settings.trackingSecret = crypto.randomBytes(16).toString('hex'); });
+    await store.update((d) => { if (!d.settings.trackingSecret) d.settings.trackingSecret = tracking.newSecret(); });
     db.settings.trackingSecret = (await store.load()).settings.trackingSecret;
   }
   const signature = await google.getSignature(db.settings, { refresh: true });
   const files = await attachments.loadAll(db);
   const recent = queue.recentlySentIds(q);
-  const patches = {};
+  const sentPatches = [];
   for (const id of ids) {
     const c = db.candidates.find((x) => x.id === id);
     if (!c) { results.push({ id, ok: false, error: 'Not found' }); continue; }
@@ -675,13 +1070,17 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     if (paceLeft <= 0) { deferAll('rate', new Date(Date.now() + 20 * 1000), `Pacing to ${perMinute} emails per minute.`); break; }
     const attemptAt = new Date().toISOString();
     try {
-      const trackingUrl = `${google.baseUrl()}/webhooks/open/${tracking.token(db.settings, c.id)}.gif`;
+      const trackingUrl = `${google.baseUrl()}${tracking.pixelPath(db.settings, c.id)}`;
       const msg = renderEmail(template, c, db.settings, { signature, trackingUrl });
       const thread = followUp && c.messageId ? { threadId: c.gmailThreadId || undefined, inReplyTo: c.messageId, references: c.messageId } : {};
       const sent = await queue.sendWithDeadline(db.settings, { to: c.email, ...msg, ...thread, attachments: followUp ? [] : files }, Math.min(queue.SEND_TIMEOUT_MS, left - 300), { via: st.via });
-      await queue.updateQ((f) => queue.recordSent(f, c.id, c.email));
+      // What the send changes on the candidate goes in the same write as the
+      // send, so a request cut off before the end still gets it recorded.
+      const ts = new Date().toISOString();
+      const patch = { id: c.id, lastEmailedAt: ts, gmailThreadId: sent.threadId || '', messageId: sent.messageId || '', lastSubject: msg.subject, followUp };
+      await queue.updateQ((f) => queue.recordSent(f, c.id, c.email, ts, patch));
       paceLeft -= 1;
-      patches[c.id] = { lastEmailedAt: new Date().toISOString(), gmailThreadId: sent.threadId || '', messageId: sent.messageId || '', lastSubject: msg.subject, followUp };
+      sentPatches.push(patch);
       results.push({ id, ok: true, email: c.email });
     } catch (err) {
       const kind = queue.classifySendError(err);
@@ -697,7 +1096,7 @@ app.post('/api/send', asyncRoute(async (req, res) => {
       }
       if (err.name === 'AbortError' && st.via === 'gmail-api') {
         // Outcome unknown: the queue checks the Sent folder before deciding — never a blind resend.
-        await queue.updateQ((f) => queue.deferUnverified(f, c.id, c.email, attemptAt));
+        await queue.updateQ((f) => queue.deferUnverified(f, c.id, c.email, attemptAt, template, { followUp }));
         results.push({ id, ok: false, queued: true, email: c.email, error: 'Timed out — Gmail will be checked and the send finished in the background.' });
         continue;
       }
@@ -706,14 +1105,10 @@ app.post('/api/send', asyncRoute(async (req, res) => {
     }
     await sleep(400);
   }
-  if (Object.keys(patches).length) {
-    await store.update((fresh) => {
-      for (const [id, p] of Object.entries(patches)) {
-        const fc = fresh.candidates.find((x) => x.id === id);
-        if (fc) queue.applySentPatch(fc, p);
-      }
-    });
-  }
+  // The emails have gone and are recorded: a failure here must not report
+  // them as failed. The scheduled worker writes anything left within a minute.
+  try { await queue.settlePending(sentPatches); }
+  catch (err) { console.warn('[send] sends not written to candidates yet, the worker will:', err.message); }
   res.json({ ok: true, results, maxPerRequest: MAX_PER_REQUEST });
 }));
 
@@ -801,35 +1196,87 @@ app.post('/api/relay/hello', asyncRoute(async (req, res) => {
   res.json({ ok: true, pollMs: 5000, helloMs: 30000, limits: { startHour: l.startHour, endHour: l.endHour, dailyLimit: l.dailyLimit } });
 }));
 
+// The numbers this system has texted, so a relay knows which conversations on
+// its Mac belong to the CRM. Without it, moving between two Macs silently loses
+// replies: iMessage syncs the conversation to both, but a relay that did not
+// send the original has no record of the number and ignores everything from it.
+//
+// Deliberately only ever numbers already texted — never the candidate list.
+app.post('/api/relay/handles', asyncRoute(async (_req, res) => {
+  const q = await textQueue.loadQ();
+  const db = await store.load();
+  const handles = new Set();
+  for (const e of q.sentLog || []) if (e && e.phone) handles.add(e.phone);
+  for (const c of db.candidates) {
+    if (!c.lastTextedAt) continue;
+    const p = phone.normalize(c.phone);
+    if (p) handles.add(p);
+  }
+  res.json({ handles: [...handles] });
+}));
+
+// What the relay reported goes into the text queue first and onto the
+// candidate second. Should a request end between the two, the outcome waits in
+// the queue's pending list and the next report or claim writes it — safe to
+// repeat: the thread never gets the same message twice.
+function applyTextOutcome(c, o) {
+  if (o.status === 'sent') {
+    if (!(Date.parse(c.lastTextedAt) >= Date.parse(o.ts))) c.lastTextedAt = o.ts;
+    advanceText(c, 'sent');
+    // Our half of the conversation. Until now it lived only in the queue's
+    // lease and went in the bin on delivery.
+    if (o.body) store.addToThread(c, 'out', o.body, o.ts);
+  } else if (Date.parse(c.lastTextedAt) > Date.parse(o.ts)) {
+    // A later text went through; an older failure says nothing about now.
+  } else if (o.status === 'not-imessage') c.textStatus = 'not-imessage';
+  else c.textStatus = 'failed';
+}
+
+async function settleTextOutcomes(list) {
+  if (!list || !list.length) return;
+  await store.update((db) => {
+    const byId = new Map(db.candidates.map((c) => [c.id, c]));
+    let changed = false;
+    for (const o of list) {
+      const c = byId.get(o.id);
+      if (!c) continue;
+      const before = JSON.stringify(c);
+      applyTextOutcome(c, o);
+      if (JSON.stringify(c) !== before) changed = true;
+    }
+    if (!changed) return false;
+  });
+  await textQueue.updateQ((q) => textQueue.dropPending(q, list));
+}
+
 app.post('/api/relay/claim', asyncRoute(async (req, res) => {
   const db = await store.load();
   let out = { job: null, reason: 'empty' };
-  await textQueue.updateQ((q) => {
-    out = textQueue.claim(q, db, { render: (tpl, c) => renderText(tpl || db.textTemplate, c, db.settings) });
+  const q = await textQueue.updateQ((f) => {
+    out = textQueue.claim(f, db, { render: (tpl, c) => renderText(tpl || db.textTemplate, c, db.settings) });
     // A poll that found nothing to do writes nothing: the relay polls every few
     // seconds, and rewriting the record each time would be pure churn.
     if (!out.changed) return false;
   });
+  if (q.pendingPatches.length) {
+    try { await settleTextOutcomes(q.pendingPatches); }
+    catch (err) { console.warn('[relay] earlier outcomes not written to candidates yet:', err.message); }
+  }
   res.json({ job: out.job || null, reason: out.reason, until: out.until || null });
 }));
 
 app.post('/api/relay/report', asyncRoute(async (req, res) => {
   const { jobId, status, error } = req.body || {};
   let out = { ok: false, reason: 'unknown-or-expired-job' };
-  await textQueue.updateQ((q) => {
-    out = textQueue.report(q, { jobId: String(jobId || ''), status: String(status || ''), error: String(error || '').slice(0, 300) });
+  const q = await textQueue.updateQ((f) => {
+    out = textQueue.report(f, { jobId: String(jobId || ''), status: String(status || ''), error: String(error || '').slice(0, 300) });
     if (!out.ok) return false;
   });
   if (!out.ok) return res.status(409).json(out);
-  if (out.candidateId) {
-    await store.update((db) => {
-      const c = db.candidates.find((x) => x.id === out.candidateId);
-      if (!c) return;
-      if (out.status === 'sent') { c.lastTextedAt = new Date().toISOString(); advanceText(c, 'sent'); }
-      else if (out.status === 'not-imessage') c.textStatus = 'not-imessage';
-      else c.textStatus = 'failed';
-    });
-  }
+  // The outcome is stored; a failure writing it onto the candidate must not
+  // send the relay back to report a job that is already closed.
+  try { await settleTextOutcomes(q.pendingPatches); }
+  catch (err) { console.warn('[relay] outcome not written to the candidate yet, the next poll will:', err.message); }
   res.json(out);
 }));
 
@@ -838,9 +1285,12 @@ app.post('/api/relay/report', asyncRoute(async (req, res) => {
 // acted on; anything else is silently dropped.
 app.post('/api/relay/events', asyncRoute(async (req, res) => {
   const raw = Array.isArray(req.body && req.body.events) ? req.body.events.slice(0, 200) : [];
+  // The relay skips this call when it has nothing, but a retry or a future
+  // version might not: an empty batch should never read the whole record.
+  if (!raw.length) return res.json({ applied: 0, unknown: 0, optOut: 0, tooOld: 0, neverTexted: 0 });
   const db = await store.load();
   const index = byPhone(db);
-  const seen = { applied: 0, unknown: 0, optOut: 0, replies: [] };
+  const seen = { applied: 0, unknown: 0, optOut: 0, tooOld: 0, neverTexted: 0, replies: [] };
   const optOuts = [];
   const touched = new Map();   // candidate id -> mutation to apply
 
@@ -856,6 +1306,14 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
     else if (kind === 'read') patch.read = ts;
     else if (kind === 'undelivered') patch.undelivered = ts;
     else if (kind === 'reply') {
+      // A reply cannot predate the text it answers. Anything older belongs to a
+      // conversation that already existed on that Mac — the owner's own thread
+      // with that person — and must never be filed as outreach, however
+      // confidently a relay reports it. The relay checks this too; this is the
+      // half that cannot be undone by a stale state file on a laptop.
+      const textedAt = c.lastTextedAt ? new Date(c.lastTextedAt).getTime() : null;
+      if (textedAt && new Date(ts).getTime() < textedAt - 5 * 60 * 1000) { seen.tooOld += 1; continue; }
+      if (!textedAt) { seen.neverTexted += 1; continue; }
       patch.replied = ts;
       patch.replies.push({ ts, text });
       if (phone.optedOut(text)) { patch.optOut = true; optOuts.push(p); }
@@ -879,7 +1337,10 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
         if (patch.replied) {
           c.textRepliedAt = c.textRepliedAt || patch.replied;
           advanceText(c, 'replied');
-          c.textReplies = [...(c.textReplies || []), ...patch.replies].slice(-20);
+          for (const r of patch.replies) store.addToThread(c, 'in', r.text, r.ts);
+          // Cleared when the thread is opened, so the bell survives a reload
+          // and agrees with itself across devices.
+          c.textUnread = true;
           // A text reply is the same pipeline signal as an email reply.
           if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
           c.repliedAt = c.repliedAt || patch.replied;
@@ -904,13 +1365,20 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
       await store.addEvent('text-read', `${who} read your text.`, c.id, patch.read).catch(() => {});
     }
     for (const r of patch.replies) {
-      await store.addEvent('text-replied', `${who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts).catch(() => {});
+      // STOP is the one reply that changes what you may legally do next, and
+      // as a plain "replied" line it read exactly like someone saying yes.
+      const stop = phone.optedOut(r.text);
+      if (stop) {
+        await store.addEvent('text-optout', `${who} replied STOP — blocked from texting.`, c.id, r.ts).catch(() => {});
+      } else {
+        await store.addEvent('text-replied', `${who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts).catch(() => {});
+      }
       try {
         await notify.pushToPhone(db.settings, {
-          title: `💬 ${who} replied`,
-          message: r.text.slice(0, 300),
+          title: stop ? `🛑 ${who} replied STOP` : `💬 ${who} replied`,
+          message: stop ? `Blocked from texting. Their message: ${r.text.slice(0, 260)}` : r.text.slice(0, 300),
           priority: 'high',
-          tags: 'speech_balloon',
+          tags: stop ? 'no_entry' : 'speech_balloon',
         });
       } catch {}
     }
@@ -919,18 +1387,25 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
 }));
 
 // ---------- Texting: the dashboard's own routes ----------
+// The default text, like /api/template for email.
 app.post('/api/texts/template', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  db.textTemplate = { body: String((req.body && req.body.body) || '').slice(0, 2000) };
-  await store.save(db);
-  res.json({ ok: true, textTemplate: db.textTemplate });
+  const db = await store.update((d) => {
+    d.textTemplate = { body: String((req.body && req.body.body) || '').slice(0, 2000) };
+    touchDefault(d, 'text');
+    presets.normalize(d);   // the named default follows, in this reply too
+  });
+  res.json({ ok: true, textTemplate: db.textTemplate, templates: presets.publicView(db) });
 }));
 
 app.post('/api/texts/template/reset', asyncRoute(async (_req, res) => {
-  const db = await store.load();
-  db.textTemplate = structuredClone(store.DEFAULT_TEXT_TEMPLATE);
-  await store.save(db);
-  res.json({ ok: true, textTemplate: db.textTemplate });
+  const db = await store.update((d) => {
+    // Only Team Maverick's starter text introduces Blake; any other team gets
+    // the one that claims to be nobody.
+    d.textTemplate = structuredClone(tenant.isLegacy() ? store.DEFAULT_TEXT_TEMPLATE : store.NEW_TEAM_TEXT_TEMPLATE);
+    touchDefault(d, 'text');
+    presets.normalize(d);   // the named default follows, in this reply too
+  });
+  res.json({ ok: true, textTemplate: db.textTemplate, templates: presets.publicView(db) });
 }));
 
 app.post('/api/texts/preview', asyncRoute(async (req, res) => {
@@ -944,16 +1419,45 @@ app.post('/api/texts/preview', asyncRoute(async (req, res) => {
 
 app.post('/api/texts/queue', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const ids = Array.isArray(req.body && req.body.ids) && req.body.ids.length
-    ? req.body.ids
-    : db.candidates.filter((c) => phone.normalize(c.phone) && !c.lastTextedAt && c.status !== 'declined' && c.status !== 'booked').map((c) => c.id);
-  let result = { added: 0, skipped: {} };
+  const q0 = await textQueue.loadQ();
+  const ranked = priority.rank(db.candidates, { maxFollowUps: followUpSettings(db.settings).max, optOut: q0.optOut });
+  const order = new Map(ranked.map((r, i) => [r.id, i]));
+  // Best first, always. Only 60-100 texts a day exist, so the order the queue
+  // drains in IS the strategy: whoever is at the front is who the cap gets
+  // spent on. A selection is ranked too — ticking thirty boxes should still
+  // reach the best of them first.
+  const asked = Array.isArray(req.body && req.body.ids) && req.body.ids.length ? req.body.ids : null;
+  const ids = (asked ? asked.filter((id) => order.has(id)) : ranked.map((r) => r.id))
+    .sort((a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9));
+  // Ranking drops people the queue would have rejected anyway, so their reason
+  // has to be collected here or it is lost — picking someone and being told
+  // "nothing to send" with no reason is worse than not offering it at all.
+  const reasons = {};
+  if (asked) {
+    const blockedSet = new Set(q0.optOut);
+    for (const id of asked) {
+      if (order.has(id)) continue;
+      const c = db.candidates.find((x) => x.id === id);
+      const why = c ? priority.blockedReason(c, { optOut: blockedSet }) : 'no longer in the list';
+      if (why) reasons[why] = (reasons[why] || 0) + 1;
+    }
+  }
+  // A one-off message for this send only, exactly as the email side allows —
+  // texting one person usually means saying something other than the template.
+  const custom = req.body && req.body.template && String(req.body.template.body || '').trim();
+  const template = custom ? { body: String(req.body.template.body) } : db.textTemplate;
+  // Explicit, per send, and never sticky: a test message can go out at any
+  // hour without touching the quiet hours that protect the real list.
+  const ignoreQuietHours = Boolean(req.body && req.body.ignoreQuietHours);
+  let result = { added: 0, promoted: 0, skipped: {} };
   await textQueue.updateQ((q) => {
-    result = textQueue.enqueue(q, db, ids, db.textTemplate);
-    if (!result.added) return false;
+    result = textQueue.enqueue(q, db, ids, template, { ignoreQuietHours });
+    // Promoting someone already waiting is a change worth writing, even though
+    // it adds nobody new.
+    if (!result.added && !result.promoted) return false;
   });
   const q = await textQueue.loadQ();
-  res.json({ ...result, queue: textQueue.status(q, db.settings, await relayState()) });
+  res.json({ ...result, reasons, queue: textQueue.status(q, db.settings, await relayState()) });
 }));
 
 app.delete('/api/texts/queue', asyncRoute(async (_req, res) => {
@@ -969,15 +1473,185 @@ app.post('/api/texts/queue/retry-failed', asyncRoute(async (_req, res) => {
   res.json({ ok: true, requeued: n, queue: textQueue.status(q, db.settings, await relayState()) });
 }));
 
-app.post('/api/texts/optout', asyncRoute(async (req, res) => {
-  const p = phone.normalize(req.body && req.body.phone);
-  if (!p) return res.status(400).json({ error: 'That does not look like a phone number.' });
-  await textQueue.updateQ((q) => { if (!textQueue.addOptOut(q, p)) return false; });
+// One email conversation, read live from Gmail.
+app.get('/api/emails/thread', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === String((req.query && req.query.id) || ''));
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  const base = {
+    ok: true,
+    id: c.id,
+    name: c.name || '',
+    email: c.email || '',
+    role: c.role || '',
+    company: c.company || '',
+    status: c.status || 'new',
+    subject: c.lastSubject || '',
+    gmailUrl: c.gmailThreadId ? `https://mail.google.com/mail/u/0/#all/${c.gmailThreadId}` : '',
+  };
+  const g = await google.status(db.settings);
+  if (!g.connected) {
+    return res.json({ ...base, messages: [], unavailable: 'Connect Google in Settings to read and reply to email conversations here.' });
+  }
+  if (!c.gmailThreadId) {
+    return res.json({ ...base, messages: [], unavailable: 'Nothing has been emailed to this person yet.' });
+  }
+  try {
+    const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
+    res.json({ ...base, ...t, canReply: true });
+  } catch (err) {
+    if (err.gone) return res.json({ ...base, messages: [], unavailable: 'That conversation is no longer in Gmail.' });
+    res.json({
+      ...base,
+      messages: [],
+      unavailable: err.scope
+        ? 'Reading email needs the extra Gmail permission — Settings → Google → Reconnect and tick every box.'
+        : err.message,
+    });
+  }
+}));
+
+// Answer an email in its own thread. Gmail's threadId keeps it together on
+// our side; In-Reply-To/References are what keep it together in theirs.
+app.post('/api/emails/reply', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const body = String((req.body && req.body.body) || '').trim();
+  if (!body) return res.status(400).json({ error: 'Type a message first.' });
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === id);
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  if (!c.email) return res.status(409).json({ error: 'No email address on this candidate.' });
+  const g = await google.status(db.settings);
+  if (!g.connected) return res.status(409).json({ error: 'Connect Google in Settings to reply from here.' });
+  if (!c.gmailThreadId) return res.status(409).json({ error: 'Nothing has been emailed to this person yet.' });
+
+  let inReplyTo = c.messageId || '';
+  let subject = c.lastSubject || '';
+  try {
+    const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
+    if (t.lastMessageId) inReplyTo = t.lastMessageId;
+    if (t.lastSubject) subject = t.lastSubject;
+  } catch { /* fall back to what was stored when we last sent */ }
+  const re = /^re:/i.test(subject) ? subject : `Re: ${subject || 'Following up'}`;
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#141b4d;white-space:pre-wrap">${escapeHtml(body)}</div>`;
+
+  try {
+    const sent = await mailer.sendEmail(db.settings, {
+      to: c.email,
+      subject: re,
+      text: body,
+      html,
+      threadId: c.gmailThreadId,
+      inReplyTo: inReplyTo || undefined,
+      references: inReplyTo || undefined,
+    });
+    await store.update((fresh) => {
+      const f = fresh.candidates.find((x) => x.id === id);
+      if (!f) return false;
+      // A reply is a contact, so the follow-up clock restarts from here — an
+      // automated nudge on top of a conversation already in progress reads as
+      // nobody being home.
+      f.lastEmailedAt = new Date().toISOString();
+      f.lastSubject = re;
+      if (sent.messageId) f.messageId = sent.messageId;
+      if (sent.threadId) f.gmailThreadId = sent.threadId;
+      f.emailUnread = false;
+    });
+    res.json({ ok: true, sent: true });
+  } catch (err) {
+    res.status(502).json({ error: err.message || 'Gmail refused the message.' });
+  }
+}));
+
+app.post('/api/emails/seen', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const all = Boolean(req.body && req.body.all);
+  let n = 0;
   await store.update((db) => {
-    const c = db.candidates.find((x) => phone.normalize(x.phone) === p);
-    if (c) c.status = 'declined';
+    n = 0;   // re-run on a conflict: count afresh
+    for (const c of db.candidates) {
+      if (!c.emailUnread) continue;
+      if (!all && c.id !== id) continue;
+      c.emailUnread = false; n += 1;
+    }
+    if (!n) return false;
   });
-  res.json({ ok: true, phone: phone.display(p) });
+  res.json({ ok: true, cleared: n });
+}));
+
+// One conversation, both halves, oldest first.
+app.get('/api/texts/thread', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === String((req.query && req.query.id) || ''));
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  const q = await textQueue.loadQ();
+  const p = phone.normalize(c.phone);
+  res.json({
+    ok: true,
+    id: c.id,
+    name: c.name || '',
+    phone: p ? phone.display(p) : '',
+    role: c.role || '',
+    company: c.company || '',
+    status: c.status || 'new',
+    textStatus: c.textStatus || '',
+    optedOut: Boolean(p && q.optOut.includes(p)),
+    // What is still on its way to the Mac, so a just-sent reply does not
+    // vanish from the thread until the relay gets round to it.
+    pending: [...q.items, ...Object.values(q.leases)]
+      .filter((i) => i.id === c.id)
+      .map((i) => ({ text: (q.templates[i.t] && q.templates[i.t].body) || '' }))
+      .filter((i) => i.text),
+    thread: c.textThread || [],
+  });
+}));
+
+// Answer someone in the thread. This is a reply into a live conversation, not
+// outreach, so it goes to the front and ignores the quiet hours — they texted
+// us. The opt-out list still binds.
+app.post('/api/texts/reply', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const body = String((req.body && req.body.body) || '').trim().slice(0, 2000);
+  if (!body) return res.status(400).json({ error: 'Type a message first.' });
+  const db = await store.load();
+  const c = db.candidates.find((x) => x.id === id);
+  if (!c) return res.status(404).json({ error: 'No such candidate.' });
+  const relay = await relayState();
+  // relayState() is the raw blob the Mac last wrote; "online" is a judgement
+  // about how long ago that was, made the same way the queue makes it.
+  const seen = relay && relay.lastSeenAt ? new Date(relay.lastSeenAt).getTime() : 0;
+  const relayOnline = seen > 0 && Date.now() - seen < textQueue.RELAY_STALE_MS;
+  let out = { ok: false, reason: 'no-phone' };
+  await textQueue.updateQ((q) => { out = textQueue.enqueueReply(q, c, body); if (!out.ok) return false; });
+  if (!out.ok) {
+    const why = out.reason === 'opted-out'
+      ? 'They replied STOP, so nothing more can be sent to that number.'
+      : out.reason === 'no-phone' ? 'No mobile number on this candidate.' : 'Type a message first.';
+    return res.status(409).json({ error: why });
+  }
+  // Reading a thread is answering it, so the badge should not still be lit.
+  await store.update((fresh) => {
+    const f = fresh.candidates.find((x) => x.id === id);
+    if (f) f.textUnread = false;
+  });
+  res.json({ ok: true, queued: true, relayOnline });
+}));
+
+// Opening a conversation is reading it.
+app.post('/api/texts/seen', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const all = Boolean(req.body && req.body.all);
+  let n = 0;
+  await store.update((db) => {
+    n = 0;   // re-run on a conflict: count afresh
+    for (const c of db.candidates) {
+      if (!c.textUnread) continue;
+      if (!all && c.id !== id) continue;
+      c.textUnread = false; n += 1;
+    }
+    if (!n) return false;
+  });
+  res.json({ ok: true, cleared: n });
 }));
 
 // The shared secret for the Mac. Generated here rather than typed, shown in
@@ -987,30 +1661,49 @@ app.get('/api/texts/relay-token', asyncRoute(async (_req, res) => {
   const db = await store.load();
   res.json({
     token: db.settings.relayToken || '',
-    envOverride: Boolean((process.env.RELAY_TOKEN || '').trim()),
+    envOverride: Boolean(tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim()),
     baseUrl: google.baseUrl(),
   });
 }));
 
-app.post('/api/texts/relay-token', asyncRoute(async (_req, res) => {
+app.post('/api/texts/relay-token', asyncRoute(async (req, res) => {
   const token = crypto.randomBytes(32).toString('base64url');
   await store.update((db) => { db.settings.relayToken = token; });
+  // The registry keeps a fingerprint of it, so a relay presenting the token
+  // can be traced to its team in one read instead of by opening every team's
+  // settings in turn.
+  await teams.setRelayToken(tenant.currentOrThrow('a relay token'), token);
   auth.forgetRelaySecret();
-  res.json({ ok: true, token, baseUrl: google.baseUrl(), envOverride: Boolean((process.env.RELAY_TOKEN || '').trim()) });
+  res.json({ ok: true, token, baseUrl: google.baseUrl(), envOverride: Boolean(tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim()) });
 }));
 
-app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
+// This runs in the recipient's mail client, once per open, so it is the most
+// frequently hit route in the app. A first open used to read the whole record
+// three times and write it twice — once to look the token up, again to set the
+// timestamp, and a third time to add the feed line. The timestamp and the feed
+// line are now one write, and a repeat open still costs a single read.
+// Mark the open, if that token really is one of this team's. Returns nothing:
+// the pixel is served either way, because whether we recognised it is not the
+// mail client's business.
+async function recordOpen(token) {
   const db = await store.load();
-  const id = tracking.verify(db.settings, req.params.token);
-  const c = id && db.candidates.find((x) => x.id === id);
-  if (c && !c.openedAt) {
-    let first = false;
+  const id = tracking.verify(db.settings, token);
+  if (!id) return false;
+  const c = db.candidates.find((x) => x.id === id);
+  if (!c) return false;
+  if (!c.openedAt) {
     await store.update((fresh) => {
       const fc = fresh.candidates.find((x) => x.id === id);
-      if (fc && !fc.openedAt) { fc.openedAt = new Date().toISOString(); first = true; }
+      // Re-checked against the fresh copy: two opens can land together.
+      if (!fc || fc.openedAt) return false;
+      fc.openedAt = new Date().toISOString();
+      store.pushEvent(fresh, 'opened', `${fc.name || fc.email} opened your email.`, fc.id);
     });
-    if (first) await store.addEvent('opened', `${c.name || c.email} opened your email.`, c.id);
   }
+  return true;
+}
+
+function servePixel(res) {
   res.set({
     'Content-Type': 'image/gif',
     'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
@@ -1018,6 +1711,45 @@ app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
     Expires: '0',
   });
   res.end(tracking.GIF);
+}
+
+app.get('/webhooks/open/:team/:token', asyncRoute(async (req, res) => {
+  const team = await teams.byId(req.params.team);
+  if (team) await tenant.run(team.id, () => recordOpen(req.params.token)).catch(() => {});
+  servePixel(res);
+}));
+
+// Every email sent before teams existed carries a pixel at this older path,
+// and those emails are out in the world for good. The token is signed, so the
+// team that can verify it is the team it belongs to: try each in turn and stop
+// at the first that recognises it.
+//
+// That search is the whole cost of this route, and it is a public path that
+// crawlers find, so it is guarded twice: anything that is not shaped like one
+// of our tokens is answered without touching storage at all, and a token that
+// has been placed once is remembered, so the second open of the same email is
+// one read rather than one per team.
+const pixelOwner = new Map();          // token -> team id
+const PIXEL_OWNER_MAX = 500;
+
+function rememberPixelOwner(token, teamId) {
+  if (pixelOwner.size >= PIXEL_OWNER_MAX) pixelOwner.delete(pixelOwner.keys().next().value);
+  pixelOwner.set(token, teamId);
+}
+
+app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
+  const token = req.params.token;
+  if (!tracking.looksLikeToken(token)) return servePixel(res);
+  const known = pixelOwner.get(token);
+  if (known) {
+    await tenant.run(known, () => recordOpen(token)).catch(() => {});
+    return servePixel(res);
+  }
+  for (const t of await teams.all().catch(() => [])) {
+    const hit = await tenant.run(t.id, () => recordOpen(token)).catch(() => false);
+    if (hit) { rememberPixelOwner(token, t.id); break; }
+  }
+  servePixel(res);
 }));
 
 // ---------- Reply detection (Gmail thread headers, a few at a time) ----------
@@ -1066,6 +1798,7 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
   const now = new Date().toISOString();
   const announce = [];
   await store.update((fresh) => {
+    announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
     for (const [id, r] of Object.entries(results)) {
       const fc = fresh.candidates.find((x) => x.id === id);
       if (!fc) continue;
@@ -1091,7 +1824,11 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
       if (fresh_real.length) {
         fc.lastReplyAt = fresh_real[fresh_real.length - 1].date || now;
         if (fc.status === 'emailed' || fc.status === 'bounced') { fc.status = 'replied'; fc.repliedAt = fc.repliedAt || now; }
-        if (newReal.length) announce.push({ c: fc, reply: newReal[newReal.length - 1] });
+        if (newReal.length) {
+          announce.push({ c: fc, reply: newReal[newReal.length - 1] });
+          // Lights the bell, and stays lit until the conversation is opened.
+          fc.emailUnread = true;
+        }
       } else if (bounced && fc.status === 'emailed') {
         fc.status = 'bounced';
       }
@@ -1103,6 +1840,7 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
       if (reclassifyCandidate(c).fixed) cleaned.add(c.id);
     }
     if (cleaned.size) fresh.events = fresh.events.filter((e) => !(e.type === 'replied' && cleaned.has(e.candidateId)));
+    if (!Object.keys(results).length && !cleaned.size) return false;
   });
   for (const { c, reply } of announce) {
     const preview = (reply.text || reply.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 140);
@@ -1125,7 +1863,7 @@ app.get('/api/google/auth-url', asyncRoute(async (req, res) => {
   const db = await store.load();
   const st = await google.status(db.settings);
   if (!st.configured) throw new Error('Enter your Google OAuth Client ID and Secret first, then save.');
-  const state = auth.issueOauthState(req, res);
+  const state = auth.issueOauthState(req, res, req.team.id);
   res.json({ url: google.authUrl(db.settings, state) });
 }));
 
@@ -1133,7 +1871,7 @@ app.get('/auth/google', asyncRoute(async (req, res) => {
   const db = await store.load();
   const st = await google.status(db.settings);
   if (!st.configured) return res.redirect('/#settings?error=google-not-configured');
-  const state = auth.issueOauthState(req, res);
+  const state = auth.issueOauthState(req, res, req.team.id);
   res.redirect(google.authUrl(db.settings, state));
 }));
 
@@ -1141,9 +1879,11 @@ app.get('/auth/google/callback', asyncRoute(async (req, res) => {
   const db = await store.load();
   if (req.query.error) return res.redirect('/#settings?error=' + encodeURIComponent(req.query.error));
   // The state round-trip stops a forged callback from binding someone else's
-  // Google account to this dashboard.
-  if (!auth.consumeOauthState(req, res, req.query.state)) {
-    return res.redirect('/#settings?error=' + encodeURIComponent('Sign-in session expired or did not match — please click Connect Google again.'));
+  // Google account to this dashboard — and, because it carries the team that
+  // started it, stops a team switch made while the consent screen was open
+  // from filing one team's Gmail connection under another's.
+  if (!auth.consumeOauthState(req, res, req.query.state, req.team.id)) {
+    return res.redirect('/#settings?error=' + encodeURIComponent('That Google sign-in did not match this team — please click Connect Google again.'));
   }
   // A wrong client secret etc. must land the user back in Settings with the
   // message, not on a bare JSON page.
@@ -1162,6 +1902,11 @@ app.post('/auth/google/disconnect', asyncRoute(async (_req, res) => {
 }));
 
 // ---------- Calendly ----------
+// The one warning that has to be retractable: it tells the user to go and fix
+// something, so once they have, it must stop shouting at them.
+const CALENDLY_SIGNATURE_WARNING = 'Rejected a Calendly webhook call with an invalid signature. If bookings stop showing up, click "Enable booking alerts" in Settings to re-register.';
+const isCalendlySignatureWarning = (e) => e && e.type === 'error' && /Calendly webhook call with an invalid signature/.test(e.message || '');
+
 app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   const db = await store.load();
   const provided = String(req.body.token || '').trim();
@@ -1171,12 +1916,22 @@ app.post('/api/calendly/register-webhook', asyncRoute(async (req, res) => {
   if (!publicUrl || publicUrl.includes('localhost')) {
     throw new Error('Calendly needs a public URL to reach this app. Deploy it (or tunnel with ngrok) and enter that URL.');
   }
-  const result = await calendly.registerWebhook(token, publicUrl);
-  if (result.signingKey) db.settings.calendlySigningKey = result.signingKey;
+  // The team's own callback path first, then the path everything used before
+  // teams existed — so re-registering also clears away the old subscription
+  // this deploy used to answer on, instead of leaving it firing forever.
+  const result = await calendly.registerWebhook(token, publicUrl, [
+    `/webhooks/calendly/${tenant.currentOrThrow('a Calendly registration')}`,
+    '/webhooks/calendly',
+  ]);
+  if (result.signingKey) store.addCalendlyKey(db.settings, result.signingKey);
   db.settings.calendlyToken = token;
   if (!db.settings.calendlyUrl && result.schedulingUrl) db.settings.calendlyUrl = result.schedulingUrl;
   await store.save(db);
-  res.json({ ok: true, ...result, signingKey: undefined });
+  // Re-registering IS the fix the warning asked for, so retire it here rather
+  // than leaving it on screen for a day after the problem is gone.
+  lastSignatureWarning.delete(tenant.currentOrThrow('a Calendly registration'));
+  const cleared = await store.clearEvents(isCalendlySignatureWarning).catch(() => 0);
+  res.json({ ok: true, ...result, signingKey: undefined, clearedWarnings: cleared });
 }));
 
 // Interview times are shown in the user's own time zone (auto-saved from the
@@ -1188,7 +1943,9 @@ function formatWhen(iso, timeZone) {
   catch { return new Date(iso).toLocaleString('en-US', { ...opts, timeZone: 'UTC' }); }
 }
 
-let lastSignatureWarning = 0;
+// Per team: when we last complained about a bad Calendly signature. One team's
+// broken registration must not silence the warning for another's.
+const lastSignatureWarning = new Map();
 
 // Who booked? Email first — including addresses learned from earlier
 // bookings — then a unique full-name match, because people often book with
@@ -1239,21 +1996,20 @@ app.post('/api/interviews/link', asyncRoute(async (req, res) => {
   res.json({ ok: true, candidate: linked });
 }));
 
-app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  const signingKey = db.settings.calendlySigningKey || process.env.CALENDLY_SIGNING_KEY || '';
-  if (!signingKey) {
-    return res.status(401).json({ error: 'Calendly webhook is not registered (no signing key). Use "Enable booking alerts" in Settings.' });
-  }
-  if (!calendly.verifySignature(signingKey, req.get('Calendly-Webhook-Signature'), req.rawBody)) {
-    // Surface a key mismatch in the activity feed (throttled so a flood of
-    // bogus calls can't spam it).
-    if (Date.now() - lastSignatureWarning > 10 * 60 * 1000) {
-      lastSignatureWarning = Date.now();
-      await store.addEvent('error', 'Rejected a Calendly webhook call with an invalid signature. If bookings stop showing up, click "Enable booking alerts" in Settings to re-register.');
-    }
-    return res.status(401).json({ error: 'Invalid Calendly signature' });
-  }
+// Every key this team has ever issued, newest first, plus the environment
+// override. A subscription that outlived a cleanup still verifies.
+function calendlyKeys(db) {
+  return [
+    ...(db.settings.calendlySigningKeys || []),
+    db.settings.calendlySigningKey,
+    // Set process-wide, so it belongs to the team that predates teams —
+    // otherwise any team could verify, and claim, another team's bookings.
+    tenant.isLegacy() ? process.env.CALENDLY_SIGNING_KEY : '',
+  ].filter(Boolean);
+}
+
+// A booking, for the team already in context, already proven to be theirs.
+async function applyCalendlyEvent(req, db) {
   const event = req.body.event;
   const p = req.body.payload || {};
   const inviteeEmail = String(p.email || '').toLowerCase();
@@ -1282,6 +2038,7 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
           uri: ev.uri, name: eventName, status: 'active', start: startTime || new Date().toISOString(), end: ev.end_time || null,
           joinUrl: (ev.location && ev.location.join_url) || null, inviteeName: p.name || '', inviteeEmail: p.email || '',
           candidateId: c ? c.id : null, rescheduleUrl: p.reschedule_url || '', cancelUrl: p.cancel_url || '',
+          inviteePhone: calendly.phoneFrom(p), bookedAt: p.created_at || null,
         });
         fresh.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
       }
@@ -1318,27 +2075,95 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
       });
     } catch {}
   }
-  res.json({ ok: true });
+}
+
+// Handle a call we have decided belongs to `team`: verify it against that
+// team's keys and apply it. Nothing is applied on a signature we cannot check.
+function calendlyWebhook(req, res, team) {
+  return tenant.run(team.id, async () => {
+    const db = await store.load();
+    const keys = calendlyKeys(db);
+    const header = req.get('Calendly-Webhook-Signature');
+    if (!keys.length) {
+      return res.status(401).json({ error: 'Calendly webhook is not registered (no signing key). Use "Enable booking alerts" in Settings.' });
+    }
+    if (!calendly.verifySignature(keys, header, req.rawBody)) {
+      // This path is public and unauthenticated, so crawlers find it. Only a
+      // call that actually carries a Calendly signature can be a key problem;
+      // anything else is noise and must not be reported as a broken booking
+      // setup, which is what made this warning keep coming back.
+      const last = lastSignatureWarning.get(team.id) || 0;
+      if (calendly.parseSignature(header) && Date.now() - last > 10 * 60 * 1000) {
+        lastSignatureWarning.set(team.id, Date.now());
+        await store.addEvent('error', CALENDLY_SIGNATURE_WARNING);
+      }
+      return res.status(401).json({ error: 'Invalid Calendly signature' });
+    }
+    // A call that verifies proves the key is right, so the old warning goes.
+    lastSignatureWarning.delete(team.id);
+    await store.clearEvents(isCalendlySignatureWarning).catch(() => {});
+    await applyCalendlyEvent(req, db);
+    res.json({ ok: true });
+  });
+}
+
+// What Calendly is told to call from now on: the team is in the path, because
+// a webhook arrives with no session and nothing else to say whose booking it is.
+app.post('/webhooks/calendly/:team', asyncRoute(async (req, res) => {
+  const team = await teams.byId(req.params.team);
+  if (!team) return res.status(404).json({ error: 'Unknown team.' });
+  await calendlyWebhook(req, res, team);
+}));
+
+// Subscriptions registered before teams existed still call this path. The
+// signature is the proof of ownership: whichever team can verify the call is
+// the team that registered it. Re-registering from Settings moves them onto
+// the path above.
+app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
+  const header = req.get('Calendly-Webhook-Signature');
+  // Not even shaped like a signed call: this is a crawler, and it gets nothing
+  // and costs nothing.
+  if (!calendly.parseSignature(header)) return res.status(401).json({ error: 'Invalid Calendly signature' });
+  for (const t of await teams.all()) {
+    const mine = await tenant.run(t.id, async () => {
+      const db = await store.load();
+      const keys = calendlyKeys(db);
+      return keys.length > 0 && calendly.verifySignature(keys, header, req.rawBody);
+    }).catch(() => false);
+    if (mine) return calendlyWebhook(req, res, t);
+  }
+  // Nobody's key verifies it. This path belongs to the team that predates
+  // teams — every other team registers under its own id — so that is the team
+  // whose registration might genuinely be broken, and the one worth telling.
+  // It is deliberately not "whoever happens to be first in the list": a "your
+  // Calendly key is wrong" warning shown to a team that never registered here
+  // is worse than silence, because the fix it asks for does nothing.
+  const owner = await teams.byId(teams.LEGACY_ID);
+  if (!owner) return res.status(401).json({ error: 'Invalid Calendly signature' });
+  await calendlyWebhook(req, res, owner);
 }));
 
 // ---------- Calendly sync: pull scheduled interviews, match to candidates ----------
 const DAY_MS = 24 * 3600 * 1000;
-app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
+// Shared by the dashboard's sync button and by Sales IQ, which asks for one
+// so that a booking reaches it while nobody has this dashboard open. Returns
+// the body the dashboard's route has always answered with.
+async function syncCalendly() {
   const db = await store.load();
   const token = db.settings.calendlyToken;
-  if (!token) return res.json({ ok: true, unavailable: 'Add your Calendly token in Settings to sync interviews.' });
+  if (!token) return { ok: true, unavailable: 'Add your Calendly token in Settings to sync interviews.' };
+  const minStart = new Date(Date.now() - 14 * DAY_MS);
+  const maxStart = new Date(Date.now() + 120 * DAY_MS);
   let result;
   try {
-    result = await calendly.listInterviews(token, {
-      minStart: new Date(Date.now() - 14 * DAY_MS),
-      maxStart: new Date(Date.now() + 120 * DAY_MS),
-    });
+    result = await calendly.listInterviews(token, { minStart, maxStart });
   } catch (err) {
     await store.update((d) => { d.calendlySyncError = err.message; d.calendlyLastSyncAt = new Date().toISOString(); });
-    return res.json({ ok: false, error: err.message });
+    return { ok: false, error: err.message };
   }
   const announce = [];
   await store.update((fresh) => {
+    announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
     const list = [];
     for (const ev of result.interviews) {
       if (!ev.invitees.length) {
@@ -1352,6 +2177,7 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
           uri: ev.uri, name: ev.name, status: active ? 'active' : 'canceled', start: ev.start, end: ev.end,
           joinUrl: ev.joinUrl, inviteeName: inv.name || '', inviteeEmail: inv.email || '',
           candidateId: c ? c.id : null, rescheduleUrl: inv.rescheduleUrl || '', cancelUrl: inv.cancelUrl || '',
+          inviteePhone: inv.phone || '', bookedAt: inv.createdAt || null,
         });
         if (!c) continue;
         if (active) {
@@ -1371,6 +2197,23 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
         }
       }
     }
+    // What this sync did not read is kept as it was, rather than replaced by
+    // nothing: an event it listed but had no allowance left for (only a
+    // cancellation is carried over), and, when the listing stopped short of
+    // the window's end, anything it never reached. A booking the webhook has
+    // just brought in is one of those, and Sales IQ, which asks for a sync
+    // every time it looks, would otherwise see it vanish. Only what a full
+    // listing no longer has, or what has left the window, is let go.
+    const read = new Set(result.interviews.map((ev) => ev.uri));
+    const skipped = new Map((result.skipped || []).map((ev) => [ev.uri, ev]));
+    for (const i of fresh.interviews || []) {
+      if (!i || read.has(i.uri)) continue;
+      const at = new Date(i.start).getTime();
+      if (!(at >= minStart.getTime() && at <= maxStart.getTime())) continue;
+      const ev = skipped.get(i.uri);
+      if (!ev && result.complete) continue;
+      list.push(ev && ev.status !== 'active' ? { ...i, status: 'canceled' } : i);
+    }
     fresh.interviews = list.sort((a, b) => String(a.start).localeCompare(String(b.start)));
     fresh.calendlyLastSyncAt = new Date().toISOString();
     fresh.calendlySyncError = '';
@@ -1384,7 +2227,180 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
       a.at || null
     );
   }
-  res.json({ ok: true, interviews: result.interviews.length, newBookings: announce.filter((a) => !a.canceled).length });
+  return { ok: true, interviews: result.interviews.length, newBookings: announce.filter((a) => !a.canceled).length };
+}
+
+app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
+  res.json(await syncCalendly());
+}));
+
+// ---------- Sales IQ: booked interviewees, and nothing else ----------
+// The Sales IQ hiring dashboard lists everyone who has booked an interview on
+// this team's Calendly so the manager can send them a questionnaire. That list
+// is ALL it gets from here: no candidate ids, notes, replies, statuses, or
+// anything else from outreach. /api/salesiq/* answers only to the connection
+// code's token (see lib/auth.js); /api/salesiq-connection, which hands that
+// code out, answers only to a signed-in dashboard, and deliberately sits
+// outside that prefix.
+const SALESIQ_CODE_PREFIX = 'WPSIQ1.';
+const SALESIQ_MAX_BOOKINGS = 300;
+const SALESIQ_SYNC_EVERY_MS = 90 * 1000;
+
+// Everything Sales IQ needs to find this deploy and prove which team it is
+// reading for, in one string that survives being pasted into a text box.
+function salesiqCode(team, token) {
+  const body = { u: google.baseUrl(), k: token, t: team.name, i: team.id };
+  return SALESIQ_CODE_PREFIX + Buffer.from(JSON.stringify(body)).toString('base64url');
+}
+
+// Connected means the code shown would actually be let in: a token in the
+// team's settings AND its fingerprint in the registry, which is what the
+// bearer check reads. A write that failed half way leaves the two apart, and a
+// code that is shown but refused is worse than an honest "Not connected" with
+// a button that fixes it.
+function salesiqConnection(team, token) {
+  const live = Boolean(token) && Boolean(team && team.salesiqTokenHash) && team.salesiqTokenHash === teams.fingerprint(token);
+  return {
+    connected: live,
+    code: live ? salesiqCode(team, token) : '',
+    team: teamName(team),
+    baseUrl: google.baseUrl(),
+  };
+}
+
+app.get('/api/salesiq-connection', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  res.set('Cache-Control', 'no-store');
+  res.json(salesiqConnection(req.team, db.settings.salesiqToken || ''));
+}));
+
+// A change answers with what is stored once its writes are done, read back,
+// not with the token it just made. Two Generates at once can end with one's
+// fingerprint in the registry and the other's token in settings, and the
+// request that lost must say "Not connected" rather than show a code the
+// bearer check refuses.
+async function storedSalesiqConnection(id) {
+  const [team, db] = await Promise.all([teams.byId(id), store.load()]);
+  return salesiqConnection(team, db.settings.salesiqToken || '');
+}
+
+// Always a new token: whoever holds the old code loses access the moment this
+// returns. The registry is written first because it is what the bearer check
+// reads — so if the second write fails, the old code has still stopped
+// working, rather than the dashboard offering a new code that is refused while
+// the old one carries on.
+app.post('/api/salesiq-connection', asyncRoute(async (req, res) => {
+  const id = tenant.currentOrThrow('a Sales IQ connection');
+  const token = crypto.randomBytes(32).toString('base64url');
+  await teams.setSalesiqToken(id, token);
+  auth.forgetSalesiqSecret();
+  await store.update((db) => { db.settings.salesiqToken = token; });
+  res.set('Cache-Control', 'no-store');
+  res.json(await storedSalesiqConnection(id));
+}));
+
+// Disconnecting revokes in the same order: the fingerprint goes first, so the
+// code stops working even if clearing the stored copy then fails.
+app.delete('/api/salesiq-connection', asyncRoute(async (req, res) => {
+  const id = tenant.currentOrThrow('a Sales IQ connection');
+  await teams.setSalesiqToken(id, '');
+  auth.forgetSalesiqSecret();
+  await store.update((db) => {
+    if (!db.settings.salesiqToken) return false;
+    db.settings.salesiqToken = '';
+  });
+  res.set('Cache-Control', 'no-store');
+  res.json(await storedSalesiqConnection(id));
+}));
+
+// A stable id for one person's booking of one event: the same booking is the
+// same row in Sales IQ however often it is fetched or re-synced, and the id
+// gives away nothing about the candidate record behind it.
+const salesiqKey = (i) => crypto.createHash('sha256')
+  .update(`${String(i.uri || '')}|${normEmail(i.inviteeEmail)}`)
+  .digest('hex')
+  .slice(0, 24);
+
+app.get('/api/salesiq/bookings', asyncRoute(async (req, res) => {
+  const db = await store.load();
+  const byId = new Map(db.candidates.map((c) => [c.id, c]));
+  const seen = new Set();
+  const bookings = [];
+  // Newest interview first, so the cap drops the oldest ones.
+  const list = (db.interviews || [])
+    .filter((i) => i && normEmail(i.inviteeEmail))
+    .sort((a, b) => String(b.start || '').localeCompare(String(a.start || '')));
+  for (const i of list) {
+    if (bookings.length >= SALESIQ_MAX_BOOKINGS) break;
+    const key = salesiqKey(i);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const c = i.candidateId ? byId.get(i.candidateId) : null;
+    const email = String(i.inviteeEmail).trim();
+    bookings.push({
+      key,
+      name: String(i.inviteeName || (c && c.name) || email),
+      email,
+      phone: String(i.inviteePhone || (c && c.phone) || ''),
+      interviewAt: i.start || null,
+      eventName: String(i.name || ''),
+      bookedAt: i.bookedAt || null,
+      status: i.status === 'active' ? 'active' : 'canceled',
+    });
+  }
+  res.json({
+    ok: true,
+    team: teamName(req.team),
+    syncedAt: db.calendlyLastSyncAt || null,
+    calendly: {
+      sync: Boolean(db.settings.calendlyToken),
+      webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
+    },
+    bookings,
+  });
+}));
+
+// Sales IQ asks for this whenever it looks, and it may be open in several tabs
+// on several machines; Calendly's API is shared by all of them. So a sync runs
+// only when the last one — from anywhere, the dashboard included — is more
+// than a minute and a half old. A failed sync stamps the time too, so a broken
+// Calendly token is not retried on every look either. A stamp in the future
+// is not believed.
+//
+// The slot is claimed before Calendly is called, in a conditional write, and
+// not merely checked: a sync takes dozens of calls, and everyone who asked
+// while it ran used to see the old stamp and start one of their own. Within
+// one instance, whoever asks while that team's sync is running waits for it
+// and shares its answer.
+const salesiqSyncing = new Map();   // team id -> the sync under way
+const recentStamp = (iso) => {
+  const age = Date.now() - new Date(iso || 0).getTime();
+  return Boolean(iso) && Number.isFinite(age) && age >= 0 && age < SALESIQ_SYNC_EVERY_MS;
+};
+
+async function salesiqSync() {
+  let claimed = false;
+  const db = await store.update((d) => {
+    claimed = false;   // the mutator re-runs on a conflict
+    if (!d.settings.calendlyToken) return false;
+    if (recentStamp(d.calendlyLastSyncAt) || recentStamp(d.salesiqSyncClaimedAt)) return false;
+    d.salesiqSyncClaimedAt = new Date().toISOString();
+    claimed = true;
+  });
+  if (!claimed) return { ok: true, ran: false, syncedAt: db.calendlyLastSyncAt || null };
+  const result = await syncCalendly();
+  const syncedAt = (await store.load()).calendlyLastSyncAt || null;
+  return { ok: true, ran: true, syncedAt, ...result };
+}
+
+app.post('/api/salesiq/sync', asyncRoute(async (req, res) => {
+  const id = req.team.id;
+  let running = salesiqSyncing.get(id);
+  if (!running) {
+    running = salesiqSync().finally(() => salesiqSyncing.delete(id));
+    salesiqSyncing.set(id, running);
+  }
+  res.json(await running);
 }));
 
 // ---------- Phone notification test ----------

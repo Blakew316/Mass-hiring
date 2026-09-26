@@ -5,6 +5,7 @@
 // The modern format matters: Netlify configures Netlify Blobs automatically
 // for it (including the endpoint strong-consistency reads need), whereas the
 // legacy exports.handler style does not.
+import { gzipSync } from 'node:zlib';
 import serverless from 'serverless-http';
 import app from '../../app.js';
 
@@ -60,11 +61,30 @@ async function handle(request, url) {
   for (const [key, value] of Object.entries(result.headers || {})) {
     if (!(key in multi)) out.append(key, value);
   }
-  const respBody = result.isBase64Encoded
+  let respBody = result.isBase64Encoded
     ? Buffer.from(result.body || '', 'base64')
     : (result.body ?? '');
-  return new Response(respBody, { status: result.statusCode || 200, headers: out });
+  // Netlify refuses a function response over 6 MB, and a team with ten
+  // thousand candidates has a /api/state bigger than that. JSON shrinks
+  // about eightfold under gzip, and every browser asks for it.
+  const size = typeof respBody === 'string' ? Buffer.byteLength(respBody) : respBody.length;
+  if (size > COMPRESS_OVER && /\bgzip\b/i.test(headers['accept-encoding'] || '')
+      && !out.has('content-encoding') && /json|text|javascript/i.test(out.get('content-type') || '')) {
+    respBody = gzipSync(respBody);
+    out.set('content-encoding', 'gzip');
+    out.delete('content-length');
+    out.append('vary', 'Accept-Encoding');
+  }
+  // A 304 (the unchanged 30-second poll) or 204 must have no body at all —
+  // Response() throws on even an empty string, which turned every unchanged
+  // poll into a 500.
+  const status = result.statusCode || 200;
+  return new Response(NULL_BODY.has(status) ? null : respBody, { status, headers: out });
 }
+
+const NULL_BODY = new Set([101, 204, 205, 304]);
+
+const COMPRESS_OVER = 1024;
 
 export const config = {
   path: ['/api/*', '/auth/*', '/webhooks/*'],

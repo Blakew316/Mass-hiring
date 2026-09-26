@@ -69,11 +69,30 @@ says exactly this, and nothing sends until it is granted.
 ### 3. Grant Full Disk Access
 
 **System Settings → Privacy & Security → Full Disk Access → + →** add your `node`
-binary (`which node` tells you where it is).
+binary. Find its real path first, because the one on your PATH is usually a
+symlink and macOS tracks the file it points at:
+
+```bash
+readlink -f "$(which node)"      # e.g. /opt/homebrew/Cellar/node/25.1.0/bin/node
+```
+
+In the file picker press **⌘⇧G** and paste that path. Then restart the relay —
+the permission is only re-checked when the process starts:
+
+```bash
+launchctl kickstart -k gui/$UID/com.wholesalepayments.wprelay
+```
 
 This one matters more than it sounds. The relay reads the Messages database for
 **delivery receipts, read receipts and replies** — all three. Without it you can
 send, and you will see nothing come back.
+
+The relay reads that database from inside its own process, using Node's built-in
+SQLite. That is deliberate: running `/usr/bin/sqlite3` instead does not work,
+because macOS gives Apple-signed system binaries their own permission identity
+rather than letting them inherit the relay's, so the read is refused no matter
+who you granted Full Disk Access to. The startup log prints which way it is
+reading.
 
 ### 4. Keep the Mac awake and logged in
 
@@ -99,14 +118,54 @@ have to make that trade.
 
 ---
 
+## Running it on a laptop instead
+
+Nothing here is specific to a Mac Studio. Any Mac signed into the same Apple ID
+can be the sender — including a MacBook you carry to the office, which avoids
+leaving a desktop machine automatically logged in at home while you are out.
+
+Install it the same way on that Mac:
+
+```bash
+git clone https://github.com/Blakew316/Mass-hiring.git
+cd Mass-hiring/relay && ./install.sh <relay-token>
+```
+
+Use the **same relay token**; it identifies the account, not the machine. Grant
+the same two permissions, and then `wprelay on` / `wprelay off` as usual.
+
+**Only run one at a time.** Nothing breaks if both are on — the server hands each
+message to whichever Mac asks first, so nobody is texted twice — but it is
+easier to reason about with one sender. `wprelay off` on the other machine.
+
+Replies follow you between machines. iMessage syncs every conversation to both
+Macs, but a relay only watches numbers it sent to itself, so a laptop would
+ignore replies to texts the Studio sent. Each relay asks the CRM every few
+minutes which numbers this system has texted and adopts them, so whichever Mac
+is running picks up the whole thread. Only numbers already texted are ever
+shared — the candidate list never leaves the server.
+
 ## Everyday use
 
 ```bash
-tail -f ~/Library/Logs/wp-relay.log                 # watch it
-launchctl bootout gui/$UID/com.wholesalepayments.wprelay    # stop
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.wholesalepayments.wprelay.plist   # start
-open -e ~/.wp-relay/config.json                     # settings
+wprelay on        # turn texting on
+wprelay off       # turn texting off
+wprelay status    # is it running, and is it healthy
+wprelay log       # watch what it is doing
+wprelay restart   # after changing the config
 ```
+
+**These work over SSH**, so texting can be switched on from a laptop at the
+office. One condition: somebody has to be logged in at the Mac Studio itself.
+Sending an iMessage means driving Messages.app, and Messages only exists inside
+a logged-in desktop session — which is why `wprelay` always talks to the
+background service rather than starting the relay in your shell. A relay
+started from an SSH shell has no desktop session and every send fails with a
+permission error that looks like a bug. Turn on automatic login and this is
+never a problem.
+
+Settings live in `~/.wp-relay/config.json` (`open -e ~/.wp-relay/config.json`);
+run `wprelay restart` after changing them.
 
 Set `"dryRun": true` in the config to watch the whole pipeline run — claiming,
 pacing, reporting — with the messages only written to the log instead of sent.

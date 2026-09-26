@@ -1,6 +1,6 @@
 [build]
   # Build the single-file function (see scripts/build-function.mjs), then deploy the static UI.
-  command = "npm install && npm run build:function"
+  command = "npm install && npm run build"
   publish = "public"
 
 [functions]
@@ -9,3 +9,53 @@
 # Routing for /api/*, /auth/* and /webhooks/* is declared by the function
 # itself (see `config.path` in netlify/src/api.mjs); everything else is the
 # static dashboard in public/.
+
+# The dashboard's JS and CSS are referenced without a version in the filename,
+# so a browser that has cached them will keep serving the old copy after a
+# deploy — a shipped change then looks like a change that never happened.
+# These make the browser revalidate on every load; the ETag means an unchanged
+# file still costs a 304 and nothing more.
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# The service worker script, explicitly rather than by relying on how the
+# /*.js rule above expands. A worker cached without revalidation is the one
+# mistake a later deploy cannot fix: the browser keeps re-registering the old
+# script. Service-Worker-Allowed lets it control the whole origin.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Service-Worker-Allowed = "/"
+
+# Some browsers refuse a manifest served as text/plain, and then the app is
+# quietly not installable with nothing in the console to say why.
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json; charset=utf-8"
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Icons and launch screens are content-addressed by name and never change
+# under the same name, so they can be held for a year.
+[[headers]]
+  for = "/icons/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/splash/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

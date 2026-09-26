@@ -1,0 +1,124 @@
+#!/bin/bash
+# Turn the texting relay on and off, from this Mac or over SSH from anywhere.
+#
+#   wprelay on        start it (and keep it started across reboots)
+#   wprelay off       stop it
+#   wprelay restart   stop and start
+#   wprelay status    is it running, and is it healthy
+#   wprelay log       follow the log (ctrl-C to stop watching)
+#
+# Why this exists rather than "just run node relay.js": sending an iMessage
+# means driving Messages.app, and Messages only exists inside a logged-in
+# desktop session. A relay started from an SSH shell has no such session, so
+# every send fails with a permission error that looks like a bug. This always
+# talks to the LaunchAgent, which lives in the desktop session, so it behaves
+# the same whether you are sitting at the Mac or dialled in from the office.
+set -uo pipefail
+
+LABEL="com.wholesalepayments.wprelay"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOG="$HOME/Library/Logs/wp-relay.log"
+CONFIG="${WP_RELAY_HOME:-$HOME/.wp-relay}/config.json"
+UID_NUM="$(id -u)"
+DOMAIN="gui/$UID_NUM"
+TARGET="$DOMAIN/$LABEL"
+
+green() { printf '\033[32m%s\033[0m\n' "$*"; }
+red()   { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
+
+[ -f "$PLIST" ] || { red "The relay is not installed on this Mac ($PLIST is missing)."; echo "Run: cd ~/Mass-hiring/relay && ./install.sh <relay-token>"; exit 1; }
+
+# The desktop session has to exist, or Messages cannot be driven at all. This
+# is the failure people hit over SSH, so name it plainly rather than letting
+# launchctl return "Input/output error".
+require_session() {
+  if ! launchctl print "$DOMAIN" >/dev/null 2>&1; then
+    red "No desktop session for this user is running, so iMessage cannot be reached."
+    echo "Someone has to be logged in at the Mac. Turn on automatic login:"
+    echo "  System Settings -> General -> Login Items & Extensions -> Automatically log in as"
+    echo "Then reboot, or log in once at the machine, and try again."
+    exit 1
+  fi
+}
+
+pid_of() { launchctl print "$TARGET" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}'; }
+loaded()  { launchctl print "$TARGET" >/dev/null 2>&1; }
+
+case "${1:-status}" in
+  on|start)
+    require_session
+    if loaded; then
+      launchctl kickstart "$TARGET" >/dev/null 2>&1
+    else
+      launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || { red "Could not start the relay."; exit 1; }
+    fi
+    launchctl enable "$TARGET" 2>/dev/null                 # survives a reboot
+    sleep 2
+    if [ -n "$(pid_of)" ]; then green "Texting relay is ON (pid $(pid_of))."; else
+      red "It did not stay running. The last few log lines:"; tail -12 "$LOG" 2>/dev/null; exit 1
+    fi
+    tail -4 "$LOG" 2>/dev/null
+    ;;
+
+  off|stop)
+    launchctl bootout "$TARGET" 2>/dev/null
+    sleep 1
+    if [ -z "$(pid_of)" ]; then green "Texting relay is OFF. Nothing will send until you turn it back on."
+    else red "It is still running (pid $(pid_of))."; exit 1; fi
+    ;;
+
+  restart)
+    require_session
+    launchctl kickstart -k "$TARGET" >/dev/null 2>&1 || { launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; }
+    sleep 2
+    [ -n "$(pid_of)" ] && green "Texting relay restarted (pid $(pid_of))." || { red "It is not running."; tail -12 "$LOG" 2>/dev/null; exit 1; }
+    ;;
+
+  status)
+    PID="$(pid_of)"
+    if [ -n "$PID" ]; then green "Texting relay is ON (pid $PID)."; else
+      if loaded; then red "Texting relay is loaded but NOT running."; else red "Texting relay is OFF."; fi
+    fi
+    # A token that was never pasted is the single most common reason it stops.
+    if [ -f "$CONFIG" ] && grep -qi 'paste\|dashboard' "$CONFIG" 2>/dev/null; then
+      red "The relay token in $CONFIG is still the placeholder — it will not connect."
+    fi
+    if [ -f "$LOG" ]; then
+      echo
+      bold "Last activity:"
+      tail -6 "$LOG"
+      # macOS stat takes -f; keep a GNU fallback so this is not a mystery on
+      # any other machine, and never do arithmetic on something unverified.
+      LAST="$(stat -f %m "$LOG" 2>/dev/null || stat -c %Y "$LOG" 2>/dev/null || echo 0)"
+      case "$LAST" in (*[!0-9]*|'') LAST=0 ;; esac
+      echo
+      if [ "$LAST" -gt 0 ]; then
+        AGE=$(( $(date +%s) - LAST ))
+        if [ -n "$PID" ] && [ "$AGE" -gt 180 ]; then
+          red "But the log has not moved in $((AGE / 60)) minutes, which is longer than it should stay quiet."
+        elif [ -n "$PID" ]; then
+          echo "Log last written ${AGE}s ago."
+        fi
+      fi
+      grep -q 'STOPPED:' <(tail -40 "$LOG" 2>/dev/null) && red "It stopped on purpose — see the STOPPED line above for what to fix."
+    fi
+    ;;
+
+  log)
+    tail -f "$LOG"
+    ;;
+
+  *)
+    bold "wprelay — the Mac Studio texting relay"
+    echo
+    echo "  wprelay on        turn texting on"
+    echo "  wprelay off       turn texting off"
+    echo "  wprelay restart   restart it"
+    echo "  wprelay status    is it running and healthy"
+    echo "  wprelay log       watch what it is doing"
+    echo
+    echo "Works the same over SSH from another Mac, as long as someone is logged"
+    echo "in at the Mac Studio — iMessage needs a desktop session to exist."
+    ;;
+esac

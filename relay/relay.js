@@ -27,6 +27,15 @@ const receipts = require('./lib/receipts');
 const { AppleScript } = require('./lib/applescript');
 const { BlueBubbles, toDate, addressOf, textOf, isFromMe } = require('./lib/bluebubbles');
 
+// node:sqlite is still flagged experimental, and its warning would be printed
+// into the log on every start. Only that one is dropped; anything else Node
+// wants to say still comes through.
+process.removeAllListeners('warning');
+process.on('warning', (w) => {
+  if (w.name === 'ExperimentalWarning' && /SQLite/i.test(w.message)) return;
+  console.error(`${w.name}: ${w.message}`);
+});
+
 const VERSION = '1.0.0';
 const CONFIG_PATH = process.env.WP_RELAY_CONFIG || path.join(state.DIR, 'config.json');
 
@@ -64,7 +73,21 @@ function loadConfig() {
   const missing = needed.filter((k) => !cfg[k]);
   if (missing.length) {
     console.error(`${CONFIG_PATH} is missing: ${missing.join(', ')}`);
-    process.exit(1);
+    process.exit(2);
+  }
+  // The config ships with instructions in the token field. Saying "you have
+  // not pasted the token yet" is worth a great deal more than watching the
+  // CRM reject the sentence "paste the token from the dashboard".
+  if (/paste|token from the dashboard|<.*>/i.test(cfg.relayToken) || cfg.relayToken.length < 24) {
+    console.error(`The relay token in ${CONFIG_PATH} is still the placeholder.`);
+    console.error('');
+    console.error('Generate one at your dashboard → Texting → Mac relay → Generate, then either');
+    console.error('re-run the installer with it:');
+    console.error('');
+    console.error('    ./install.sh <paste-the-token-here>');
+    console.error('');
+    console.error('or edit the file by hand and put it in the "relayToken" field.');
+    process.exit(2);
   }
   return cfg;
 }
@@ -87,6 +110,7 @@ class Crm {
     return json || {};
   }
   hello(payload) { return this.call('/hello', payload); }
+  handles() { return this.call('/handles', {}); }
   claim() { return this.call('/claim', {}); }
   report(payload) { return this.call('/report', payload); }
   events(events) { return this.call('/events', { events }); }
@@ -107,13 +131,29 @@ async function main() {
   log(`  sending  ${usingBB ? `BlueBubbles at ${cfg.bluebubblesUrl}` : 'Messages.app via AppleScript'}`);
   log(`  state    ${state.FILE}`);
   if (cfg.dryRun) log('  DRY RUN — messages will be logged, not sent');
+  log(`  reading  ${receipts.mode()}`);
   if (!receipts.available()) {
-    log('  note: the Messages database is not readable, so delivery receipts, read receipts and replies are all off.');
-    log('        Grant Full Disk Access to whatever runs the relay — see README. Sending still works.');
+    log('  note: the Messages database was not found, so delivery receipts, read receipts and replies are all off.');
+    log('        Sending still works.');
   }
 
   let lastError = '';
   let stopping = false;
+  // Something only a person can fix — a rejected token, a config mistake.
+  // Exiting non-zero here would just have launchd start us again ten seconds
+  // later, forever, burying the one line that says what to do. Exiting ZERO
+  // is what stops that: the service is set to restart on a crash, not on a
+  // clean exit (see the KeepAlive dict in the plist).
+  const giveUp = (why) => {
+    if (stopping) return;
+    stopping = true;
+    log('');
+    log(`STOPPED: ${why}`);
+    log('Fix that, then start the relay again:');
+    log(`  launchctl kickstart -k gui/${process.getuid()}/com.wholesalepayments.wprelay`);
+    state.save(st);
+    process.exit(0);
+  };
   const stop = (sig) => { if (stopping) return; stopping = true; log(`${sig} — shutting down`); state.save(st); process.exit(0); };
   process.on('SIGINT', () => stop('SIGINT'));
   process.on('SIGTERM', () => stop('SIGTERM'));
@@ -191,6 +231,8 @@ async function main() {
     return 'sent';
   }
 
+  let chatDbWarned = false;
+
   // Receipts and replies. Only for numbers this relay has texted — everything
   // else on this Mac is none of the CRM's business.
   async function scanReceipts() {
@@ -204,8 +246,12 @@ async function main() {
 
     if (receipts.available()) {
       let rows = [];
-      try { rows = await receipts.since(st.lastRowId, 500); }
-      catch (err) { log(`could not read chat.db (${err.message}) — receipts are off until that is fixed`); }
+      try { rows = await receipts.since(st.lastRowId, 500); chatDbWarned = false; }
+      catch (err) {
+        // Once, not every twenty seconds — this is a permission that will not
+        // change until someone changes it.
+        if (!chatDbWarned) { chatDbWarned = true; log(err.message); log('(Sending still works. Receipts and replies resume as soon as that is granted.)'); }
+      }
       for (const r of rows) {
         if (r.rowid > st.lastRowId) st.lastRowId = r.rowid;
         const handle = normalizePhone(r.handle);
@@ -218,7 +264,13 @@ async function main() {
           }
           if (r.deliveredAt && mark('delivered', r.guid, Date.now())) events.push({ kind: 'delivered', phone: handle, ts: r.deliveredAt.toISOString() });
           if (r.readAt && mark('read', r.guid, Date.now())) events.push({ kind: 'read', phone: handle, ts: r.readAt.toISOString() });
-        } else if (r.text && mark('reply', r.guid, Date.now())) {
+        } else if (r.text) {
+          // Only messages that arrived AFTER we texted them. An older one is
+          // part of a conversation that already existed and is not a reply.
+          const since = state.firstTextedAt(st, handle);
+          const when = r.sentAt ? r.sentAt.getTime() : Date.now();
+          if (since && when < since - 60000) continue;
+          if (!mark('reply', r.guid, Date.now())) continue;
           events.push({ kind: 'reply', phone: handle, text: r.text, ts: (r.sentAt || new Date()).toISOString() });
         }
       }
@@ -234,9 +286,12 @@ async function main() {
         const handle = normalizePhone(addressOf(m));
         const body = textOf(m);
         if (!handle || !body || !state.known(st, handle)) continue;
+        const at = toDate(m.dateCreated) || new Date();
+        const since = state.firstTextedAt(st, handle);
+        if (since && at.getTime() < since - 60000) continue;      // predates the outreach
         const guid = String(m.guid || `${handle}:${m.dateCreated || ''}`);
         if (!mark('reply', guid, Date.now())) continue;
-        events.push({ kind: 'reply', phone: handle, text: body, ts: (toDate(m.dateCreated) || new Date()).toISOString() });
+        events.push({ kind: 'reply', phone: handle, text: body, ts: at.toISOString() });
       }
     } catch (err) {
       log(`could not read recent messages from BlueBubbles: ${err.message}`);
@@ -257,7 +312,7 @@ async function main() {
       running = true;
       try { await fn(); lastError = ''; }
       catch (err) {
-        if (err && err.fatal) { log(`FATAL: ${err.message}`); process.exit(1); }
+        if (err && err.fatal) return giveUp(err.message);
         if (err.message !== lastError) log(`${name}: ${err.message}`);
         lastError = err.message;
       }
@@ -267,12 +322,27 @@ async function main() {
     return setInterval(tick, ms);
   };
 
+  // A fresh relay starts at the END of the Messages database, not the start.
+  // Reading from row 1 means walking years of the owner's own conversations and
+  // reporting every inbound message in them as a reply to an outreach that had
+  // not been sent yet — which is exactly what happens the first time someone
+  // texts their own number to test it.
+  if (!st.lastRowId && receipts.available()) {
+    try {
+      st.lastRowId = await receipts.maxRowId();
+      state.save(st);
+      log(`starting from the current end of the Messages database (row ${st.lastRowId}); nothing already there is treated as a reply`);
+    } catch (err) {
+      log(`could not find the end of the Messages database (${err.message}); receipts start once that is readable`);
+    }
+  }
+
   const backendName = usingBB ? 'BlueBubbles' : 'Messages';
   let bbOk = false;
   try { await bb.ping(); bbOk = true; log(`${backendName} answered — ready`); }
   catch (err) { log(`${backendName} is not answering: ${err.message}`); }
 
-  await flushPending().catch((err) => { if (err.fatal) { log(`FATAL: ${err.message}`); process.exit(1); } });
+  await flushPending().catch((err) => { if (err.fatal) giveUp(err.message); });
 
   every(cfg.helloMs, 'hello', async () => {
     try { await bb.ping(); bbOk = true; } catch { bbOk = false; }
@@ -289,6 +359,24 @@ async function main() {
     if (!bbOk && !cfg.dryRun) return;      // nothing to send through yet
     await flushPending();
     await sendOnce();
+  });
+
+  // Numbers texted from ANOTHER Mac on the same Apple ID. iMessage syncs those
+  // conversations here, but this relay never sent them so it has no record —
+  // and would drop the replies. Asking the CRM keeps two machines in step.
+  every(5 * 60 * 1000, 'handles', async () => {
+    const { handles = [] } = await crm.handles();
+    let added = 0;
+    for (const h of handles) {
+      if (typeof h === 'string' && h.startsWith('+') && !state.known(st, h)) {
+        // Adopted from another Mac, so treat the conversation as starting now:
+        // that Mac already reported anything earlier, and this one must not
+        // re-report the thread's whole history.
+        state.remember(st, h);
+        added += 1;
+      }
+    }
+    if (added) { state.save(st); log(`picked up ${added} conversation(s) started from another Mac`); }
   });
 
   every(cfg.receiptsMs, 'receipts', scanReceipts);

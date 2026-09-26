@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "build": "npm run build:sw && npm run build:function",
+    "build:sw": "node scripts/build-sw.mjs",
+    "build:icons": "node scripts/build-icons.mjs",
     "build:function": "node scripts/build-function.mjs"
   },
   "engines": {

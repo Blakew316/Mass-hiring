@@ -1,0 +1,41 @@
+{
+  "id": "/",
+  "name": "WPI Outreach — Hiring CRM",
+  "short_name": "WPI Outreach",
+  "description": "Hiring outreach for Wholesale Payments: candidates, email, texting and interviews in one place.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "background_color": "#e8eaf0",
+  "theme_color": "#e8eaf0",
+  "categories": ["business", "productivity"],
+  "lang": "en-US",
+  "dir": "ltr",
+  "icons": [
+    { "src": "/icons/app-light-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/app-light-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-light-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-light-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Candidates",
+      "short_name": "Candidates",
+      "url": "/#candidates",
+      "icons": [{ "src": "/icons/app-light-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Texting",
+      "short_name": "Texting",
+      "url": "/#texting",
+      "icons": [{ "src": "/icons/app-light-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Email",
+      "short_name": "Email",
+      "url": "/#template",
+      "icons": [{ "src": "/icons/app-light-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}
