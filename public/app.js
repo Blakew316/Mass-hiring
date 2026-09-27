@@ -532,6 +532,7 @@
   // entirely, a reload always dumped you on the Dashboard however deep into
   // Texting you were, and there was no way to send somebody a link to a page.
   let currentView = 'dashboard';
+  let offlineBoot = false;      // the first load could not reach the server
   // Set now as well as in show(), so the first paint is already the right
   // width rather than reflowing the moment you navigate.
   if (mainEl) mainEl.dataset.view = currentView;
@@ -556,6 +557,9 @@
     // So does Onboarding docs (public/onboarding.js), once there is a team:
     // before the first answer names one, it would be looking as nobody.
     if (window.Onboarding) { if (view === 'onboarding' && currentTeam) window.Onboarding.activate(); else window.Onboarding.deactivate(); }
+    // Opened with no connection (the Home Screen app starts at the Dashboard):
+    // what this device kept for the team it was last signed in to.
+    if (view === 'onboarding' && !currentTeam && offlineBoot && window.Onboarding && lastTeam()) window.Onboarding.showCached(lastTeam());
     // The editors moved to Settings; Email and Texting are conversations only.
     if (view === 'settings') {
       renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls();
@@ -5178,7 +5182,10 @@
       if (!armed) { spinner.remove(); return; }
       spinner.classList.remove('armed');
       spinner.classList.add('spinning');
-      poll().finally(() => {
+      // The page on screen looks again too, where it keeps its own list.
+      const own = currentView === 'onboarding' && window.Onboarding ? window.Onboarding.refresh()
+        : currentView === 'salesiq' && window.SalesIQ ? Promise.resolve(window.SalesIQ.reload()).catch(() => {}) : null;
+      Promise.all([poll(), own]).finally(() => {
         spinner.classList.remove('spinning');
         spinner.remove();
       });
@@ -5357,18 +5364,21 @@
     const attempt = async (first) => {
       try {
         await boot();
+        offlineBoot = false;
         if (pollFails) { pollFails = 0; renderConnection(); }
       } catch (err) {
         if (err.message === 'Please sign in.' || err.message === 'Set APP_PASSWORD first.') return;
         if (first) oops(err);
         // Opened with no connection on Onboarding docs: what this device kept
         // for the team it was last signed in to, while the retries go on.
+        offlineBoot = true;
         if (first && !currentTeam && lastTeam() && viewInAddressBar() === 'onboarding' && window.Onboarding) {
           show('onboarding', { record: false });
           window.Onboarding.showCached(lastTeam());
         }
         mountConnection();
-        pollFails += 1;
+        // No network at all is not a blip: say so straight away.
+        pollFails = navigator.onLine ? pollFails + 1 : Math.max(pollFails + 1, 2);
         renderConnection();
         setTimeout(() => attempt(false), Math.min(5000 * pollFails, 30000));
       }

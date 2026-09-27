@@ -1044,11 +1044,13 @@
 
         <h2 class="settings-title">Accounts &amp; connections</h2>
         <div class="settings-grid">
-          <div class="card">
+          <div class="card span-all">
             <div class="card-head">
               <h2><span class="card-ico tone-green" data-icon="mail" data-size="15"></span>Google — Sheets &amp; Gmail</h2>
               <span class="badge" id="googleBadge">not connected</span>
             </div>
+            <div class="card-cols">
+            <div>
             <label class="label">From name <span class="muted small">(what recipients see instead of the address)</span></label>
             <input type="text" id="setFromName" class="input" placeholder="the name recipients should see">
             <label class="label">OAuth Client ID</label>
@@ -1056,6 +1058,8 @@
             <label class="label">OAuth Client Secret</label>
             <input type="password" id="setGoogleClientSecret" class="input" placeholder="GOCSPX-…">
             <div class="hint">Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client (Web).</div>
+            </div>
+            <div>
             <div class="redirect-box">
               <div class="redirect-label">Authorized redirect URI — this exact address must be listed on that OAuth client</div>
               <div class="redirect-row"><code id="redirectUriCode"></code><button class="btn btn-small" id="copyRedirectBtn" type="button">Copy</button></div>
@@ -1065,6 +1069,8 @@
               <input type="checkbox" id="setGmailSignature" checked>
               <span>Use my Gmail signature and detect replies <span class="muted small">(asks for two extra Gmail permissions when connecting — change this before you click Connect / Reconnect)</span></span>
             </label>
+            </div>
+            </div>
             <div class="card-actions">
               <button class="btn" id="googleDisconnectBtn" hidden>Disconnect</button>
               <a class="btn btn-primary" href="/auth/google" id="googleConnectBtn">Connect Google</a>
@@ -1113,8 +1119,6 @@
             </div>
           </div>
 
-          <!-- Onboarding docs: what WPI Hire took from its environment, set here
-               and kept for this team. Saved with the rest by Save settings. -->
           <div class="card">
             <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
             <div class="grid-2">

@@ -827,10 +827,20 @@ function renderSigned() {
     el.innerHTML = '<p class="signed-empty">Nobody has signed yet. Completed packets appear here the moment they come back.</p>';
     return;
   }
-  el.innerHTML = list.slice(0, 50).map(signedItem).join('');
+  // The newest fifty, then Show all — and whichever record was asked for
+  // (from the Candidates page) is always among them.
+  const cap = state.signedAll ? list.length : 50;
+  let shown = list.slice(0, cap);
+  if (state.openSigned && !shown.some((h) => h.reference === state.openSigned)) {
+    const h = list.find((x) => x.reference === state.openSigned);
+    if (h) shown = [h, ...shown];
+  }
+  el.innerHTML = shown.map(signedItem).join('')
+    + (list.length > cap ? `<button type="button" class="wh-btn wh-btn-ghost wh-btn-sm signed-more">Show all ${list.length.toLocaleString()}</button>` : '');
 }
 
 $('#wh-signed-list').addEventListener('click', async (e) => {
+  if (e.target.closest('.signed-more')) { state.signedAll = true; renderSigned(); return; }
   const item = e.target.closest('.signed-item');
   if (!item) return;
   if (e.target.closest('.signed-head')) {
@@ -934,7 +944,10 @@ function address() {
 // A section typed into the address bar, or reached by Back, while the page is
 // already open: the site sees the same page and does nothing, so this does.
 ['hashchange', 'popstate'].forEach((type) => window.addEventListener(type, () => {
-  const tab = tabFromAddress();
+  const onPage = location.hash.split('?')[0] === '#onboarding';
+  // A bare #onboarding is the Pipeline, as a link or the Home Screen shortcut
+  // means it.
+  const tab = tabFromAddress() || (onPage ? 'pipeline' : '');
   if (state.active && tab && tab !== state.tab) showTab(tab, { scroll: false });
 }));
 
@@ -974,7 +987,7 @@ function reset(signedIn, teamId) {
   state.teamId = teamId || '';
   Object.assign(state, {
     localCandidates: [], overrides: {}, storage: null, documents: [],
-    sends: {}, completedHires: [], booted: false, openSigned: '',
+    sends: {}, completedHires: [], booted: false, openSigned: '', signedAll: false,
   });
   $('#wh-packet-form').reset();
   packetSettled();
@@ -1012,6 +1025,7 @@ async function openSigned(email) {
 
 window.Onboarding = {
   activate, deactivate, reset, busy, addFromCrm, openSigned, address, showCached,
+  refresh: () => lookAgain().catch(() => {}),
   connect(hooks) { Object.assign(host, hooks); },
 };
 
