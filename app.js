@@ -323,6 +323,9 @@ function feedWindow(events) {
     .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
   const keep = new Map(feed.slice(0, FEED_WINDOW).map((e) => [e.id, e]));
   for (const e of feed.filter((e) => store.EVENT_CHANNEL[e.type] === 'text').slice(0, TEXT_WINDOW)) keep.set(e.id, e);
+  // A finished questionnaire or signed paperwork is never pushed out of view
+  // by a morning of opens.
+  for (const e of feed.filter((e) => e.type === 'assessed' || e.type === 'signed').slice(0, 15)) keep.set(e.id, e);
   return [...keep.values()].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
@@ -2409,6 +2412,7 @@ async function feedSalesiq(db) {
 }
 
 const IQ_SEND_PER_REQUEST = 5;
+const IQ_OWN_COMPANY = 'That is a Wholesale Payments address — Sales IQ is for candidates, not the team.';
 const REPORT_ID_RE = /^r[0-9a-f]{18}$/;
 
 async function iqState(req) {
@@ -2457,6 +2461,7 @@ function iqCandidateInput(body, { partial = false } = {}) {
   }
   if (out.name !== undefined && out.name.length < 2) throw new Error('Please enter a name.');
   if (out.email !== undefined && !salesiq.EMAIL_RE.test(out.email)) throw new Error('Please enter a valid email address.');
+  if (out.email && salesiq.isOwnCompanyEmail(out.email)) throw new Error(IQ_OWN_COMPANY);
   return out;
 }
 
@@ -2655,32 +2660,66 @@ app.post('/api/iq/import-report', asyncRoute(async (req, res) => {
 
 // "Send questionnaire" from a pipeline candidate: onto the Sales IQ list (or
 // matched to who is already there, by address) and sent.
+// A Candidates-page person on the Sales IQ list: found by their id there or
+// their email, or added. Never anyone twice.
+function upsertIqFromPipeline(doc, pc) {
+  let c = doc.candidates.find((x) => x.crmId === pc.id) || doc.candidates.find((x) => salesiq.sameEmail(x.email, pc.email));
+  let added = false;
+  if (!c) {
+    c = {
+      id: salesiq.newCandidateId(),
+      name: salesiq.str(pc.name || `${pc.firstName || ''} ${pc.lastName || ''}`, 120) || salesiq.str(pc.email, 254),
+      email: salesiq.str(pc.email, 254),
+      phone: salesiq.str(pc.phone, 40),
+      status: 'added',
+      added: new Date().toISOString(),
+      source: 'pipeline',
+      crmId: pc.id,
+    };
+    doc.candidates.unshift(c);
+    added = true;
+  } else {
+    if (!c.crmId) c.crmId = pc.id;
+    if (!c.phone && pc.phone) c.phone = salesiq.str(pc.phone, 40);
+  }
+  return { c, added };
+}
+
+// Onto the Sales IQ list from the Candidates page — one person or a selection
+// — without sending anything yet: the questionnaire goes out from the Sales IQ
+// page (or Send Sales IQ on the row) when you are ready.
+app.post('/api/iq/add-from-pipeline', asyncRoute(async (req, res) => {
+  const ids = [...new Set((Array.isArray((req.body || {}).ids) ? req.body.ids : []).map(String))].slice(0, 500);
+  if (!ids.length) throw new Error('Choose who to add to Sales IQ.');
+  const db = await store.load();
+  const byId = new Map(db.candidates.map((c) => [c.id, c]));
+  const out = { added: [], already: [], refused: [] };
+  await salesiq.update((doc) => {
+    // Re-run from the top if another write landed first.
+    out.added = []; out.already = []; out.refused = [];
+    for (const id of ids) {
+      const pc = byId.get(id);
+      if (!pc) { out.refused.push({ id, error: 'No longer on the list.' }); continue; }
+      if (!salesiq.EMAIL_RE.test(String(pc.email || ''))) { out.refused.push({ id, error: 'No email address.' }); continue; }
+      if (salesiq.isOwnCompanyEmail(pc.email)) { out.refused.push({ id, error: IQ_OWN_COMPANY }); continue; }
+      (upsertIqFromPipeline(doc, pc).added ? out.added : out.already).push(id);
+    }
+    if (!out.added.length) return false;
+  });
+  res.json({ ok: true, ...out });
+}));
+
 app.post('/api/iq/from-pipeline', asyncRoute(async (req, res) => {
   const id = String((req.body || {}).candidateId || '');
   const db = await store.load();
   const pc = db.candidates.find((c) => c.id === id);
   if (!pc) return res.status(404).json({ error: 'That candidate is no longer in your pipeline.' });
   if (!salesiq.EMAIL_RE.test(String(pc.email || ''))) throw new Error(`${pc.name || 'This candidate'} has no email address to send the questionnaire to.`);
+  if (salesiq.isOwnCompanyEmail(pc.email)) throw new Error(IQ_OWN_COMPANY);
   let rosterId = '';
   let status = 'added';
   await salesiq.update((doc) => {
-    let c = doc.candidates.find((x) => x.crmId === pc.id) || doc.candidates.find((x) => salesiq.sameEmail(x.email, pc.email));
-    if (!c) {
-      c = {
-        id: salesiq.newCandidateId(),
-        name: salesiq.str(pc.name || `${pc.firstName || ''} ${pc.lastName || ''}`, 120) || salesiq.str(pc.email, 254),
-        email: salesiq.str(pc.email, 254),
-        phone: salesiq.str(pc.phone, 40),
-        status: 'added',
-        added: new Date().toISOString(),
-        source: 'pipeline',
-        crmId: pc.id,
-      };
-      doc.candidates.unshift(c);
-    } else {
-      if (!c.crmId) c.crmId = pc.id;
-      if (!c.phone && pc.phone) c.phone = salesiq.str(pc.phone, 40);
-    }
+    const { c } = upsertIqFromPipeline(doc, pc);
     rosterId = c.id;
     status = c.status || 'added';
   });

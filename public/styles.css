@@ -358,7 +358,7 @@ button.tile-link { border: 0; background: none; padding: 0; font-family: var(--f
 .act-tag.ch-text { background: var(--green-tint); color: var(--green-ink); }
 .act-tag.ch-email { background: var(--blue-tint); color: var(--blue-deep); }
 
-.feed-filters { display: flex; gap: 4px; }
+.feed-filters { display: flex; gap: 4px; flex-wrap: wrap; }
 .feed-filters:empty { display: none; }
 .feed-chip {
   display: inline-flex; align-items: center; gap: 5px;
@@ -1024,6 +1024,41 @@ tr.row-muted { opacity: .55; }
 .today-cell { background: var(--surface-sunk); border-radius: var(--radius); padding: 12px 14px; }
 .today-n { font-size: 22px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
 .today-label { font-size: 12px; color: var(--ink-soft); }
+
+/* ---------------- A candidate's Sales IQ and Onboarding docs, in their profile ---------------- */
+.cand-links { display: grid; gap: 8px; margin: 0 0 14px; }
+.cand-link { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-sunk); }
+.cand-link-main { flex: 1; min-width: 0; }
+.cand-link-title { font-size: 13px; font-weight: 650; color: var(--navy); }
+.cand-link-status { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.cand-link-acts { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.cand-link-acts .btn { white-space: nowrap; }
+@media (max-width: 520px) {
+  .cand-link { flex-wrap: wrap; }
+  .cand-link-acts { flex: 1 1 100%; }
+  .cand-link-acts .btn { flex: 1 1 0; justify-content: center; }
+}
+
+/* ---------------- Dashboard: the Sales IQ and Onboarding docs trackers ---------------- */
+.tracker-card .card-head h2 { display: flex; align-items: center; gap: 9px; }
+.tracker-open { font-size: 13px; font-weight: 600; }
+.tracker-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 0; }
+button.tracker-cell { border: 0; font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer; transition: background .15s; }
+button.tracker-cell:hover { background: var(--navy-tint); }
+button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.tracker-cell .today-n { color: var(--navy); }
+.tracker-cell .today-label { line-height: 1.35; }
+.tracker-tiers { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tracker-tiers:empty { display: none; }
+.tier-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 99px; padding: 4px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.tier-pill:hover { background: var(--navy-tint); }
+.tier-pill b { font-variant-numeric: tabular-nums; }
+.tier-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+@media (max-width: 1180px) and (min-width: 981px) { .tracker-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) {
+  .tracker-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tracker-card .card-head { flex-wrap: nowrap; }
+}
 
 /* ---------- The bottom strip: running totals, not headlines ---------- */
 /* These two are things you glance at, not things you read, so they get less

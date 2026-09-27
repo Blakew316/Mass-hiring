@@ -19,6 +19,8 @@
   let addedFilter = '';
   let textedFilter = '';
   let rankFilter = '';
+  let iqFilter = '';            // where they are with Sales IQ (see IQ_FILTERS)
+  let onbFilter = '';           // and with Onboarding docs (ONB_FILTERS)
   let feedChannel = readFeedChannel();  // 'all' | 'email' | 'text'
   // 3,500 rows rendered at once is a 400,000-pixel page and the reason the
   // list felt like everything at once. A page at a time, like any CRM.
@@ -364,6 +366,8 @@
     addedFilter = '';
     textedFilter = '';
     rankFilter = '';
+    iqFilter = '';
+    onbFilter = '';
     page = 0;
     pageRows = [];
     lastFilterSig = '';
@@ -730,6 +734,7 @@
 
     renderChannels(t, e);
     renderTextToday(t);
+    renderTrackers();
 
     renderFeed();
 
@@ -752,6 +757,44 @@
       </li>`).join('');
   }
 
+  // ---------------- Dashboard: Sales IQ and Onboarding docs ----------------
+  // Everyone on each list, and where they have got to. The numbers are the
+  // Sales IQ and Onboarding docs pages' own; each opens the Candidates list
+  // filtered to those people, with the same filters as the menus there.
+  const IQ_TIERS = [['elite', 'Elite', 'var(--green)'], ['strong', 'Strong', 'var(--blue)'], ['develop', 'Developing', 'var(--amber)'], ['notready', 'Not ready', 'var(--red)']];
+  function trackerCell(n, label, patch, title) {
+    return `<button type="button" class="today-cell tracker-cell" data-seg='${esc(JSON.stringify(patch))}' title="${esc(title)}">
+      <div class="today-n">${n.toLocaleString()}</div><div class="today-label">${esc(label)}</div></button>`;
+  }
+  function renderTrackers() {
+    const iq = Object.values((state.salesiq && state.salesiq.byEmail) || {});
+    const iqN = (st) => iq.filter((x) => x.status === st).length;
+    $('#iqTrackerGrid').innerHTML = [
+      trackerCell(iq.length, 'On Sales IQ', { iq: 'any' }, 'Everyone on the Sales IQ list — show them on Candidates'),
+      trackerCell(iqN('added'), 'Not sent', { iq: 'added' }, 'On the list, questionnaire not sent yet'),
+      trackerCell(iqN('invited'), 'Awaiting results', { iq: 'invited' }, 'Sent the questionnaire — waiting on their answers'),
+      trackerCell(iqN('completed'), 'Completed', { iq: 'completed' }, 'Finished the questionnaire'),
+    ].join('');
+    $('#iqTrackerTiers').innerHTML = IQ_TIERS.map(([key, label, color]) => {
+      const n = iq.filter((x) => x.status === 'completed' && x.tierKey === key).length;
+      return n ? `<button type="button" class="tier-pill" data-seg='${esc(JSON.stringify({ iq: key }))}'><span class="tier-dot" style="background:${color}"></span>${esc(label)} <b>${n.toLocaleString()}</b></button>` : '';
+    }).join('');
+    const onb = Object.values((state.onboarding && state.onboarding.byEmail) || {});
+    const stageN = (st) => onb.filter((o) => onbStage(o) === st).length;
+    $('#onbTrackerGrid').innerHTML = [
+      trackerCell(onb.filter((o) => o.onPipeline).length, 'On the pipeline', { onb: 'any' }, 'Everyone added to Onboarding docs — show them on Candidates'),
+      trackerCell(stageN('pipeline'), 'Packet not sent', { onb: 'pipeline' }, 'On the pipeline, packet not sent yet'),
+      trackerCell(stageN('sent'), 'Awaiting signature', { onb: 'sent' }, 'Packet sent — waiting on their signature'),
+      trackerCell(stageN('signed'), 'Signed', { onb: 'signed' }, 'Signed and returned their paperwork'),
+    ].join('');
+  }
+  $('#trackerRow').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-seg]');
+    if (!b) return;
+    openSegment(JSON.parse(b.dataset.seg));
+    show('candidates');
+  });
+
   function upcomingInterviews() {
     const since = Date.now() - 3600 * 1000;
     return (state.interviews || []).filter((i) => i.status === 'active' && new Date(i.start).getTime() >= since);
@@ -761,10 +804,15 @@
   // Where someone stands with the Sales IQ questionnaire, by their address.
   // It comes with the state as a small map, the way texting priority does,
   // so the candidate list stays the shape it has always been.
+  // Also by their id here, for someone whose address there is not this one.
   function iqOf(c) {
-    const by = (state && state.salesiq && state.salesiq.byEmail) || {};
-    return by[String((c && c.email) || '').trim().toLowerCase()] || null;
+    const x = (state && state.salesiq) || {};
+    const by = x.byEmail || {};
+    return by[String((c && c.email) || '').trim().toLowerCase()] || by[(x.byCrm || {})[c && c.id]] || null;
   }
+  // Nobody at Wholesale Payments goes to Sales IQ or Onboarding docs.
+  const OWN_COMPANY_EMAIL = /@(?:[a-z0-9-]+\.)*wholesalepayments\.com$/i;
+  const canPipe = (c) => Boolean(c && c.email) && !OWN_COMPANY_EMAIL.test(String(c.email).trim());
   const IQ_TINT = { elite: 'tint-green', strong: 'tint-blue', develop: 'tint-amber', notready: 'tint-red' };
   function iqBadge(s) {
     if (!s) return '';
@@ -772,7 +820,7 @@
       return `<span class="badge iq-badge ${IQ_TINT[s.tierKey] || 'tint-blue'}" title="Sales IQ questionnaire: ${esc(s.tier || 'completed')}">Sales IQ ${typeof s.score === 'number' ? `${s.score}/100` : 'done'}</span>`;
     }
     if (s.status === 'invited') return '<span class="badge iq-badge tint-navy" title="Sent the Sales IQ questionnaire — waiting on their answers">Questionnaire sent</span>';
-    return '';
+    return '<span class="badge iq-badge" title="On the Sales IQ list — questionnaire not sent yet">Sales IQ · not sent</span>';
   }
   const iqLine = (c) => { const b = [iqBadge(iqOf(c)), onbBadge(onbOf(c))].filter(Boolean).join(' '); return b ? `<div class="cand-iq">${b}</div>` : ''; };
   function iqActionLabel(c) {
@@ -822,18 +870,23 @@
   // Whether someone has been sent their onboarding packet, and whether it has
   // come back signed — by address, from the state, as with Sales IQ.
   function onbOf(c) {
-    const by = (state && state.onboarding && state.onboarding.byEmail) || {};
-    return by[String((c && c.email) || '').trim().toLowerCase()] || null;
+    const x = (state && state.onboarding) || {};
+    const by = x.byEmail || {};
+    return by[String((c && c.email) || '').trim().toLowerCase()] || by[(x.byCrm || {})[c && c.id]] || null;
   }
+  // How far along: '' (not there), on the pipeline, packet sent, signed.
+  const onbStage = (o) => (!o ? '' : o.signedAt ? 'signed' : o.sentAt ? 'sent' : o.onPipeline ? 'pipeline' : '');
   function onbBadge(o) {
-    if (!o) return '';
-    if (o.signedAt) return '<span class="badge iq-badge tint-green" title="Signed and returned their onboarding paperwork">Docs signed</span>';
-    if (o.sentAt) return '<span class="badge iq-badge tint-navy" title="Sent their onboarding packet — waiting on their signature">Docs sent</span>';
+    const stage = onbStage(o);
+    if (stage === 'signed') return '<span class="badge iq-badge tint-green" title="Signed and returned their onboarding paperwork">Docs signed</span>';
+    if (stage === 'sent') return '<span class="badge iq-badge tint-navy" title="Sent their onboarding packet — waiting on their signature">Docs sent</span>';
+    if (stage === 'pipeline') return '<span class="badge iq-badge" title="On the Onboarding docs pipeline — packet not sent yet">Docs · not sent</span>';
     return '';
   }
   function onbActionLabel(c) {
-    const o = onbOf(c);
-    if (o && o.signedAt) return 'See their signed paperwork';
+    const stage = onbStage(onbOf(c));
+    if (stage === 'signed') return 'See their signed paperwork';
+    if (stage) return 'Open their onboarding card';
     return 'Send onboarding docs';
   }
   // Onto the Onboarding docs pipeline (once), and there, on their card —
@@ -1098,15 +1151,15 @@
     canceled:       { ico: 'xcircle',  cls: 'tint-red',   ch: 'both',  tag: '' },
     // A finished Sales IQ questionnaire: the step after a booking, so it too
     // shows whichever channel the feed is filtered to.
-    assessed:       { ico: 'clipboard', cls: 'tint-blue', ch: 'both',  tag: '' },
+    assessed:       { ico: 'clipboard', cls: 'tint-blue', ch: 'both',  tag: '', topic: 'iq' },
     // Onboarding paperwork signed and returned: the last step of all.
-    signed:         { ico: 'signdoc',   cls: 'tint-green', ch: 'both', tag: '' },
+    signed:         { ico: 'signdoc',   cls: 'tint-green', ch: 'both', tag: '', topic: 'onb' },
   };
 
   function readFeedChannel() {
     try {
       const v = localStorage.getItem(teamKey('feedChannel'));
-      return v === 'email' || v === 'text' ? v : 'all';
+      return ['email', 'text', 'iq', 'onb'].includes(v) ? v : 'all';
     } catch { return 'all'; }
   }
 
@@ -1114,6 +1167,8 @@
     return (state.events || []).filter((ev) => {
       const k = FEED_KIND[ev.type];
       if (!k) return false;
+      // Sales IQ and Onboarding docs: just their own news.
+      if (channel === 'iq' || channel === 'onb') return k.topic === channel;
       return channel === 'all' || k.ch === 'both' || k.ch === channel;
     });
   }
@@ -1124,18 +1179,27 @@
     // of which is a booking".
     const shown = feedEvents('all');
     const own = (ch) => shown.filter((ev) => FEED_KIND[ev.type].ch === ch).length;
-    const counts = { all: shown.length, email: own('email'), text: own('text') };
+    const topic = (t) => shown.filter((ev) => FEED_KIND[ev.type].topic === t).length;
+    const counts = { all: shown.length, email: own('email'), text: own('text'), iq: topic('iq'), onb: topic('onb') };
     // A filter that can only ever show what "All" already shows is noise, so
-    // the row appears once there is genuinely something to separate.
-    const worthFiltering = counts.email > 0 && counts.text > 0;
+    // the row appears once there is genuinely something to separate — and
+    // then only the chips that have something behind them.
+    const kinds = ['email', 'text', 'iq', 'onb'].filter((k) => counts[k] > 0);
+    const worthFiltering = kinds.length >= 2;
+    const chips = [['all', 'All'], ['email', 'Email'], ['text', 'Texting'], ['iq', 'Sales IQ'], ['onb', 'Onboarding']]
+      .filter(([k]) => k === 'all' || counts[k] > 0);
     $('#feedFilters').innerHTML = worthFiltering
-      ? [['all', 'All'], ['email', 'Email'], ['text', 'Texting']].map(([k, label]) =>
+      ? chips.map(([k, label]) =>
           `<button class="feed-chip${feedChannel === k ? ' on' : ''}" data-feed="${k}">${label}<span class="feed-n">${counts[k]}</span></button>`).join('')
       : '';
-    if (!worthFiltering) feedChannel = 'all';
+    if (!worthFiltering || !chips.some(([k]) => k === feedChannel)) feedChannel = 'all';
 
     const list = feedEvents(feedChannel).slice(0, 15);
-    const empty = feedChannel === 'text'
+    const empty = feedChannel === 'iq'
+      ? 'No finished questionnaires yet.'
+      : feedChannel === 'onb'
+        ? 'No signed paperwork yet.'
+        : feedChannel === 'text'
       ? 'No texting updates yet — reads, replies and opt-outs show up here.'
       : feedChannel === 'email'
         ? 'No email updates yet — opens and replies show up here.'
@@ -1366,8 +1430,37 @@
       if (rankFilter === 'unranked') { if (pri) return false; }
       else if (!pri || pri.rank > Number(rankFilter)) return false;
     }
+    if (iqFilter && !iqMatch(c, iqFilter)) return false;
+    if (onbFilter && !onbMatch(c, onbFilter)) return false;
     return true;
   }
+
+  // Sales IQ and Onboarding docs, as filters like any other — in the menus,
+  // the chips, and behind every number on the Dashboard's trackers.
+  const IQ_FILTERS = [
+    ['any', 'On Sales IQ'], ['none', 'Not on Sales IQ'], ['added', 'Sales IQ · not sent'], ['invited', 'Questionnaire sent'],
+    ['completed', 'Questionnaire done'], ['elite', 'Elite Talent (85+)'], ['strong', 'Strong Potential (70–84)'],
+    ['develop', 'Developing (50–69)'], ['notready', 'Not Sales-Ready (under 50)'],
+  ];
+  const ONB_FILTERS = [
+    ['any', 'In Onboarding docs'], ['none', 'Not in Onboarding docs'], ['pipeline', 'Docs · packet not sent'],
+    ['sent', 'Docs sent · awaiting signature'], ['signed', 'Docs signed'],
+  ];
+  function iqMatch(c, v) {
+    const s = iqOf(c);
+    if (v === 'none') return !s;
+    if (!s) return false;
+    if (v === 'any') return true;
+    if (['added', 'invited', 'completed'].includes(v)) return s.status === v;
+    return s.status === 'completed' && s.tierKey === v;
+  }
+  function onbMatch(c, v) {
+    const stage = onbStage(onbOf(c));
+    if (v === 'none') return !stage;
+    if (v === 'any') return Boolean(stage);
+    return stage === v;
+  }
+  const filterLabel = (list, v) => (list.find(([k]) => k === v) || [, v])[1];
 
   // Jump from a group straight into the table with that filter applied.
   function openSegment(patch) {
@@ -1377,7 +1470,10 @@
     // so the same fifty people stayed on top and only the counter moved. A
     // group that names an order gets it; every other one gets the plain one.
     filter = 'all'; industryFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; roleFilter = '';
+    iqFilter = ''; onbFilter = '';
     sortBy = 'default';
+    if (patch.iq !== undefined) iqFilter = patch.iq;
+    if (patch.onb !== undefined) onbFilter = patch.onb;
     if (patch.status !== undefined) filter = patch.status;
     if (patch.industry !== undefined) industryFilter = patch.industry;
     if (patch.added !== undefined) addedFilter = patch.added;
@@ -1431,6 +1527,8 @@
     $('#searchInput').value = search;
     $('#stageFilter').value = filter;
     $('#roleFilter').value = roleFilter;
+    $('#iqFilter').value = iqFilter;
+    $('#onbFilter').value = onbFilter;
   }
 
   // Thirty-eight tiles of every possible grouping was a page you had to read
@@ -1461,11 +1559,16 @@
       { label: 'Not contacted', n: count((c) => c.status === 'new'), patch: { status: 'new' } },
       { label: 'Booked', n: count((c) => c.status === 'booked'), patch: { status: 'booked' } },
       { label: 'Needs a number', n: count((c) => !textPhoneOf(c)), patch: { texted: 'nonumber' } },
+      { label: 'Sales IQ done', n: count((c) => iqMatch(c, 'completed')), patch: { iq: 'completed' } },
+      { label: 'Docs awaiting signature', n: count((c) => onbMatch(c, 'sent')), patch: { onb: 'sent' } },
+      { label: 'Docs signed', n: count((c) => onbMatch(c, 'signed')), patch: { onb: 'signed' } },
     ].filter((v) => v.n > 0);
 
     // Which pill, if any, describes exactly what is on screen right now.
     const nothingElse = !search && !industryFilter && !roleFilter && !addedFilter;
     const active = (v) => nothingElse
+      && (v.patch.iq || '') === iqFilter
+      && (v.patch.onb || '') === onbFilter
       && (v.patch.status || 'all') === filter
       && (v.patch.texted || '') === textedFilter
       && (v.patch.rank || '') === rankFilter
@@ -1486,6 +1589,12 @@
       .sort((x, y) => y[1] - x[1])
       .map(([code, n]) => `<option value="${esc(code)}">${esc(industryLabel(code))} (${n})</option>`).join(''), industryFilter);
 
+    // Sales IQ and Onboarding docs, each option with how many it would show.
+    setOptions($('#iqFilter'), '<option value="">Sales IQ: any</option>' + IQ_FILTERS
+      .map(([k, label]) => `<option value="${k}">${esc(label)} (${count((c) => iqMatch(c, k)).toLocaleString()})</option>`).join(''), iqFilter);
+    setOptions($('#onbFilter'), '<option value="">Onboarding: any</option>' + ONB_FILTERS
+      .map(([k, label]) => `<option value="${k}">${esc(label)} (${count((c) => onbMatch(c, k)).toLocaleString()})</option>`).join(''), onbFilter);
+
     // And the stage menu carries its counts, so picking one is informed.
     setOptions($('#stageFilter'), `<option value="all">Any stage (${all.length.toLocaleString()})</option>` + Object.entries(STATUS)
       .map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)} (${count((c) => c.status === k).toLocaleString()})</option>`).join(''), filter || 'all');
@@ -1501,6 +1610,8 @@
     if (addedFilter) bits.push([`Added: ${$('#addedFilter').selectedOptions[0].textContent}`, () => { addedFilter = ''; }]);
     if (textedFilter) bits.push([`Texting: ${$('#textedFilter').selectedOptions[0].textContent}`, () => { textedFilter = ''; }]);
     if (rankFilter) bits.push([`Ranking: ${$('#rankFilter').selectedOptions[0].textContent}`, () => { rankFilter = ''; }]);
+    if (iqFilter) bits.push([`Sales IQ: ${filterLabel(IQ_FILTERS, iqFilter)}`, () => { iqFilter = ''; }]);
+    if (onbFilter) bits.push([`Onboarding: ${filterLabel(ONB_FILTERS, onbFilter)}`, () => { onbFilter = ''; }]);
     if (search) bits.push([`Search: “${search}”`, () => { search = ''; }]);
     const label = $('#filtersLabel');
     if (label) label.textContent = bits.length ? `Filters · ${bits.length}` : 'Filters';
@@ -1515,7 +1626,7 @@
   $('#activeFilters').addEventListener('click', (e) => {
     const b = e.target.closest('[data-clear]');
     if (!b) return;
-    if (b.dataset.clear === 'all') { filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; search = ''; }
+    if (b.dataset.clear === 'all') { filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; iqFilter = ''; onbFilter = ''; search = ''; }
     else clearFilterActions[Number(b.dataset.clear)]();
     syncFilterControls();
     renderCandidates();
@@ -1528,7 +1639,8 @@
   });
 
   for (const [id, set] of [['#industryFilter', (v) => { industryFilter = v; }], ['#addedFilter', (v) => { addedFilter = v; }],
-    ['#textedFilter', (v) => { textedFilter = v; }], ['#rankFilter', (v) => { rankFilter = v; }]]) {
+    ['#textedFilter', (v) => { textedFilter = v; }], ['#rankFilter', (v) => { rankFilter = v; }],
+    ['#iqFilter', (v) => { iqFilter = v; }], ['#onbFilter', (v) => { onbFilter = v; }]]) {
     $(id).addEventListener('change', (e) => { set(e.target.value); narrowSelection(); renderCandidates(); });
   }
 
@@ -1554,7 +1666,7 @@
 
     // Changing what is being asked for starts again at the first page; paging
     // within the same question keeps your place.
-    const sig = JSON.stringify([filter, industryFilter, roleFilter, addedFilter, textedFilter, rankFilter, search, sortBy]);
+    const sig = JSON.stringify([filter, industryFilter, roleFilter, addedFilter, textedFilter, rankFilter, iqFilter, onbFilter, search, sortBy]);
     if (sig !== lastFilterSig) { lastFilterSig = sig; page = 0; }
     const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     page = Math.min(Math.max(0, page), pageCount - 1);
@@ -1594,8 +1706,8 @@
           <button class="icon-btn act-edit" title="Edit details (name, phone, role…)">${icon('doc', 16)}</button>
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
           ${textPhoneOf(c) ? `<button class="icon-btn act-text" title="Send a text">${icon('bubble', 16)}</button>` : ''}
-          ${c.email ? `<button class="icon-btn act-iq" title="${esc(iqActionLabel(c))}">${icon('clipboard', 16)}</button>` : ''}
-          ${c.email ? `<button class="icon-btn act-onb" title="${esc(onbActionLabel(c))}">${icon('signdoc', 16)}</button>` : ''}
+          ${canPipe(c) ? `<button class="icon-btn act-iq" title="${esc(iqActionLabel(c))}">${icon('clipboard', 16)}</button>` : ''}
+          ${canPipe(c) ? `<button class="icon-btn act-onb" title="${esc(onbActionLabel(c))}">${icon('signdoc', 16)}</button>` : ''}
           ${c.status === 'emailed' ? `<button class="icon-btn act-followup" title="Follow up (reply in the same conversation)">${icon('reply', 16)}</button>` : ''}
           <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
         </div></td>
@@ -1639,7 +1751,111 @@
     $('#selNote').textContent = textable === 0
       ? 'None of these have a phone number yet'
       : (textable < n ? `${n - textable} of them have no number` : '');
+    const iqN = selectedCandidates().filter((c) => canPipe(c) && !iqOf(c)).length;
+    const onbN = selectedCandidates().filter((c) => canPipe(c) && !onbStage(onbOf(c))).length;
+    $('#selIqBtn').innerHTML = `${icon('clipboard', 15)} Add ${iqN} to Sales IQ`;
+    $('#selIqBtn').disabled = iqN === 0;
+    $('#selIqBtn').title = iqN ? 'Put them on the Sales IQ list — send the questionnaire when you are ready' : 'Everyone selected is on Sales IQ already (or has no email)';
+    $('#selOnbBtn').innerHTML = `${icon('signdoc', 15)} Add ${onbN} to Onboarding docs`;
+    $('#selOnbBtn').disabled = onbN === 0;
+    $('#selOnbBtn').title = onbN ? 'Put them on the Onboarding docs pipeline — send each packet from there' : 'Everyone selected is in Onboarding docs already (or has no email)';
   }
+
+  // A selection onto the Sales IQ list or the Onboarding docs pipeline. Nobody
+  // is emailed from here: that is the next step, on those pages.
+  async function addSelectionTo(where) {
+    const btn = where === 'iq' ? $('#selIqBtn') : $('#selOnbBtn');
+    const ids = selectedCandidates().filter((c) => canPipe(c) && (where === 'iq' ? !iqOf(c) : !onbStage(onbOf(c)))).map((c) => c.id);
+    if (!ids.length) return;
+    btn.disabled = true;
+    try {
+      const r = await api(where === 'iq' ? '/api/iq/add-from-pipeline' : '/api/onboarding/from-crm', { method: 'POST', body: { ids } });
+      const added = r.added.length;
+      const skipped = r.already.length + r.refused.length;
+      toast(`${added.toLocaleString()} added to ${where === 'iq' ? 'Sales IQ' : 'Onboarding docs'}${skipped ? ` · ${skipped} skipped (already there, or no email)` : ''}.`);
+      if (where === 'iq' && window.SalesIQ && window.SalesIQ.reload) window.SalesIQ.reload();
+      await refresh();
+    } catch (err) { oops(err); } finally { updateSendButton(); }
+  }
+
+  // ---------------- A candidate's profile: Sales IQ and Onboarding docs ----------------
+  // In their Edit window: where they are with each, and the next step — onto
+  // the list, or straight to sending them the next thing.
+  let linksFor = null;
+  function linkBtn(act, label, primary = false) {
+    return `<button type="button" class="btn btn-sm${primary ? ' btn-primary' : ''}" data-link="${act}">${esc(label)}</button>`;
+  }
+  function renderCandLinks(c) {
+    linksFor = c && c.id;
+    const box = $('#candLinks');
+    box.hidden = !(c && canPipe(c));
+    if (box.hidden) return;
+    const s = iqOf(c);
+    $('#candIqStatus').innerHTML = !s ? 'Not on the Sales IQ list'
+      : s.status === 'added' ? 'On the list — questionnaire not sent'
+        : s.status === 'invited' ? 'Questionnaire sent — waiting on their answers'
+          : `Finished — ${iqBadge(s)}`;
+    $('#candIqActs').innerHTML = !s ? linkBtn('iq-add', 'Add to Sales IQ') + linkBtn('iq-send', 'Send questionnaire', true)
+      : s.status === 'added' ? linkBtn('iq-send', 'Send questionnaire', true)
+        : s.status === 'invited' ? linkBtn('iq-send', 'Send again')
+          : linkBtn('iq-open', 'See result');
+    const o = onbOf(c);
+    const stage = onbStage(o);
+    $('#candOnbStatus').textContent = !stage ? 'Not in Onboarding docs'
+      : stage === 'pipeline' ? 'On the pipeline — packet not sent'
+        : stage === 'sent' ? 'Packet sent — waiting on their signature'
+          : 'Signed and returned their paperwork';
+    $('#candOnbActs').innerHTML = !stage ? linkBtn('onb-add', 'Add to Onboarding docs') + linkBtn('onb-send', 'Send packet', true)
+      : stage === 'pipeline' ? linkBtn('onb-open', 'Open card') + linkBtn('onb-send', 'Send packet', true)
+        : stage === 'sent' ? linkBtn('onb-open', 'Open card') + linkBtn('onb-send', 'Send again')
+          : linkBtn('onb-signed', 'See signed paperwork');
+  }
+  // Their packet, straight from here: onto the pipeline (once) and emailed.
+  async function sendOnbPacket(c) {
+    const parts = String(c.name || '').trim().split(/\s+/).filter(Boolean);
+    const o = onbOf(c);
+    if (onbStage(o) === 'sent' && !confirm(`${c.name || c.email} has already been sent their onboarding packet. Send it again?`)) return false;
+    await api('/api/onboarding/from-crm', { method: 'POST', body: { ids: [c.id] } });
+    const r = await api('/api/onboarding/send', { method: 'POST', body: {
+      hire: { firstName: c.firstName || parts[0] || '', lastName: c.lastName || parts.slice(1).join(' '), email: c.email, phone: c.phone || '', jobTitle: 'Account Executive' },
+      options: { sendEmail: true },
+    } });
+    const emailed = (r.steps || []).some((st) => st.step === 'Email packet' && st.status === 'done');
+    toast(emailed ? `Onboarding packet emailed to ${c.email}.` : 'Email is not set up yet, so the packet was not sent — connect your mailbox in Settings.', !emailed);
+    return true;
+  }
+  $('#candLinks').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-link]');
+    const c = b && state.candidates.find((x) => x.id === linksFor);
+    if (!c) return;
+    const act = b.dataset.link;
+    const goes = ['iq-open', 'onb-open', 'onb-signed'].includes(act);
+    if (goes) closeModal($('#addModal'));
+    b.disabled = true;
+    try {
+      if (act === 'iq-add') {
+        const r = await api('/api/iq/add-from-pipeline', { method: 'POST', body: { ids: [c.id] } });
+        if (r.refused.length) throw new Error(r.refused[0].error);
+        if (window.SalesIQ && window.SalesIQ.reload) window.SalesIQ.reload();
+        toast(`${String(c.name || c.email).split(' ')[0]} is on the Sales IQ list.`);
+        await refresh();
+      } else if (act === 'iq-send' || act === 'iq-open') {
+        await sendIq(c);
+      } else if (act === 'onb-add') {
+        const r = await api('/api/onboarding/from-crm', { method: 'POST', body: { ids: [c.id] } });
+        if (r.refused.length) throw new Error(r.refused[0].error);
+        toast(`${String(c.name || c.email).split(' ')[0]} is on the Onboarding docs pipeline.`);
+        await refresh();
+      } else if (act === 'onb-send') {
+        if (await sendOnbPacket(c)) await refresh();
+      } else if (act === 'onb-open' || act === 'onb-signed') {
+        await sendOnb(c);
+      }
+    } catch (err) { oops(err); } finally {
+      b.disabled = false;
+      if (!goes && !$('#addModal').hidden) renderCandLinks(state.candidates.find((x) => x.id === c.id) || c);
+    }
+  });
 
   $('#candidateRows').addEventListener('click', (e) => {
     const tr = e.target.closest('tr');
@@ -1652,6 +1868,8 @@
       return;
     }
     if (e.target.closest('.act-more')) { openActionSheet(tr); return; }
+    // Their name opens their profile: details, Sales IQ, Onboarding docs.
+    if (e.target.closest('.cand-name')) { openCandidate(cand); return; }
     // The Text column is the fastest way in for the thing people actually
     // want: putting a number on someone who has none.
     if (e.target.closest('.add-number')) { openCandidate(cand, { focus: 'phone' }); return; }
@@ -1743,7 +1961,7 @@
   });
 
   $('#emptyClear').addEventListener('click', () => {
-    filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; search = '';
+    filter = 'all'; industryFilter = ''; roleFilter = ''; addedFilter = ''; textedFilter = ''; rankFilter = ''; iqFilter = ''; onbFilter = ''; search = '';
     syncFilterControls(); renderCandidates();
   });
   $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; narrowSelection(); renderCandidates(); });
@@ -1763,6 +1981,8 @@
     openTextCompose(selectedTextable().map((c) => c.id), { thenEmail: [...selected] });
   });
   $('#selClearBtn').addEventListener('click', () => { selected.clear(); renderCandidates(); });
+  $('#selIqBtn').addEventListener('click', () => addSelectionTo('iq'));
+  $('#selOnbBtn').addEventListener('click', () => addSelectionTo('onb'));
   $('#emailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
   $$('.follow-up-btn').forEach((b) => b.addEventListener('click', () => {
     if (b.id === 'tplFollowUpBtn' && followUpDirty) return;   // that button sends the unsaved draft (handled below)
@@ -1793,6 +2013,7 @@
     $('#addNotes').value = c ? (c.notes || '') : '';
     $('#addModalTitle').textContent = c ? `Edit ${c.name || c.email}` : 'Add candidate';
     $('#addSaveBtn').textContent = c ? 'Save changes' : 'Add candidate';
+    renderCandLinks(c);
     openModal('#addModal');
     checkPhoneField();
     const el = focus === 'phone' ? $('#addPhone') : $('#addFirst');
@@ -3851,7 +4072,7 @@
       e.target.style.height = 'auto';
       e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
     });
-    $('#mailOpenCandidate').addEventListener('click', () => { if (openMailId) openCandidate(openMailId); });
+    $('#mailOpenCandidate').addEventListener('click', () => { const c = openMailId && state.candidates.find((x) => x.id === openMailId); if (c) openCandidate(c); });
   }
 
   // ---------------- Light and dark ----------------
@@ -4018,7 +4239,7 @@
       e.target.style.height = 'auto';
       e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
     });
-    $('#threadOpenCandidate').addEventListener('click', () => { if (openThreadId) openCandidate(openThreadId); });
+    $('#threadOpenCandidate').addEventListener('click', () => { const c = openThreadId && state.candidates.find((x) => x.id === openThreadId); if (c) openCandidate(c); });
 
     $('#bellPanel').addEventListener('click', (e) => {
       const r = e.target.closest('[data-bell-open]');

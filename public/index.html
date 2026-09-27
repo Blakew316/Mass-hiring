@@ -220,6 +220,27 @@
         </div>
       </div>
 
+      <!-- Where everyone is with the Sales IQ questionnaire and their
+           onboarding paperwork. Each number opens the Candidates list,
+           filtered to exactly those people. -->
+      <div class="two-col tracker-row" id="trackerRow">
+        <div class="card tracker-card" id="iqTracker">
+          <div class="card-head">
+            <h2><span class="card-ico tone-blue" data-icon="clipboard" data-size="15"></span>Sales IQ</h2>
+            <button type="button" class="btn-link tracker-open" data-goto="salesiq"><span class="d-only">Open Sales IQ ›</span><span class="m-only">Open ›</span></button>
+          </div>
+          <div class="today-grid tracker-grid" id="iqTrackerGrid"></div>
+          <div class="tracker-tiers" id="iqTrackerTiers"></div>
+        </div>
+        <div class="card tracker-card" id="onbTracker">
+          <div class="card-head">
+            <h2><span class="card-ico tone-green" data-icon="signdoc" data-size="15"></span>Onboarding docs</h2>
+            <button type="button" class="btn-link tracker-open" data-goto="onboarding"><span class="d-only">Open Onboarding docs ›</span><span class="m-only">Open ›</span></button>
+          </div>
+          <div class="today-grid tracker-grid" id="onbTrackerGrid"></div>
+        </div>
+      </div>
+
       <div class="two-col">
         <div class="card">
           <div class="card-head">
@@ -348,6 +369,8 @@
             <option value="500">Top 500 to text</option>
             <option value="unranked">Not being texted</option>
           </select>
+          <select id="iqFilter" class="input role-filter" title="Where they are with the Sales IQ questionnaire"><option value="">Sales IQ: any</option></select>
+          <select id="onbFilter" class="input role-filter" title="Where they are with their onboarding paperwork"><option value="">Onboarding: any</option></select>
           <select id="sortBy" class="input role-filter" title="How the list is ordered">
             <option value="default">Order added</option>
             <option value="texting">Best to text first</option>
@@ -363,6 +386,8 @@
           <button class="btn" id="selEmailBtn"><span data-icon="mail" data-size="15"></span> Email</button>
           <button class="btn" id="selTextBtn"><span data-icon="bubble" data-size="15"></span> Text</button>
           <button class="btn btn-primary" id="selBothBtn">Email + text</button>
+          <button class="btn" id="selIqBtn"></button>
+          <button class="btn" id="selOnbBtn"></button>
           <span class="sel-note" id="selNote"></span>
           <button class="btn-link" id="selClearBtn">Clear</button>
         </div>
@@ -1421,6 +1446,20 @@
   <div class="modal modal-sm" role="dialog" aria-modal="true">
     <div class="modal-head"><h2 id="addModalTitle">Add candidate</h2><button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button></div>
     <div class="modal-body">
+      <!-- Where they are with Sales IQ and Onboarding docs, and one tap to
+           put them on either list or send them the next thing. -->
+      <div class="cand-links" id="candLinks" hidden>
+        <div class="cand-link">
+          <span class="card-ico tone-blue" data-icon="clipboard" data-size="15"></span>
+          <div class="cand-link-main"><div class="cand-link-title">Sales IQ</div><div class="cand-link-status" id="candIqStatus"></div></div>
+          <div class="cand-link-acts" id="candIqActs"></div>
+        </div>
+        <div class="cand-link">
+          <span class="card-ico tone-green" data-icon="signdoc" data-size="15"></span>
+          <div class="cand-link-main"><div class="cand-link-title">Onboarding docs</div><div class="cand-link-status" id="candOnbStatus"></div></div>
+          <div class="cand-link-acts" id="candOnbActs"></div>
+        </div>
+      </div>
       <div class="grid-2">
         <div><label class="label">First name</label><input class="input" id="addFirst"></div>
         <div><label class="label">Last name</label><input class="input" id="addLast"></div>
