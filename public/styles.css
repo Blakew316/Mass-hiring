@@ -529,7 +529,7 @@ tr.cand-row:hover .row-open { opacity: 1; color: var(--blue); transform: transla
 .profile-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .profile-tags .iq-badge { margin: 0; }
 .profile-close { flex: none; margin: -4px -8px 0 0; }
-.profile-body { padding: 16px 22px 6px; }
+.modal-body.profile-body { padding: 16px 22px 8px; }
 .profile-acts { display: flex; gap: 8px; }
 .profile-act { flex: 1 1 0; min-width: 0; }
 .profile-act {
