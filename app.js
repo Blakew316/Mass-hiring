@@ -28,6 +28,7 @@ const phone = require('./lib/phone');
 const priority = require('./lib/priority');
 const backups = require('./lib/backups');
 const presets = require('./lib/presets');
+const salesiq = require('./lib/salesiq');
 const crypto = require('crypto');
 const { renderEmail, renderText, escapeHtml } = require('./lib/template');
 
@@ -370,13 +371,14 @@ app.get('/api/state', asyncRoute(async (req, res) => {
   // Four independent reads. On Netlify Blobs each one is its own round trip, so
   // awaiting them in a line made this route as slow as the sum of them; nothing
   // here depends on anything else here.
-  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList] = await Promise.all([
+  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList, iq] = await Promise.all([
     google.status(db.settings),
     textQueue.loadQ(),
     queue.loadQ(),
     storage.getJson('relay').catch(() => null),
     storage.backend(),
     backups.list().catch(() => []),
+    salesiq.load().catch(() => salesiq.blank()),
   ]);
   // Derived from the status above rather than fetching it a second time.
   const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
@@ -420,6 +422,9 @@ app.get('/api/state', asyncRoute(async (req, res) => {
       lastSyncAt: db.calendlyLastSyncAt || null,
       error: db.calendlySyncError || '',
     },
+    // Where each person stands with the Sales IQ questionnaire, by address,
+    // so a candidate row or an interview can say so without the whole list.
+    salesiq: salesiq.summary(iq),
   };
 
   // The browser asks for this every 30 seconds and most of the time nothing
@@ -2022,7 +2027,7 @@ async function applyCalendlyEvent(req, db) {
 
   if (event === 'invitee.created') {
     const ev = p.scheduled_event || {};
-    await store.update((fresh) => {
+    const booked = await store.update((fresh) => {
       const fc = c && fresh.candidates.find((x) => x.id === c.id);
       if (fc) {
         learnEmail(fc, inviteeEmail);
@@ -2043,6 +2048,7 @@ async function applyCalendlyEvent(req, db) {
         fresh.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
       }
     });
+    await feedSalesiq(booked);
     await store.addEvent('booked', `${inviteeName} booked "${eventName}" — ${when}.`, c ? c.id : null, p.created_at || null);
     try {
       await notify.pushToPhone(db.settings, {
@@ -2055,7 +2061,7 @@ async function applyCalendlyEvent(req, db) {
     }
   } else if (event === 'invitee.canceled') {
     const evUri = (p.scheduled_event && p.scheduled_event.uri) || '';
-    await store.update((fresh) => {
+    const canceled = await store.update((fresh) => {
       const fc = c && fresh.candidates.find((x) => x.id === c.id);
       if (fc && fc.status === 'booked') {
         fc.status = (fc.replies || []).some((r) => !r.kind) ? 'replied' : 'emailed';
@@ -2065,6 +2071,7 @@ async function applyCalendlyEvent(req, db) {
         if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) i.status = 'canceled';
       }
     });
+    await feedSalesiq(canceled);
     await store.addEvent('canceled', `${inviteeName} canceled "${eventName}".`, c ? c.id : null);
     try {
       await notify.pushToPhone(db.settings, {
@@ -2162,7 +2169,7 @@ async function syncCalendly() {
     return { ok: false, error: err.message };
   }
   const announce = [];
-  await store.update((fresh) => {
+  const synced = await store.update((fresh) => {
     announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
     const list = [];
     for (const ev of result.interviews) {
@@ -2218,6 +2225,7 @@ async function syncCalendly() {
     fresh.calendlyLastSyncAt = new Date().toISOString();
     fresh.calendlySyncError = '';
   });
+  await feedSalesiq(synced);
   for (const a of announce) {
     const who = a.c.name || a.c.email;
     await store.addEvent(
@@ -2243,7 +2251,6 @@ app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
 // code out, answers only to a signed-in dashboard, and deliberately sits
 // outside that prefix.
 const SALESIQ_CODE_PREFIX = 'WPSIQ1.';
-const SALESIQ_MAX_BOOKINGS = 300;
 const SALESIQ_SYNC_EVERY_MS = 90 * 1000;
 
 // Everything Sales IQ needs to find this deploy and prove which team it is
@@ -2313,41 +2320,13 @@ app.delete('/api/salesiq-connection', asyncRoute(async (req, res) => {
   res.json(await storedSalesiqConnection(id));
 }));
 
-// A stable id for one person's booking of one event: the same booking is the
-// same row in Sales IQ however often it is fetched or re-synced, and the id
-// gives away nothing about the candidate record behind it.
-const salesiqKey = (i) => crypto.createHash('sha256')
-  .update(`${String(i.uri || '')}|${normEmail(i.inviteeEmail)}`)
-  .digest('hex')
-  .slice(0, 24);
-
+// Everyone who booked, from lib/salesiq.js — the same list, and the same
+// booking keys, as the built-in Sales IQ page folds into its candidates. The
+// pipeline candidate each booking was matched to stays behind: this feed has
+// never carried anybody's candidate id.
 app.get('/api/salesiq/bookings', asyncRoute(async (req, res) => {
   const db = await store.load();
-  const byId = new Map(db.candidates.map((c) => [c.id, c]));
-  const seen = new Set();
-  const bookings = [];
-  // Newest interview first, so the cap drops the oldest ones.
-  const list = (db.interviews || [])
-    .filter((i) => i && normEmail(i.inviteeEmail))
-    .sort((a, b) => String(b.start || '').localeCompare(String(a.start || '')));
-  for (const i of list) {
-    if (bookings.length >= SALESIQ_MAX_BOOKINGS) break;
-    const key = salesiqKey(i);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const c = i.candidateId ? byId.get(i.candidateId) : null;
-    const email = String(i.inviteeEmail).trim();
-    bookings.push({
-      key,
-      name: String(i.inviteeName || (c && c.name) || email),
-      email,
-      phone: String(i.inviteePhone || (c && c.phone) || ''),
-      interviewAt: i.start || null,
-      eventName: String(i.name || ''),
-      bookedAt: i.bookedAt || null,
-      status: i.status === 'active' ? 'active' : 'canceled',
-    });
-  }
+  const bookings = salesiq.bookingsFrom(db).map(({ crmId, ...b }) => b);
   res.json({
     ok: true,
     team: teamName(req.team),
@@ -2393,15 +2372,492 @@ async function salesiqSync() {
   return { ok: true, ran: true, syncedAt, ...result };
 }
 
-app.post('/api/salesiq/sync', asyncRoute(async (req, res) => {
-  const id = req.team.id;
+// One sync per team at a time, shared by everyone who asks while it runs —
+// the external Sales IQ app and the built-in Sales IQ page alike.
+function sharedSalesiqSync(id) {
   let running = salesiqSyncing.get(id);
   if (!running) {
     running = salesiqSync().finally(() => salesiqSyncing.delete(id));
     salesiqSyncing.set(id, running);
   }
-  res.json(await running);
+  return running;
+}
+
+app.post('/api/salesiq/sync', asyncRoute(async (req, res) => {
+  res.json(await sharedSalesiqSync(req.team.id));
 }));
+
+// ---------- Sales IQ, built in ----------
+// The questionnaire and its hiring dashboard, as part of this app. The
+// dashboard's routes sit under /api/iq/ behind the team sign-in like every
+// other page; the candidate's two routes sit under /api/assessment/, which is
+// open (see lib/auth.js) because the person answering is not signed in to
+// anything — each call proves which team and which candidate it is for with
+// the signed token in their link, and is refused without one.
+
+// New Calendly bookings into the team's Sales IQ list. Never allowed to fail
+// the thing that called it: a booking is recorded whether or not this works,
+// and the next look at the Sales IQ page folds it in anyway.
+async function feedSalesiq(db) {
+  try { return await salesiq.syncBookings(db); }
+  catch (err) { console.error('[salesiq] folding in bookings failed:', err && err.message); return []; }
+}
+
+const IQ_SEND_PER_REQUEST = 5;
+const REPORT_ID_RE = /^r[0-9a-f]{18}$/;
+
+async function iqState(req) {
+  const db = await store.load();
+  await feedSalesiq(db);
+  const [doc, secret] = await Promise.all([salesiq.load(), salesiq.ensureSecret()]);
+  const sending = await mailer.sendStatus(db.settings);
+  const base = google.baseUrl();
+  return {
+    ok: true,
+    company: salesiq.COMPANY,
+    teams: salesiq.TEAMS,
+    tiers: salesiq.tiers(),
+    hostTeam: teamName(req.team),
+    settings: doc.settings,
+    candidates: doc.candidates.map((c) => salesiq.publicCandidate(c, secret, base, req.team.id)),
+    reports: doc.reports.map(salesiq.publicReport),
+    calendly: {
+      syncEnabled: Boolean(db.settings.calendlyToken),
+      webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
+      lastSyncAt: db.calendlyLastSyncAt || null,
+      error: db.calendlySyncError || '',
+    },
+    mail: { ready: Boolean(sending.ready), from: sending.from || '', reason: sending.reason || '' },
+    previewUrl: '/assessment/?preview=1',
+  };
+}
+
+// Tagged like /api/state, so the page's 30-second look costs a 304 when
+// nothing has moved.
+app.get('/api/iq/state', asyncRoute(async (req, res) => {
+  const payload = await iqState(req);
+  const body = JSON.stringify(payload);
+  const etag = `W/"${crypto.createHash('sha1').update(`${tenant.current() || '-'}:iq:${body}`).digest('base64url')}"`;
+  res.set('ETag', etag);
+  res.set('Cache-Control', 'no-cache, private');
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  return res.type('application/json').send(body);
+}));
+
+function iqCandidateInput(body, { partial = false } = {}) {
+  const out = {};
+  for (const [k, max] of [['name', 120], ['email', 254], ['phone', 40]]) {
+    if (body[k] === undefined) { if (!partial) out[k] = ''; continue; }
+    out[k] = salesiq.str(body[k], max);
+  }
+  if (out.name !== undefined && out.name.length < 2) throw new Error('Please enter a name.');
+  if (out.email !== undefined && !salesiq.EMAIL_RE.test(out.email)) throw new Error('Please enter a valid email address.');
+  return out;
+}
+
+app.post('/api/iq/candidates', asyncRoute(async (req, res) => {
+  const input = iqCandidateInput(req.body || {});
+  const source = ['resume', 'manual'].includes(req.body && req.body.source) ? req.body.source : 'manual';
+  const cand = { id: salesiq.newCandidateId(), ...input, status: 'added', added: new Date().toISOString(), source };
+  await salesiq.update((doc) => { doc.candidates = [cand, ...doc.candidates.filter((c) => c.id !== cand.id)]; });
+  res.json({ ok: true, id: cand.id });
+}));
+
+// Only what the manager changed: a sync while the sheet was open (a booking
+// filling in the phone) must not be undone by the values it was opened with.
+app.patch('/api/iq/candidates/:id', asyncRoute(async (req, res) => {
+  const edits = iqCandidateInput(req.body || {}, { partial: true });
+  let found = false;
+  await salesiq.update((doc) => {
+    const c = doc.candidates.find((x) => x.id === req.params.id);
+    found = Boolean(c);
+    if (!c) return false;
+    Object.assign(c, edits);
+  });
+  if (!found) return res.status(404).json({ error: 'That candidate is no longer on the list.' });
+  res.json({ ok: true });
+}));
+
+// Off the list. Who they were is kept aside, so a link already in their inbox
+// still files their answers under their name rather than "unknown".
+app.delete('/api/iq/candidates/:id', asyncRoute(async (req, res) => {
+  await salesiq.update((doc) => {
+    const c = doc.candidates.find((x) => x.id === req.params.id);
+    if (!c) return false;
+    doc.candidates = doc.candidates.filter((x) => x.id !== c.id);
+    doc.removed = [{ id: c.id, name: c.name || '', email: c.email || '', phone: c.phone || '', crmId: c.crmId || null, at: new Date().toISOString() },
+      ...(doc.removed || []).filter((x) => x.id !== c.id)].slice(0, 2000);
+  });
+  res.json({ ok: true });
+}));
+
+app.put('/api/iq/settings', asyncRoute(async (req, res) => {
+  const b = req.body || {};
+  const managerEmail = salesiq.str(b.managerEmail, 254);
+  if (managerEmail && !salesiq.EMAIL_RE.test(managerEmail)) throw new Error('Please enter a valid results email.');
+  const team = salesiq.TEAMS.some((t) => t.name === b.team) ? b.team : '';
+  const doc = await salesiq.update((d) => {
+    if (d.settings.team === team && d.settings.managerEmail === managerEmail) return false;
+    d.settings = { team, managerEmail };
+  });
+  res.json({ ok: true, settings: doc.settings });
+}));
+
+app.delete('/api/iq/reports/:id', asyncRoute(async (req, res) => {
+  await salesiq.update((doc) => {
+    const before = doc.reports.length;
+    doc.reports = doc.reports.filter((r) => r.id !== req.params.id);
+    if (doc.reports.length === before) return false;
+  });
+  res.json({ ok: true });
+}));
+
+// Invites, each its own email with its own link, from the team's own mailbox.
+// A few per request so a long list cannot outrun the function's time limit;
+// the page asks again for the rest. Each person is claimed before their email
+// goes and marked as sent the moment it has, so neither a request cut off part
+// way nor two devices pressing Send at once can email anyone twice.
+// `onlyNew` is the send-to-everyone button: it sends to people still marked
+// Not sent and skips anyone another device has sent to since.
+const IQ_CLAIM_MS = 2 * 60 * 1000;
+async function sendIqInvites(ids, { onlyNew = false } = {}) {
+  const db = await store.load();
+  const [doc, secret] = await Promise.all([salesiq.load(), salesiq.ensureSecret()]);
+  if (!doc.settings.managerEmail) {
+    const e = new Error('Choose your team under Results delivery first — completed questionnaires are sent there.');
+    e.needsResults = true;
+    throw e;
+  }
+  const status = await mailer.sendStatus(db.settings);
+  if (!status.ready) return { ok: false, needsMail: true, reason: status.reason || '' };
+  const want = [...new Set((Array.isArray(ids) ? ids : []).map(String))];
+  const batch = want.slice(0, IQ_SEND_PER_REQUEST);
+  const rest = want.slice(IQ_SEND_PER_REQUEST);
+  const failed = [];
+  const skipped = [];
+  const claimAt = new Date().toISOString();
+  let claimed = [];
+  await salesiq.update((d) => {
+    claimed = [];
+    for (const id of batch) {
+      const c = d.candidates.find((x) => x.id === id);
+      if (!c || c.status === 'completed') continue;
+      if (onlyNew && (c.status || 'added') !== 'added') continue;
+      if (c.sendingAt && Date.now() - Date.parse(c.sendingAt) < IQ_CLAIM_MS) continue;
+      c.sendingAt = claimAt;
+      claimed.push(id);
+    }
+    if (!claimed.length) return false;
+  });
+  for (const id of batch) {
+    if (claimed.includes(id)) continue;
+    const c = doc.candidates.find((x) => x.id === id);
+    if (!c) failed.push({ id, error: 'No longer on the list.' });
+    else if (c.status === 'completed') failed.push({ id, error: 'Already completed the questionnaire.' });
+    else skipped.push(id);
+  }
+  const sent = [];
+  const base = google.baseUrl();
+  const teamId = tenant.currentOrThrow('a questionnaire link');
+  for (const id of claimed) {
+    const c = doc.candidates.find((x) => x.id === id);
+    const link = salesiq.linkFor(base, salesiq.tokenFor(secret, teamId, id));
+    const text = salesiq.inviteText(c, link);
+    let error = '';
+    try {
+      await mailer.sendEmail(db.settings, { to: c.email, subject: salesiq.inviteSubject(), text, html: salesiq.textToHtml(text) });
+    } catch (err) {
+      error = err.message || String(err);
+    }
+    const at = new Date().toISOString();
+    await salesiq.update((d) => {
+      const x = d.candidates.find((y) => y.id === id);
+      if (!x) return false;
+      delete x.sendingAt;
+      if (error) return;
+      if (x.status !== 'completed') x.status = 'invited';
+      x.invitedAt = at;
+      x.invitedVia = 'email';
+    });
+    if (error) failed.push({ id, error }); else sent.push(id);
+  }
+  return { ok: true, sent, failed, skipped, remaining: rest, from: status.from || '' };
+}
+
+app.post('/api/iq/invite', asyncRoute(async (req, res) => {
+  try {
+    const b = req.body || {};
+    res.json(await sendIqInvites(b.ids, { onlyNew: b.onlyNew === true }));
+  } catch (err) {
+    if (err.needsResults) return res.status(400).json({ error: err.message, needsResults: true });
+    throw err;
+  }
+}));
+
+// With no mailbox connected the page opens a ready-to-send draft on the
+// device instead, one person at a time, and marks them here as it does.
+app.post('/api/iq/mark-invited', asyncRoute(async (req, res) => {
+  const ids = new Set((Array.isArray((req.body || {}).ids) ? req.body.ids : []).map(String));
+  const at = new Date().toISOString();
+  await salesiq.update((doc) => {
+    let changed = false;
+    for (const c of doc.candidates) {
+      if (!ids.has(c.id) || c.status === 'completed') continue;
+      c.status = 'invited';
+      c.invitedAt = at;
+      c.invitedVia = 'draft';
+      changed = true;
+    }
+    if (!changed) return false;
+  });
+  res.json({ ok: true });
+}));
+
+// The same shared, throttled Calendly sync the external app uses, then the
+// bookings into the list.
+app.post('/api/iq/sync', asyncRoute(async (req, res) => {
+  const r = await sharedSalesiqSync(req.team.id);
+  const added = await feedSalesiq(await store.load());
+  res.json({ ...r, added: added.length });
+}));
+
+// A report link from the standalone Sales IQ app's results email.
+app.post('/api/iq/import-report', asyncRoute(async (req, res) => {
+  const p = salesiq.unseal((req.body || {}).code);
+  const scored = salesiq.score(p.answers);
+  const entry = {
+    id: p.id, name: p.name, email: p.email, phone: p.phone,
+    score: scored.score, tier: scored.tier.label, tierKey: scored.tier.key, categories: scored.categories,
+    durationSec: p.durationSec, completedAt: p.completedAt, answers: p.answers, source: 'link',
+  };
+  let official = null;
+  let filed = null;
+  await salesiq.update((doc) => {
+    const reports = doc.reports.map((r) => ({ ...r }));
+    official = salesiq.fileReport(reports, { ...entry });
+    doc.reports = reports.slice(0, 1000);
+    filed = doc.reports.find((r) => r.id === entry.id) || null;
+    const cand = p.email && doc.candidates.find((c) => salesiq.sameEmail(c.email, p.email));
+    if (cand) {
+      cand.status = 'completed';
+      cand.score = official.score;
+      cand.durationSec = official.durationSec;
+      cand.completedAt = cand.completedAt || official.completedAt;
+    }
+  });
+  res.json({ ok: true, report: filed ? salesiq.publicReport(filed) : null, official: official ? official.score : null, retake: Boolean(filed && filed.retake), name: p.name || p.email || 'Unidentified candidate', tier: scored.tier.label, score: scored.score });
+}));
+
+// "Send questionnaire" from a pipeline candidate: onto the Sales IQ list (or
+// matched to who is already there, by address) and sent.
+app.post('/api/iq/from-pipeline', asyncRoute(async (req, res) => {
+  const id = String((req.body || {}).candidateId || '');
+  const db = await store.load();
+  const pc = db.candidates.find((c) => c.id === id);
+  if (!pc) return res.status(404).json({ error: 'That candidate is no longer in your pipeline.' });
+  if (!salesiq.EMAIL_RE.test(String(pc.email || ''))) throw new Error(`${pc.name || 'This candidate'} has no email address to send the questionnaire to.`);
+  let rosterId = '';
+  let status = 'added';
+  await salesiq.update((doc) => {
+    let c = doc.candidates.find((x) => x.crmId === pc.id) || doc.candidates.find((x) => salesiq.sameEmail(x.email, pc.email));
+    if (!c) {
+      c = {
+        id: salesiq.newCandidateId(),
+        name: salesiq.str(pc.name || `${pc.firstName || ''} ${pc.lastName || ''}`, 120) || salesiq.str(pc.email, 254),
+        email: salesiq.str(pc.email, 254),
+        phone: salesiq.str(pc.phone, 40),
+        status: 'added',
+        added: new Date().toISOString(),
+        source: 'pipeline',
+        crmId: pc.id,
+      };
+      doc.candidates.unshift(c);
+    } else {
+      if (!c.crmId) c.crmId = pc.id;
+      if (!c.phone && pc.phone) c.phone = salesiq.str(pc.phone, 40);
+    }
+    rosterId = c.id;
+    status = c.status || 'added';
+  });
+  if (status === 'completed') {
+    return res.json({ ok: true, id: rosterId, status, already: true });
+  }
+  try {
+    const r = await sendIqInvites([rosterId]);
+    if (r.needsMail) {
+      const [doc, secret] = await Promise.all([salesiq.load(), salesiq.ensureSecret()]);
+      const c = doc.candidates.find((x) => x.id === rosterId);
+      const link = salesiq.linkFor(google.baseUrl(), salesiq.tokenFor(secret, req.team.id, rosterId));
+      return res.json({ ok: true, id: rosterId, needsMail: true, draft: { to: c.email, subject: salesiq.inviteSubject(), body: salesiq.inviteText(c, link) } });
+    }
+    if (r.failed.length) throw new Error(r.failed[0].error);
+    if (!r.sent.length) throw new Error('Their invitation is being sent from another device right now.');
+    res.json({ ok: true, id: rosterId, status: 'invited', sent: true });
+  } catch (err) {
+    if (err.needsResults) return res.status(400).json({ error: err.message, needsResults: true, id: rosterId });
+    throw err;
+  }
+}));
+
+// ---- the candidate's side: open, but only to a signed link ----
+// Which team and which candidate a link is for, proven by its signature.
+// Crawlers find open routes, so nothing is read for something that is not even
+// shaped like a token, and an unknown team costs one registry read.
+async function assessmentContext(tok) {
+  const parsed = salesiq.parseToken(tok);
+  if (!parsed) return null;
+  const team = await teams.byId(parsed.teamId);
+  if (!team) return null;
+  return tenant.run(team.id, async () => {
+    if (!salesiq.verifyToken(await salesiq.readSecret(), parsed)) return null;
+    const doc = await salesiq.load();
+    const cand = doc.candidates.find((c) => c.id === parsed.candId)
+      || (doc.removed || []).find((c) => c.id === parsed.candId)
+      || null;
+    return { team, doc, cand, candId: parsed.candId };
+  });
+}
+
+const LINK_REFUSED = 'This questionnaire link isn’t valid — it may have been copied incompletely. Please contact your recruiter for a new link.';
+
+app.get('/api/assessment/session', asyncRoute(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const base = { ok: true, company: salesiq.COMPANY, questions: salesiq.publicQuestions(), version: salesiq.QUESTIONS_VERSION };
+  if (req.query.preview === '1') return res.json({ ...base, preview: true, candidate: null, done: null });
+  const ctx = await assessmentContext(req.query.t);
+  if (!ctx || !ctx.cand) return res.status(404).json({ error: LINK_REFUSED, invalid: true });
+  const mine = ctx.doc.reports
+    .filter((r) => r.candidateId === ctx.candId)
+    .sort((a, b) => String(a.completedAt || '').localeCompare(String(b.completedAt || '')));
+  res.json({
+    ...base,
+    preview: false,
+    candidate: { name: ctx.cand.name || '', email: ctx.cand.email || '' },
+    done: mine.length ? { id: mine[0].id, completedAt: mine[0].completedAt } : null,
+  });
+}));
+
+// Scored here, filed, and passed on: onto the dashboard, into the candidate
+// updates, to the team's phone, and emailed to the results address. The
+// candidate is told only that it arrived.
+app.post('/api/assessment/submit', asyncRoute(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const b = req.body || {};
+  const ctx = await assessmentContext(b.t);
+  if (!ctx || !ctx.cand) return res.status(404).json({ error: LINK_REFUSED, invalid: true });
+  if (!salesiq.validAnswers(b.answers)) return res.status(400).json({ error: 'Some answers are missing — please go back and answer every question.' });
+  const reportId = REPORT_ID_RE.test(String(b.id || '')) ? String(b.id) : salesiq.newReportId();
+  const dur = Number(b.durationSec);
+  const durationSec = Number.isFinite(dur) && dur >= 1 && dur <= 7 * 24 * 3600 ? Math.round(dur) : null;
+  const scored = salesiq.score(b.answers);
+  const who = ctx.cand;
+
+  await tenant.run(ctx.team.id, async () => {
+    await salesiq.update((doc) => {
+      if (doc.reports.some((r) => r.id === reportId)) return false;   // already filed: a retry
+      const theirs = doc.reports.filter((r) => r.candidateId === ctx.candId || salesiq.sameEmail(r.email, who.email));
+      if (theirs.length >= salesiq.MAX_REPORTS_PER_PERSON) return false;
+      const entry = {
+        id: reportId,
+        candidateId: ctx.candId,
+        name: who.name || '',
+        email: who.email || '',
+        phone: who.phone || '',
+        score: scored.score,
+        tier: scored.tier.label,
+        tierKey: scored.tier.key,
+        categories: scored.categories,
+        durationSec,
+        completedAt: new Date().toISOString(),
+        answers: b.answers.slice(),
+      };
+      const reports = doc.reports.map((r) => ({ ...r }));
+      const official = salesiq.fileReport(reports, entry);
+      doc.reports = reports.slice(0, 1000);
+      const cand = doc.candidates.find((c) => c.id === ctx.candId);
+      if (cand) {
+        cand.status = 'completed';
+        cand.score = official.score;
+        cand.durationSec = official.durationSec;
+        cand.completedAt = official.completedAt;
+      }
+    });
+    await notifyIqCompletion(reportId, ctx);
+  });
+  res.json({ ok: true });
+}));
+
+// Everyone told about a finished questionnaire: the candidate updates feed,
+// the team's phone, and the results address. Claimed first, and marked done
+// after, so a retry of the same submission — the page retries until it hears
+// back — finishes whatever the first attempt did not get to, and two at once
+// never tell anyone twice.
+const IQ_NOTIFY_CLAIM_MS = 2 * 60 * 1000;
+async function notifyIqCompletion(reportId, ctx) {
+  let filed = null;
+  let official = null;
+  let crmId = ctx.cand.crmId || null;
+  let managerEmail = '';
+  await salesiq.update((doc) => {
+    filed = null;
+    const r = doc.reports.find((x) => x.id === reportId);
+    if (!r || r.notifiedAt) return false;
+    if (r.notifyClaimAt && Date.now() - Date.parse(r.notifyClaimAt) < IQ_NOTIFY_CLAIM_MS) return false;
+    r.notifyClaimAt = new Date().toISOString();
+    filed = { ...r };
+    official = doc.reports
+      .filter((x) => salesiq.sameEmail(x.email, r.email) || x.id === r.id)
+      .sort((a, b) => String(a.completedAt || '').localeCompare(String(b.completedAt || '')))[0] || r;
+    const cand = doc.candidates.find((c) => c.id === r.candidateId);
+    if (cand && cand.crmId) crmId = cand.crmId;
+    managerEmail = doc.settings.managerEmail;
+  });
+  if (!filed) return;
+
+  const db = await store.load();
+  const name = filed.name || filed.email || 'A candidate';
+  const pipeline = crmId && db.candidates.some((c) => c.id === crmId)
+    ? crmId
+    : ((db.candidates.find((c) => salesiq.sameEmail(c.email, filed.email) || (c.altEmails || []).some((e) => salesiq.sameEmail(e, filed.email))) || {}).id || null);
+  const message = filed.retake
+    ? `${name} took the Sales IQ questionnaire again — ${filed.score}/100. Their first score (${official.score}/100) stands.`
+    : `${name} completed the Sales IQ questionnaire — ${filed.score}/100, ${filed.tier}.`;
+  await store.addEvent('assessed', message, pipeline, filed.completedAt).catch((err) => console.error('[salesiq] feed:', err.message));
+  try {
+    await notify.pushToPhone(db.settings, {
+      title: `📋 ${name} completed the questionnaire`,
+      message: filed.retake ? `Retake: ${filed.score}/100 — their first score (${official.score}/100) stands.` : `${filed.score}/100 · ${filed.tier}`,
+      priority: 'default',
+      tags: 'clipboard',
+    });
+  } catch (err) {
+    await store.addEvent('error', `Phone notification failed: ${err.message}`).catch(() => {});
+  }
+  // Emailed to the results address from the team's own mailbox. The report
+  // is on the dashboard whether or not this goes; what happened is noted on
+  // it either way.
+  let emailedTo = '';
+  let emailError = '';
+  if (managerEmail) {
+    try {
+      const text = salesiq.resultsText(filed, { timeZone: db.settings.timeZone, reportLink: salesiq.reportLinkFor(google.baseUrl(), filed.id) });
+      await mailer.sendEmail(db.settings, { to: managerEmail, subject: salesiq.resultsSubject(filed), text, html: salesiq.textToHtml(text) });
+      emailedTo = managerEmail;
+    } catch (err) {
+      emailError = err.message || String(err);
+    }
+  } else {
+    emailError = 'No results email is set on the Sales IQ page.';
+  }
+  await salesiq.update((doc) => {
+    const r = doc.reports.find((x) => x.id === filed.id);
+    if (!r) return false;
+    r.notifiedAt = new Date().toISOString();
+    delete r.notifyClaimAt;
+    r.emailedTo = emailedTo;
+    r.emailError = emailError;
+  }).catch(() => {});
+}
 
 // ---------- Phone notification test ----------
 app.post('/api/test-notification', asyncRoute(async (_req, res) => {

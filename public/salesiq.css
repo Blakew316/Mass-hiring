@@ -1,0 +1,1983 @@
+/* Sales IQ — the Hiring Dashboard, as a page of this site.
+ *
+ * GENERATED from the Sales IQ app's css/styles.css by a one-off script, then
+ * committed; edit this file directly from now on. What was done to it:
+ *   - every rule is scoped under .siq, so nothing here reaches the rest of the
+ *     site and nothing of the site's reaches in (the few class names both used
+ *     are renamed here: q-btn, q-avatar, q-toast, …)
+ *   - custom properties are --q-*, keyframes q-*
+ *   - breakpoints about the dashboard's own width are container queries on
+ *     .siq — beside the sidebar it is narrower than the window
+ *   - every colour is a token, so the dark theme below is only token values.
+ * In the light theme every value is the original's: it looks exactly as the
+ * Sales IQ app did.
+ */
+
+/* =========================================================
+   Wholesale Payments · Sales Talent Questionnaire
+   Theme: light hues of the brand palette — navy text,
+   whisper-light blue/green tints, thin gradient accents.
+   Typography: Apple system stack (SF Pro on Apple devices).
+   One spacing, radius and type scale for both pages.
+   ========================================================= */
+.siq {
+  --q-surface: #fff;
+  --q-pill-hover-line: #c5dcee;
+  --q-input-focus: #fff;
+  --q-danger-3: #d93843;
+  --q-sq-blue: #0a7fc4;
+  --q-sq-green: #049a5e;
+  --q-seg-bg: rgba(118, 118, 128, 0.12);
+  --q-seg-on: #fff;
+  --q-row-hover: #f8fbfe;
+  --q-chevron: #c3c9d4;
+  --q-chip: #eef1f7;
+  --q-amber-fg: #8a6d1a;
+  --q-amber-bg: #f7efd8;
+  --q-red-fg: #a13c41;
+  --q-red-bg: #f9e3e4;
+  --q-late-bg: #fffbf3;
+  --q-danger: #c23b40;
+  --q-ring-hole: #fff;
+  --q-danger-2: #d13a40;
+  --q-placeholder: #a3aab8;
+  --q-chevron-bg: #e3e8f0;
+  --q-scrim: rgba(10, 18, 56, 0.3);
+  --q-sheet-bg: rgba(255, 255, 255, 0.98);
+  --q-sheet-line: rgba(255, 255, 255, 0.7);
+  --q-from-resume: #059a5d;
+  --q-send-item: #fbfcfe;
+  --q-toast-bg: rgba(255, 255, 255, 0.97);
+  --q-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+               "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+  --q-navy: #041060;
+  --q-navy-soft: #2b3576;
+  --q-blue: #0794e3;
+  --q-blue-ink: #0a6db3;
+  --q-green: #00c473;
+  --q-green-ink: #067a4b;
+  --q-green-light: #50e87a;
+  --q-amber-ink: #8a5a00;
+  --q-red-ink: #b4343a;
+  --q-gray: #a8a8b0;
+  --q-ink: #1c2340;
+  --q-ink-muted: #666d82;
+  --q-ink-faint: #99a0b1;
+  --q-bg: #f7fafd;
+  --q-tint-blue: #f2f8fd;
+  --q-tint-blue-2: #e7f3fc;
+  --q-tint-green: #f1fbf6;
+  --q-tint-green-2: #e3f8ee;
+  --q-tint-amber: #fdf6e7;
+  --q-tint-red: #fdf1f1;
+  --q-fill: #f3f6fa;
+  --q-fill-2: #eaeef4;
+  --q-card: #ffffff;
+  --q-line: #e6ecf3;
+  --q-line-strong: #d5deea;
+  --q-hairline: rgba(4, 16, 96, 0.08);
+  --q-sep: rgba(4, 16, 96, 0.075);
+  --q-shadow-sm: 0 1px 2px rgba(4, 16, 96, 0.05);
+  --q-shadow-card: 0 1px 2px rgba(4, 16, 96, 0.04), 0 8px 26px -16px rgba(4, 16, 96, 0.2);
+  --q-shadow-md: 0 10px 30px -12px rgba(4, 16, 96, 0.14);
+  --q-shadow-lg: 0 24px 60px -24px rgba(4, 16, 96, 0.22);
+  --q-grad: linear-gradient(90deg, var(--q-blue), var(--q-green));
+  --q-radius-xl: 22px;
+  --q-radius-lg: 18px;
+  --q-radius: 16px;
+  --q-radius-sm: 12px;
+  --q-gutter: clamp(16px, 4cqi, 32px);
+  --q-block-gap: 28px;
+  --q-row-x: 16px;
+  --q-row-y: 14px;
+  --q-avatar: 40px;
+  --q-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+:where(.siq) * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+.siq [hidden] {
+  display: none !important;
+}
+.siq a {
+  -webkit-tap-highlight-color: transparent;
+}
+.siq button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- the Preview pill ---------- */
+.siq .header-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 34px;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+  font: 600 0.8rem/1 var(--q-font-sans);
+  color: var(--q-navy);
+  text-decoration: none;
+  background: var(--q-surface);
+  border: 1px solid var(--q-line-strong);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.2s var(--q-ease);
+}
+.siq .header-pill:hover {
+  background: var(--q-tint-blue);
+  border-color: var(--q-pill-hover-line);
+}
+.siq .header-pill:active {
+  transform: scale(0.97);
+}
+
+/* ---------- stage ---------- */
+.siq .stage {
+  flex: 1;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4cqi, 2.75rem) calc(var(--q-gutter) + env(safe-area-inset-right, 0px)) clamp(1.5rem, 4cqi, 2.5rem) calc(var(--q-gutter) + env(safe-area-inset-left, 0px));
+  position: relative;
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+@keyframes q-slideInRight {
+  from { opacity: 0; transform: translateX(42px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes q-slideInLeft {
+  from { opacity: 0; transform: translateX(-42px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes q-fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- buttons ---------- */
+.siq .q-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  font: 600 0.94rem/1 var(--q-font-sans);
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 0 1.5rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.2s var(--q-ease), box-shadow 0.2s, background 0.2s, opacity 0.2s;
+}
+.siq .q-btn:active {
+  transform: scale(0.97);
+}
+.siq .q-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.siq .q-btn:focus-visible {
+  outline: 3px solid rgba(7, 148, 227, 0.35);
+  outline-offset: 2px;
+}
+.siq .q-btn-primary {
+  color: #fff;
+  background: linear-gradient(90deg, var(--q-blue), #06a9b8 55%, var(--q-green));
+  background-size: 150% 100%;
+  box-shadow: 0 8px 20px -8px rgba(7, 148, 227, 0.55);
+}
+.siq .q-btn-primary:not([disabled]):hover {
+  background-position: 100% 0;
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px -8px rgba(0, 196, 115, 0.5);
+}
+.siq .q-btn-ghost {
+  color: var(--q-navy);
+  background: var(--q-surface);
+  border-color: var(--q-line-strong);
+}
+.siq .q-btn-ghost:hover {
+  background: var(--q-tint-blue);
+}
+.siq .btn-wide,
+.siq .btn-block {
+  width: 100%;
+}
+.siq .btn-wide {
+  min-height: 52px;
+}
+.siq .btn-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1.5rem;
+}
+
+/* ---------- forms ---------- */
+.siq .field {
+  margin-bottom: 1.1rem;
+}
+.siq .field label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--q-navy);
+  margin-bottom: 0.4rem;
+}
+.siq .optional {
+  color: var(--q-ink-faint);
+  font-weight: 500;
+}
+.siq .field input {
+  width: 100%;
+  min-height: 48px;
+  font: 500 1rem/1.4 var(--q-font-sans);
+  color: var(--q-ink);
+  background: var(--q-fill);
+  border: 1.5px solid transparent;
+  border-radius: var(--q-radius-sm);
+  padding: 0.7rem 1rem;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.siq .field input:focus {
+  background: var(--q-input-focus);
+  border-color: var(--q-blue);
+  box-shadow: 0 0 0 4px rgba(7, 148, 227, 0.12);
+}
+.siq .field.invalid input {
+  border-color: #e5484d;
+  background: var(--q-input-focus);
+  box-shadow: 0 0 0 4px rgba(229, 72, 77, 0.1);
+}
+.siq .field-error {
+  display: none;
+  color: var(--q-danger-3);
+  font-size: 0.76rem;
+  font-weight: 500;
+  margin-top: 0.35rem;
+}
+.siq .field.invalid .field-error {
+  display: block;
+}
+
+/* =========================================================
+   Hiring dashboard
+   ========================================================= */
+.siq .stage-dash {
+  max-width: 1120px;
+}
+
+/* ---------- title ---------- */
+.siq .dash-head {
+  margin-bottom: 1.4rem;
+}
+.siq .dash-date {
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--q-ink-faint);
+  margin-bottom: 0.35rem;
+  min-height: 1em;
+}
+.siq .dash-title {
+  font-size: clamp(1.9rem, 5cqi, 2.4rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--q-navy);
+  line-height: 1.08;
+  margin-bottom: 0.4rem;
+}
+.siq .dash-subtitle {
+  font-size: 0.95rem;
+  color: var(--q-ink-muted);
+  line-height: 1.5;
+}
+
+/* ---------- stats ---------- */
+.siq .stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: var(--q-block-gap);
+}
+.siq .stat {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "icon num"
+    "label label";
+  align-items: center;
+  gap: 10px 10px;
+  text-align: left;
+  padding: 14px 16px;
+  font-family: var(--q-font-sans);
+  background: var(--q-card);
+  border: 1px solid var(--q-hairline);
+  border-radius: var(--q-radius);
+  box-shadow: var(--q-shadow-card);
+  cursor: pointer;
+  transition: transform 0.2s var(--q-ease), box-shadow 0.2s, border-color 0.2s;
+}
+.siq .stat:hover {
+  transform: translateY(-2px);
+  border-color: rgba(7, 148, 227, 0.22);
+}
+.siq .stat:active {
+  transform: scale(0.98);
+}
+.siq .stat:focus-visible {
+  outline: 3px solid rgba(7, 148, 227, 0.35);
+  outline-offset: 2px;
+}
+.siq .stat.is-on {
+  border-color: var(--q-blue);
+  box-shadow: 0 0 0 3px rgba(7, 148, 227, 0.14), var(--q-shadow-card);
+}
+.siq .stat-icon {
+  grid-area: icon;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+}
+.siq .stat-num {
+  grid-area: num;
+  justify-self: end;
+  font-size: 1.6rem;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--q-navy);
+  font-variant-numeric: tabular-nums;
+}
+.siq .q-stat-label {
+  grid-area: label;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--q-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- layout: two columns on wide screens ---------- */
+.siq .dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--q-block-gap);
+  align-items: start;
+}
+.siq .dash-main,
+.siq .dash-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-block-gap);
+  min-width: 0;
+}
+
+/* ---------- blocks ---------- */
+.siq .block {
+  min-width: 0;
+  scroll-margin-top: calc(84px + env(safe-area-inset-top, 0px));
+}
+.siq .block-title:focus {
+  outline: none;
+}
+.siq .block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  min-height: 32px;
+  margin: 0 4px 10px;
+}
+.siq .block-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.08rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--q-navy);
+  margin: 0;
+}
+.siq .block-foot {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--q-ink-muted);
+  margin: 10px 4px 0;
+}
+.siq .block-foot strong {
+  color: var(--q-navy-soft);
+  font-weight: 650;
+}
+.siq .count-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--q-navy-soft);
+  background: var(--q-fill-2);
+  font-variant-numeric: tabular-nums;
+}
+.siq .count-badge:empty {
+  display: none;
+}
+
+/* Panel — Apple inset grouped list */
+.siq .panel {
+  background: var(--q-card);
+  border: 1px solid var(--q-hairline);
+  border-radius: var(--q-radius-lg);
+  box-shadow: var(--q-shadow-card);
+  padding: 16px;
+  overflow: hidden;
+}
+.siq .panel-flush {
+  padding: 0;
+}
+
+/* Icon squircles */
+.siq .squircle {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+.siq .sq-blue {
+  color: var(--q-sq-blue);
+  background: linear-gradient(135deg, var(--q-tint-blue-2), var(--q-tint-blue));
+}
+.siq .sq-green {
+  color: var(--q-sq-green);
+  background: linear-gradient(135deg, var(--q-tint-green-2), var(--q-tint-green));
+}
+.siq .sq-gray {
+  color: var(--q-ink-muted);
+  background: var(--q-fill);
+}
+
+/* ---------- segmented control ---------- */
+.siq .segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--q-seg-bg);
+}
+.siq .seg {
+  flex: 1;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  font: 600 0.78rem/1 var(--q-font-sans);
+  color: var(--q-navy-soft);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s, box-shadow 0.2s, color 0.2s;
+}
+.siq .seg.is-on {
+  color: var(--q-navy);
+  background: var(--q-seg-on);
+  box-shadow: 0 1px 3px rgba(4, 16, 96, 0.12), 0 0 0 0.5px rgba(4, 16, 96, 0.06);
+}
+.siq .seg:focus-visible {
+  outline: 2px solid var(--q-blue);
+  outline-offset: 1px;
+}
+
+/* ---------- list rows ---------- */
+.siq .list {
+  display: block;
+}
+.siq .list-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: var(--q-row-y) var(--q-row-x);
+  transition: background 0.15s;
+}
+.siq .list.first-paint .list-row {
+  animation: q-fadeUp 0.35s var(--q-ease) both;
+}
+
+/* iOS inset separators */
+.siq .list-row + .list-row::before,
+.siq .report-detail + .list-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(var(--q-row-x) + var(--q-avatar) + 12px);
+  right: 0;
+  border-top: 1px solid var(--q-sep);
+}
+.siq .list-row.is-tappable:hover {
+  background: var(--q-row-hover);
+}
+.siq .row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 10px;
+}
+.siq .row-main:focus-visible {
+  outline: 2px solid var(--q-blue);
+  outline-offset: 4px;
+}
+.siq .q-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--q-avatar);
+  height: var(--q-avatar);
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--q-navy-soft);
+  background: linear-gradient(135deg, var(--q-tint-blue-2), var(--q-tint-green-2));
+  letter-spacing: 0.02em;
+}
+.siq .row-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.siq .row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.siq .row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.96rem;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--q-navy);
+}
+.siq .row-meta {
+  font-size: 0.8rem;
+  color: var(--q-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.siq .row-when {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--q-green-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.siq .row-when svg {
+  flex: none;
+}
+.siq .row-when.is-soon {
+  color: var(--q-blue-ink);
+}
+.siq .row-when.is-late {
+  color: var(--q-amber-ink);
+}
+.siq .row-when.is-past {
+  color: var(--q-ink-muted);
+}
+.siq .row-when.is-canceled {
+  color: var(--q-red-ink);
+}
+.siq .row-chevron {
+  flex: none;
+  color: var(--q-chevron);
+  display: grid;
+  place-items: center;
+}
+.siq .status-chip {
+  flex: none;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 0.24rem 0.55rem;
+  white-space: nowrap;
+}
+.siq .status-added {
+  color: var(--q-navy-soft);
+  background: var(--q-chip);
+}
+.siq .status-invited {
+  color: var(--q-blue-ink);
+  background: var(--q-tint-blue-2);
+}
+.siq .status-completed {
+  color: var(--q-green-ink);
+  background: var(--q-tint-green-2);
+}
+.siq .status-retake {
+  color: var(--q-amber-fg);
+  background: var(--q-amber-bg);
+}
+.siq .tier-elite {
+  color: var(--q-green-ink);
+  background: var(--q-tint-green-2);
+}
+.siq .tier-strong {
+  color: var(--q-blue-ink);
+  background: var(--q-tint-blue-2);
+}
+.siq .tier-develop {
+  color: var(--q-amber-fg);
+  background: var(--q-amber-bg);
+}
+.siq .tier-notready {
+  color: var(--q-red-fg);
+  background: var(--q-red-bg);
+}
+.siq .list-empty {
+  text-align: center;
+  padding: 2.25rem 1.5rem 2.4rem;
+}
+.siq .list-empty .squircle {
+  margin: 0 auto 0.8rem;
+}
+.siq .list-empty-title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--q-navy);
+  letter-spacing: -0.01em;
+}
+.siq .list-empty-sub {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--q-ink-muted);
+  max-width: 40ch;
+  margin: 0.3rem auto 0;
+}
+
+/* ---------- Message / Call / Email — plain, colorless ---------- */
+.siq .contact-trio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.siq .contact-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--q-navy-soft);
+  text-decoration: none;
+  border-radius: 999px;
+  transition: transform 0.18s var(--q-ease), color 0.18s;
+}
+.siq .contact-btn:not(.is-off):hover {
+  color: var(--q-navy);
+}
+.siq .contact-btn:not(.is-off):hover .contact-icon {
+  background: var(--q-fill);
+  border-color: var(--q-line-strong);
+}
+.siq .contact-btn:not(.is-off):active {
+  transform: scale(0.92);
+}
+.siq .contact-btn:focus-visible {
+  outline: 2px solid var(--q-blue);
+  outline-offset: 2px;
+}
+.siq .contact-btn.is-off {
+  cursor: default;
+  color: var(--q-ink-faint);
+  opacity: 0.45;
+}
+.siq .contact-icon {
+  --q-size: 36px;
+  display: grid;
+  place-items: center;
+  width: var(--q-size);
+  height: var(--q-size);
+  border-radius: 50%;
+  background: var(--q-surface);
+  border: 1px solid var(--q-line);
+  transition: background 0.18s, border-color 0.18s;
+}
+.siq .contact-icon svg {
+  width: 44%;
+  height: 44%;
+  display: block;
+}
+.siq .contact-btn.is-off .contact-icon {
+  background: transparent;
+}
+.siq .contact-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: inherit;
+}
+
+/* ---------- upcoming interviews ---------- */
+.siq .up-row .row-main {
+  gap: 12px;
+}
+.siq .up-time {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: var(--q-avatar);
+  min-height: 44px;
+  line-height: 1.05;
+}
+.siq .up-row {
+  --q-avatar: 64px;
+}
+.siq .up-time {
+  border-radius: 12px;
+  padding: 6px 4px;
+  background: var(--q-tint-blue);
+  color: var(--q-blue-ink);
+}
+.siq .up-clock {
+  font-size: 0.95rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.siq .up-ampm {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.siq .up-day {
+  font-size: 0.58rem;
+  font-weight: 700;
+  margin-top: 3px;
+  color: var(--q-ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.siq .up-row.is-now .up-time {
+  background: var(--q-tint-green-2);
+  color: var(--q-green-ink);
+}
+.siq .up-row.is-late .up-time {
+  background: var(--q-tint-amber);
+  color: var(--q-amber-ink);
+}
+.siq .up-row.is-late {
+  background: var(--q-late-bg);
+}
+.siq .up-row.is-late:hover {
+  background: var(--q-tint-amber);
+}
+.siq .up-row.is-late .up-rel {
+  color: var(--q-amber-ink);
+}
+.siq .up-row.is-now .up-rel,
+.siq .up-row.is-soon .up-rel {
+  color: var(--q-blue-ink);
+}
+.siq .up-rel {
+  font-weight: 650;
+}
+.siq .list-more {
+  padding: 12px var(--q-row-x) 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--q-ink-muted);
+  border-top: 1px solid var(--q-sep);
+}
+.siq .visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- send bar ---------- */
+.siq .sendbar {
+  margin-top: 14px;
+  text-align: center;
+}
+.siq .sendbar-note {
+  min-height: 1.1rem;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--q-ink-muted);
+}
+.siq .sendbar-note:empty {
+  min-height: 0;
+  margin: 0;
+}
+.siq .sendbar-note.ok {
+  color: var(--q-green-ink);
+  font-weight: 600;
+}
+.siq .sendbar-note.error {
+  color: var(--q-danger);
+  font-weight: 600;
+}
+
+/* ---------- reports ---------- */
+.siq .report-row {
+  --q-avatar: 46px;
+}
+.siq .report-row.expandable {
+  cursor: pointer;
+}
+.siq .report-row.expandable:hover {
+  background: var(--q-row-hover);
+}
+.siq .report-row.expandable:focus-visible {
+  outline: 2px solid var(--q-blue);
+  outline-offset: -2px;
+}
+.siq .report-row .row-chevron {
+  transition: transform 0.25s var(--q-ease);
+}
+.siq .report-row[aria-expanded="true"] .row-chevron {
+  transform: rotate(90deg);
+}
+.siq .report-row.q-flash {
+  animation: q-flash 1.6s var(--q-ease) 2;
+}
+@keyframes q-flash {
+  0%, 100% { background: transparent; }
+  50% { background: var(--q-tint-green); }
+}
+.siq .meta-icon {
+  vertical-align: -1px;
+  margin-right: 1px;
+}
+.siq .score-ring {
+  --q-p: 0;
+  --q-c: var(--q-blue);
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--q-avatar);
+  height: var(--q-avatar);
+  border-radius: 50%;
+  background: conic-gradient(var(--q-c) calc(var(--q-p) * 1%), var(--q-fill-2) 0);
+}
+.siq .score-ring::before {
+  content: "";
+  grid-area: 1 / 1;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  border-radius: 50%;
+  background: var(--q-ring-hole);
+}
+.siq .score-ring span {
+  grid-area: 1 / 1;
+  position: relative;
+  font-size: 0.98rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--q-navy);
+  font-variant-numeric: tabular-nums;
+}
+.siq .score-ring.tier-elite {
+  --q-c: #00b86b;
+  background: conic-gradient(var(--q-c) calc(var(--q-p) * 1%), var(--q-fill-2) 0);
+}
+.siq .score-ring.tier-strong {
+  --q-c: var(--q-blue);
+  background: conic-gradient(var(--q-c) calc(var(--q-p) * 1%), var(--q-fill-2) 0);
+}
+.siq .score-ring.tier-develop {
+  --q-c: #e3a21a;
+  background: conic-gradient(var(--q-c) calc(var(--q-p) * 1%), var(--q-fill-2) 0);
+}
+.siq .score-ring.tier-notready {
+  --q-c: #e5484d;
+  background: conic-gradient(var(--q-c) calc(var(--q-p) * 1%), var(--q-fill-2) 0);
+}
+.siq .report-detail {
+  padding: 2px var(--q-row-x) 16px calc(var(--q-row-x) + 46px + 12px);
+  display: grid;
+  gap: 0.75rem;
+  animation: q-fadeUp 0.25s var(--q-ease) both;
+}
+.siq .report-blurb {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--q-ink-muted);
+}
+.siq .bd-row {
+  display: grid;
+  gap: 0.3rem;
+}
+.siq .bd-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.siq .bd-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--q-ink);
+}
+.siq .bd-score {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--q-navy-soft);
+  font-variant-numeric: tabular-nums;
+}
+.siq .bd-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--q-tint-blue-2);
+  overflow: hidden;
+}
+.siq .bd-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--q-grad);
+}
+.siq .report-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+.siq .text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font: 600 0.8rem/1 var(--q-font-sans);
+  color: var(--q-blue-ink);
+  cursor: pointer;
+}
+.siq .text-btn:hover {
+  background: var(--q-tint-blue);
+}
+.siq .text-btn.is-danger {
+  color: var(--q-danger);
+}
+.siq .text-btn.is-danger:hover {
+  background: var(--q-tint-red);
+}
+
+/* ---------- add candidates ---------- */
+.siq .action-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.siq .tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  text-align: left;
+  padding: 16px;
+  font-family: var(--q-font-sans);
+  background: var(--q-card);
+  border: 1px solid var(--q-hairline);
+  border-radius: var(--q-radius);
+  box-shadow: var(--q-shadow-card);
+  cursor: pointer;
+  transition: transform 0.22s var(--q-ease), box-shadow 0.22s, background 0.22s, border-color 0.22s;
+}
+.siq .tile .squircle {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  margin-bottom: 8px;
+}
+.siq .tile:hover {
+  border-color: rgba(7, 148, 227, 0.25);
+  transform: translateY(-2px);
+}
+.siq .tile:active {
+  transform: scale(0.98);
+}
+.siq .tile:focus-visible {
+  outline: 3px solid rgba(7, 148, 227, 0.35);
+  outline-offset: 2px;
+}
+.siq .tile.dragover {
+  background: var(--q-tint-green);
+  border-color: var(--q-green);
+  transform: scale(1.015);
+}
+.siq .tile.busy {
+  pointer-events: none;
+  opacity: 0.65;
+}
+.siq .tile-title {
+  display: block;
+  font-size: 0.92rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--q-navy);
+}
+.siq .q-tile-sub {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--q-ink-muted);
+  line-height: 1.4;
+}
+.siq .panel-status {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+}
+.siq .panel-status:not(:empty) {
+  margin-top: 0.8rem;
+}
+.siq .panel-status.reading {
+  color: var(--q-blue);
+}
+.siq .panel-status.ok {
+  color: var(--q-green-ink);
+}
+.siq .panel-status.error {
+  color: var(--q-danger);
+}
+
+/* ---------- settings: bookings connection ---------- */
+.siq .settings-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+}
+.siq .settings-row .squircle {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+}
+.siq .settings-info {
+  min-width: 0;
+}
+.siq .q-settings-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--q-navy);
+  margin-bottom: 0.2rem;
+}
+.siq .settings-sub {
+  font-size: 0.8rem;
+  color: var(--q-ink-muted);
+  line-height: 1.5;
+}
+.siq .conn-chip {
+  display: inline-block;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--q-navy-soft);
+  background: var(--q-chip);
+}
+.siq .conn-chip.live {
+  color: var(--q-green-ink);
+  background: var(--q-tint-green-2);
+}
+.siq .conn-chip.live::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--q-green);
+  vertical-align: 1px;
+  box-shadow: 0 0 0 3px rgba(0, 196, 115, 0.18);
+}
+.siq .conn-chip.error {
+  color: var(--q-red-fg);
+  background: var(--q-red-bg);
+}
+.siq .conn-connect-row {
+  padding: 0 16px 16px;
+}
+.siq .menu-list {
+  border-top: 1px solid var(--q-sep);
+}
+.siq .menu-list:not(:has(> :not([hidden]))) {
+  display: none;
+}
+.siq .menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 0;
+  background: none;
+  font: 500 0.92rem/1.2 var(--q-font-sans);
+  color: var(--q-blue-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.siq .menu-item + .menu-item::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 0;
+  border-top: 1px solid var(--q-sep);
+}
+.siq .menu-item:hover {
+  background: var(--q-row-hover);
+}
+.siq .menu-item:active {
+  background: var(--q-fill);
+}
+.siq .menu-item:focus-visible {
+  outline: 2px solid var(--q-blue);
+  outline-offset: -2px;
+}
+.siq .menu-item[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+.siq .menu-item svg {
+  flex: none;
+  color: var(--q-ink-faint);
+}
+.siq .menu-item.is-danger {
+  color: var(--q-danger-2);
+}
+.siq .menu-item .menu-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  flex: none;
+}
+.siq .menu-item .menu-icon svg {
+  color: currentColor;
+}
+.siq .menu-item .menu-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ---------- settings: results delivery ---------- */
+.siq .form-row + .form-row {
+  margin-top: 14px;
+}
+.siq .form-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--q-navy-soft);
+  margin: 0 2px 6px;
+}
+.siq .form-foot {
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--q-ink-muted);
+  margin: 12px 2px 0;
+}
+.siq .settings-input-row {
+  position: relative;
+}
+.siq .apple-input {
+  width: 100%;
+  min-height: 46px;
+  font: 500 1rem/1.4 var(--q-font-sans);
+  color: var(--q-ink);
+  background: var(--q-fill);
+  border: 1.5px solid transparent;
+  border-radius: var(--q-radius-sm);
+  padding: 0.65rem 2.6rem 0.65rem 0.9rem;
+  outline: none;
+  text-overflow: ellipsis;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.siq .apple-input::placeholder {
+  color: var(--q-placeholder);
+}
+.siq .apple-input:focus {
+  background: var(--q-input-focus);
+  border-color: var(--q-blue);
+  box-shadow: 0 0 0 4px rgba(7, 148, 227, 0.12);
+}
+.siq .save-check {
+  position: absolute;
+  right: 0.9rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--q-green-ink);
+  background: var(--q-fill);
+  padding-left: 6px;
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+.siq .save-check.show {
+  opacity: 1;
+}
+.siq .select-row {
+  position: relative;
+}
+.siq .apple-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--q-navy);
+  padding-right: 2.8rem;
+}
+.siq .apple-select:invalid,
+.siq .apple-select option[value=""] {
+  color: var(--q-placeholder);
+}
+.siq .apple-select option {
+  color: var(--q-ink);
+  font-weight: 500;
+}
+.siq .select-chevron {
+  position: absolute;
+  right: 0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--q-navy-soft);
+  background: var(--q-chevron-bg);
+  pointer-events: none;
+  transition: background 0.2s, color 0.2s;
+}
+.siq .select-row:focus-within .select-chevron {
+  color: #fff;
+  background: linear-gradient(135deg, var(--q-blue), var(--q-green));
+}
+
+/* =========================================================
+   Apple-style sheets
+   ========================================================= */
+.siq .sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: var(--q-scrim);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: q-fadeIn 0.25s ease both;
+}
+@keyframes q-fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.siq .sheet {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  background: var(--q-sheet-bg);
+  border: 1px solid var(--q-sheet-line);
+  border-radius: var(--q-radius-xl);
+  box-shadow: var(--q-shadow-lg);
+  padding: 1.25rem 1.5rem 1.5rem;
+  animation: q-sheetIn 0.35s var(--q-ease) both;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@keyframes q-sheetIn {
+  from { opacity: 0; transform: translateY(26px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.siq .sheet-grabber {
+  display: none;
+  width: 38px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--q-line-strong);
+  margin: 0 auto 1rem;
+}
+.siq .sheet h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--q-navy);
+  letter-spacing: -0.015em;
+  margin-bottom: 0.3rem;
+}
+.siq .q-sheet-sub {
+  font-size: 0.86rem;
+  color: var(--q-ink-muted);
+  line-height: 1.5;
+  margin-bottom: 1.15rem;
+}
+.siq .q-sheet-sub .from-resume {
+  color: var(--q-from-resume);
+  font-weight: 600;
+}
+.siq .sheet-note {
+  font-size: 0.78rem;
+  color: var(--q-ink-muted);
+  margin-top: -0.35rem;
+}
+.siq .sheet-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--q-ink-muted);
+  background: var(--q-fill-2);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.siq .sheet-close:hover {
+  background: var(--q-line-strong);
+  color: var(--q-navy);
+}
+.siq .sheet-close:focus-visible {
+  outline: 2px solid var(--q-blue);
+  outline-offset: 2px;
+}
+.siq .code-input {
+  width: 100%;
+  resize: vertical;
+  font: 500 0.85rem/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--q-ink);
+  background: var(--q-fill);
+  border: 1.5px solid transparent;
+  border-radius: var(--q-radius-sm);
+  padding: 0.75rem 0.9rem;
+  outline: none;
+  word-break: break-all;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.siq .code-input:focus {
+  background: var(--q-input-focus);
+  border-color: var(--q-blue);
+  box-shadow: 0 0 0 4px rgba(7, 148, 227, 0.12);
+}
+.siq .field.invalid .code-input {
+  border-color: #e5484d;
+  background: var(--q-input-focus);
+}
+
+/* ---------- candidate card ---------- */
+.siq .card-sheet {
+  padding-top: 1.25rem;
+}
+.siq .cc-head {
+  text-align: center;
+  padding: 0 1.5rem;
+}
+.siq .cc-avatar {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  margin: 0.25rem auto 0.75rem;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--q-navy-soft);
+  background: linear-gradient(135deg, var(--q-tint-blue-2), var(--q-tint-green-2));
+  box-shadow: inset 0 0 0 1px rgba(4, 16, 96, 0.05);
+}
+.siq .cc-name {
+  font-size: 1.4rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--q-navy);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.siq .cc-chips {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.siq .cc-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--q-green-ink);
+  background: var(--q-tint-green);
+}
+.siq .cc-when.is-soon {
+  color: var(--q-blue-ink);
+  background: var(--q-tint-blue);
+}
+.siq .cc-when.is-late {
+  color: var(--q-amber-ink);
+  background: var(--q-tint-amber);
+}
+.siq .cc-when.is-past {
+  color: var(--q-ink-muted);
+  background: var(--q-fill);
+}
+.siq .cc-when.is-canceled {
+  color: var(--q-red-ink);
+  background: var(--q-tint-red);
+}
+.siq .contact-lg {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 1.25rem 0 1rem;
+}
+.siq .contact-lg .contact-btn {
+  padding: 12px 6px 10px;
+  border-radius: 14px;
+  background: var(--q-fill);
+}
+.siq .contact-lg .contact-btn:not(.is-off):hover {
+  background: var(--q-fill-2);
+}
+.siq .contact-lg .contact-btn:not(.is-off):hover .contact-icon {
+  background: var(--q-surface);
+}
+.siq .contact-lg .contact-icon {
+  --q-size: 44px;
+}
+.siq .cc-group {
+  border-radius: 14px;
+  background: var(--q-fill);
+  overflow: hidden;
+}
+.siq .cc-group + .cc-group {
+  margin-top: 12px;
+}
+.siq .cc-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 11px 14px;
+}
+.siq .cc-field + .cc-field::before,
+.siq .cc-group .menu-item + .menu-item::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 0;
+  border-top: 1px solid var(--q-hairline);
+}
+.siq .cc-field-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--q-ink-muted);
+}
+.siq .cc-field-value {
+  font-size: 0.95rem;
+  color: var(--q-ink);
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.siq .cc-field-value.is-empty {
+  color: var(--q-ink-faint);
+}
+.siq .cc-field-value .text-btn {
+  margin-left: -10px;
+}
+.siq .cc-group .menu-item {
+  padding: 0 14px;
+  min-height: 50px;
+}
+.siq .cc-group .menu-item:hover {
+  background: var(--q-fill-2);
+}
+.siq .cc-group .menu-item + .menu-item::before {
+  left: 56px;
+}
+
+/* Plain, like the Message / Call / Email buttons; only Remove is red. */
+.siq .menu-item .menu-icon {
+  color: var(--q-navy-soft);
+  background: var(--q-surface);
+  border: 1px solid var(--q-line);
+}
+.siq .menu-item.is-danger .menu-icon {
+  color: var(--q-danger-2);
+}
+.siq .menu-item .menu-note {
+  font-size: 0.74rem;
+  color: var(--q-ink-faint);
+  font-weight: 500;
+}
+.siq .cc-foot {
+  margin-top: 1.25rem;
+  display: flex;
+}
+.siq .cc-foot .q-btn {
+  flex: 1;
+}
+
+/* ---------- one-by-one send sheet ---------- */
+.siq .send-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-bottom: 0.4rem;
+}
+.siq .send-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  padding: 0.7rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid var(--q-hairline);
+  background: var(--q-send-item);
+  cursor: pointer;
+  font-family: var(--q-font-sans);
+  transition: background 0.18s, border-color 0.18s, transform 0.18s var(--q-ease);
+}
+.siq .send-item:hover {
+  background: var(--q-tint-blue);
+  border-color: rgba(7, 148, 227, 0.25);
+}
+.siq .send-item:active {
+  transform: scale(0.99);
+}
+.siq .send-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.siq .send-item-name {
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--q-navy);
+}
+.siq .send-item-email {
+  font-size: 0.78rem;
+  color: var(--q-ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.siq .send-item-state {
+  flex: none;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--q-blue);
+}
+.siq .send-item.sent .send-item-state {
+  color: var(--q-green-ink);
+}
+
+/* ---------- toast ---------- */
+.siq .q-toast {
+  position: fixed;
+  left: 1rem;
+  right: 1rem;
+  bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  width: fit-content;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 0.8rem 1.1rem;
+  border-radius: 14px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--q-navy);
+  background: var(--q-toast-bg);
+  border: 1px solid var(--q-line);
+  box-shadow: var(--q-shadow-lg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: q-sheetIn 0.3s var(--q-ease) both;
+  pointer-events: none;
+}
+.siq .q-toast.ok {
+  color: var(--q-green-ink);
+}
+.siq .q-toast.error {
+  color: var(--q-red-fg);
+}
+
+/* =========================================================
+   Responsive
+   ========================================================= */
+
+/* Tablets and phones: one column, most-used first. Setup that still
+   needs doing (no connection, no results email) moves to the top. */
+@container siq (max-width: 999px) {
+  .siq .stage-dash {
+    max-width: 760px;
+  }
+  .siq .dash-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .siq .dash-main,
+  .siq .dash-side {
+    display: contents;
+  }
+  .siq .block-upcoming {
+    order: 1;
+  }
+  .siq .block-add {
+    order: 2;
+  }
+  .siq .block-candidates {
+    order: 3;
+  }
+  .siq .block-reports {
+    order: 4;
+  }
+  .siq .block-bookings {
+    order: 5;
+  }
+  .siq .block-results {
+    order: 6;
+  }
+  .siq.needs-connection .block-bookings {
+    order: -2;
+  }
+  .siq.needs-results .block-results {
+    order: -1;
+  }
+}
+@container siq (max-width: 640px) {
+  .siq .stage {
+    --q-block-gap: 26px;
+    --q-row-x: 14px;
+  }
+  .siq .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .siq .stat {
+    padding: 12px 14px;
+  }
+  .siq .stat-num {
+    font-size: 1.45rem;
+  }
+  .siq .block-candidates .block-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .siq .block-candidates .segmented {
+    display: flex;
+    width: 100%;
+  }
+  .siq .cand-row,
+  .siq .up-row {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .siq .cand-row .contact-trio,
+  .siq .up-row .contact-trio {
+    flex-basis: 100%;
+    padding-left: calc(var(--q-avatar) + 12px);
+    gap: 10px;
+  }
+  .siq .contact-sm .contact-icon {
+    --q-size: 38px;
+  }
+  .siq .row-chevron {
+    display: none;
+  }
+  .siq .hide-sm {
+    display: none;
+  }
+}
+@container siq (max-width: 560px) {
+  .siq .dash-head {
+    margin-bottom: 1.1rem;
+  }
+  .siq .report-detail {
+    padding-left: var(--q-row-x);
+  }
+}
+@media (max-width: 560px) {
+  .siq .sheet-grabber {
+    display: block;
+  }
+  .siq .sheet-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .siq .sheet {
+    max-width: none;
+    border-radius: var(--q-radius-xl) var(--q-radius-xl) 0 0;
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+    max-height: calc(100dvh - 2.5rem - env(safe-area-inset-top, 0px));
+  }
+  .siq .sheet .btn-row .q-btn {
+    flex: 1;
+  }
+  .siq .q-toast {
+    bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+@container siq (max-width: 380px) {
+  .siq .action-tiles {
+    gap: 10px;
+  }
+  .siq .tile {
+    padding: 14px 12px;
+  }
+  .siq .seg {
+    padding: 0 8px;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .siq, .siq *, .siq *::before, .siq *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* =========================================================
+   As a page of this site
+   ========================================================= */
+
+/* The dashboard's own box — what the Sales IQ page's <body> was. The site's
+   body is 14px Inter with tightened letter-spacing; every size in here was
+   set against the browser's 16px and the system font, so those come back. */
+.siq {
+  font-family: var(--q-font-sans);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: normal;
+  letter-spacing: normal;
+  color: var(--q-ink);
+  text-align: left;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+/* Its width is what the layout answers to (see the @container rules above). */
+.siq-view { container: siq / inline-size; }
+
+/* Edge to edge in the page area: the dashboard brings its own gutters. */
+.main[data-view="salesiq"] { padding: 0; }
+
+/* The ambient wash behind it, fixed to the window as it was on its own page.
+   It sits in .main rather than in the view, so the view's entrance animation
+   cannot carry it along. */
+.siq-wash { display: none; }
+.main[data-view="salesiq"] > .siq-wash {
+  display: block;
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  left: 256px;                 /* the sidebar */
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 40rem at 85% -10%, var(--q-tint-blue-2) 0%, transparent 60%),
+    radial-gradient(55rem 38rem at -10% 110%, var(--q-tint-green-2) 0%, transparent 60%),
+    var(--q-bg);
+}
+.siq-wash .q-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.35;
+}
+.siq-wash .q-blob-blue  { width: 34rem; height: 34rem; top: -14rem; right: -10rem; background: var(--q-blob-blue); }
+.siq-wash .q-blob-green { width: 30rem; height: 30rem; bottom: -12rem; left: -10rem; background: var(--q-blob-green); }
+.siq { --q-blob-blue: #d9edfb; --q-blob-green: #dcf7ea; }
+
+/* The heading row: the Sales IQ title on the left; Preview and this site's
+   own header controls (offline, theme, replies) where Preview always was. */
+.siq .siq-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.siq .siq-head-text { min-width: 0; }
+.siq .siq-head-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+@container siq (max-width: 640px) {
+  /* As on the Sales IQ app's phone layout: the buttons on a row of their own
+     above the title, which keeps the whole width. */
+  .siq .siq-head { flex-direction: column; gap: 14px; }
+  .siq .siq-head-side { order: -1; align-self: stretch; justify-content: flex-end; }
+}
+
+/* Sheets and the toast cover the whole window, the tab bar included. */
+.siq-layer .sheet-backdrop { z-index: 70; }
+.siq-layer .q-toast { z-index: 75; }
+@media (max-width: 800px) {
+  .siq-layer .q-toast { bottom: calc(var(--tabbar-h, 50px) + var(--safe-b, 0px) + 12px); }
+  .main[data-view="salesiq"] {
+    padding: 0 0 calc(var(--tabbar-h) + var(--safe-b));
+  }
+  .main[data-view="salesiq"] > .siq-wash { left: 0; }
+}
+
+/* =========================================================
+   Dark — the same page, in the site's dark theme. Tokens only.
+   ========================================================= */
+:root[data-theme="dark"] .siq {
+  --q-navy: #eceef6;
+  --q-navy-soft: #b3bbce;
+  --q-blue: #1f9bea;
+  --q-blue-ink: #6cc0ff;
+  --q-green: #12c77c;
+  --q-green-ink: #4fd98a;
+  --q-green-light: #50e87a;
+  --q-amber-ink: #f0c65a;
+  --q-red-ink: #ff8b84;
+  --q-gray: #6e7486;
+
+  --q-ink: #e4e7ef;
+  --q-ink-muted: #9aa2b4;
+  --q-ink-faint: #717a8e;
+
+  --q-bg: #131519;
+  --q-tint-blue: #15263a;
+  --q-tint-blue-2: #1b3350;
+  --q-tint-green: #14301f;
+  --q-tint-green-2: #1b4028;
+  --q-tint-amber: #332913;
+  --q-tint-red: #35201f;
+  --q-fill: #22262f;
+  --q-fill-2: #2b303c;
+
+  --q-card: #1b1e26;
+  --q-line: #343a49;
+  --q-line-strong: #454c61;
+  --q-hairline: rgba(255, 255, 255, 0.07);
+  --q-sep: rgba(255, 255, 255, 0.07);
+
+  --q-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --q-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 26px -16px rgba(0, 0, 0, 0.60);
+  --q-shadow-md: 0 10px 30px -12px rgba(0, 0, 0, 0.55);
+  --q-shadow-lg: 0 24px 60px -24px rgba(0, 0, 0, 0.75);
+
+  --q-surface: #232733;
+  --q-input-focus: #1f232d;
+  --q-seg-on: #3a4052;
+  --q-ring-hole: #1b1e26;
+  --q-pill-hover-line: #3d4a60;
+  --q-row-hover: #20242e;
+  --q-chevron: #4a5163;
+  --q-chip: #2a2f3c;
+  --q-amber-fg: #f0c65a;
+  --q-amber-bg: #332913;
+  --q-red-fg: #ff8b84;
+  --q-red-bg: #3a2222;
+  --q-late-bg: #221d12;
+  --q-danger: #ff6b63;
+  --q-danger-2: #ff6b63;
+  --q-danger-3: #ff6b63;
+  --q-placeholder: #6f778a;
+  --q-chevron-bg: #2b303c;
+  --q-scrim: rgba(0, 0, 0, 0.55);
+  --q-sheet-bg: rgba(27, 30, 38, 0.98);
+  --q-sheet-line: rgba(255, 255, 255, 0.06);
+  --q-from-resume: #4fd98a;
+  --q-send-item: #20242e;
+  --q-toast-bg: rgba(44, 49, 63, 0.97);
+  --q-sq-blue: #6cc0ff;
+  --q-sq-green: #4fd98a;
+  --q-seg-bg: rgba(118, 118, 128, 0.24);
+  --q-blob-blue: #16304a;
+  --q-blob-green: #163a2a;
+  color-scheme: dark;
+}
+
+/* Where a report's results email went, beside Remove report. */
+.siq .report-sent {
+  margin-right: auto;
+  align-self: center;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--q-ink-muted);
+  overflow-wrap: anywhere;
+}
+
+/* The replies panel opens under the bell, which on this page sits at the
+   right edge of the dashboard's column rather than of the whole page area. */
+@media (min-width: 801px) {
+  .main[data-view="salesiq"] > .bell-panel {
+    top: 96px;
+    right: max(32px, calc((100% - 1120px) / 2 + 32px));
+  }
+}

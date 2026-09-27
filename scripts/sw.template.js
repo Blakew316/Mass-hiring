@@ -41,6 +41,8 @@ const PRECACHE = [
   '/app.js',
   '/icons.js',
   '/xlsx-lite.js',
+  '/salesiq.css',
+  '/salesiq.js',
   '/manifest.webmanifest',
   '/assets/logo.png',
   '/assets/logo-dark.png',
@@ -100,6 +102,7 @@ self.addEventListener('message', (event) => {
 // Never cached, never intercepted, never rebuilt. Rebuilding the request would
 // drop the session cookie and every call would come back 401.
 const LIVE = /^\/(api|auth|webhooks)(\/|$)/;
+const ASSESSMENT = /^\/assessment(\/|$)/;
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
@@ -110,6 +113,13 @@ self.addEventListener('fetch', (event) => {
 
   // (1) The five most important lines in the file.
   if (sameOrigin && LIVE.test(url.pathname)) return;
+
+  // (1b) The Sales IQ questionnaire is a page of its own, for candidates, with
+  //      its own small worker (public/assessment/sw.js). This one must never
+  //      answer for it — least of all with the dashboard's shell, which is
+  //      what the navigation rule below would otherwise hand a manager who
+  //      opens "Run assessment on this device".
+  if (sameOrigin && ASSESSMENT.test(url.pathname)) return;
 
   // (2) A page. Paint the shell straight from the cache — no network wait,
   //     which is what makes a cold launch feel instant — then fall back.

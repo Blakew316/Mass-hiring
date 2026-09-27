@@ -138,7 +138,8 @@
   const lastTeam = () => { try { return localStorage.getItem(LAST_TEAM_KEY) || ''; } catch { return ''; } };
 
   function setTeam(team) {
-    const changed = (currentTeam && currentTeam.id) !== (team && team.id);
+    const previous = currentTeam && currentTeam.id;
+    const changed = previous !== (team && team.id);
     currentTeam = team || null;
     if (currentTeam) { try { localStorage.setItem(LAST_TEAM_KEY, currentTeam.id); } catch {} }
     // Anything kept per team has to be re-read when the team changes, or the
@@ -150,6 +151,10 @@
     // card would offer the last team's code to copy and send Disconnect under
     // this team's session.
     if (changed) { try { clearSalesiq(); } catch { /* not declared yet: nothing shown */ } }
+    // And the Sales IQ page, whose list is this team's and nobody else's —
+    // once there was a team before this one: the first sign-in has nothing
+    // to clear away, and a report link it was opened with must survive it.
+    if (changed && previous && window.SalesIQ) window.SalesIQ.reset(Boolean(currentTeam));
     renderTeamChip();
   }
 
@@ -252,6 +257,9 @@
 
   function showLogin() {
     stateTag = '';
+    // The Sales IQ page stops looking, and puts away any sheet it had open:
+    // its sheets sit above everything, the sign-in screen included.
+    if (window.SalesIQ) window.SalesIQ.deactivate();
     $('#loginScreen').hidden = false;
     $('#newTeamForm').hidden = true;
     $('#loginForm').hidden = false;
@@ -426,6 +434,8 @@
     authRequired = Boolean(state.auth && state.auth.required);
     setTeam(state.team);
     renderAll();
+    // Back from a sign-in with Sales IQ on screen: it looks again.
+    if (currentView === 'salesiq' && window.SalesIQ) window.SalesIQ.activate();
     stateTag = tag;
     return true;
   }
@@ -528,6 +538,9 @@
     // Anything that fell behind while you were on another page is drawn now,
     // rather than on every poll for six pages at once.
     if (staleViews.has(view)) renderView(view);
+    // Sales IQ keeps its own list (public/salesiq.js), and looks for changes
+    // only while it is the page on screen.
+    if (window.SalesIQ) { if (view === 'salesiq') window.SalesIQ.activate(); else window.SalesIQ.deactivate(); }
     // The editors moved to Settings; Email and Texting are conversations only.
     if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls(); }
     if (view === 'texting') renderTexting();
@@ -696,6 +709,67 @@
     return (state.interviews || []).filter((i) => i.status === 'active' && new Date(i.start).getTime() >= since);
   }
 
+  // ---------------- Sales IQ, beside a candidate ----------------
+  // Where someone stands with the Sales IQ questionnaire, by their address.
+  // It comes with the state as a small map, the way texting priority does,
+  // so the candidate list stays the shape it has always been.
+  function iqOf(c) {
+    const by = (state && state.salesiq && state.salesiq.byEmail) || {};
+    return by[String((c && c.email) || '').trim().toLowerCase()] || null;
+  }
+  const IQ_TINT = { elite: 'tint-green', strong: 'tint-blue', develop: 'tint-amber', notready: 'tint-red' };
+  function iqBadge(s) {
+    if (!s) return '';
+    if (s.status === 'completed') {
+      return `<span class="badge iq-badge ${IQ_TINT[s.tierKey] || 'tint-blue'}" title="Sales IQ questionnaire: ${esc(s.tier || 'completed')}">Sales IQ ${typeof s.score === 'number' ? `${s.score}/100` : 'done'}</span>`;
+    }
+    if (s.status === 'invited') return '<span class="badge iq-badge tint-navy" title="Sent the Sales IQ questionnaire — waiting on their answers">Questionnaire sent</span>';
+    return '';
+  }
+  const iqLine = (c) => { const b = iqBadge(iqOf(c)); return b ? `<div class="cand-iq">${b}</div>` : ''; };
+  function iqActionLabel(c) {
+    const s = iqOf(c);
+    if (s && s.status === 'completed') return 'See their Sales IQ result';
+    if (s && s.status === 'invited') return 'Send Sales IQ questionnaire again';
+    return 'Send Sales IQ questionnaire';
+  }
+  // An interview's line in Interviews booked: where the booker stands, or
+  // the button that sends them the questionnaire.
+  function iqTile(email) {
+    const s = iqOf({ email });
+    if (!s) return '';
+    if (s.status === 'added') return `<button class="tile-link iq-send" data-iq="${esc(s.id)}">${icon('clipboard', 13)} Send questionnaire</button>`;
+    return iqBadge(s);
+  }
+  function iqNeedsResults(err) {
+    if (!err || !err.needsResults) return false;
+    toast(err.message, true);
+    closeModal($('#tileModal'));
+    show('salesiq');
+    setTimeout(() => { const el = $('#siq-team-select'); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); } }, 120);
+    return true;
+  }
+  async function sendIq(c) {
+    const name = c.name || c.email;
+    const s = iqOf(c);
+    if (s && s.status === 'completed') {
+      show('salesiq');
+      if (window.SalesIQ) window.SalesIQ.openCandidate(s.id);
+      return;
+    }
+    if (!c.email) { toast(`${name} has no email address to send the questionnaire to.`, true); return; }
+    if (s && s.status === 'invited' && !confirm(`${name} has already been sent the Sales IQ questionnaire. Send it again?`)) return;
+    try {
+      const r = await window.SalesIQ.sendFromPipeline(c);
+      if (r.already) toast(`${name} has already completed the Sales IQ questionnaire.`);
+      else if (r.needsMail) toast(`Your mail app has opened with ${String(name).split(' ')[0]}'s questionnaire invite — just hit send.`);
+      else toast(`Sales IQ questionnaire emailed to ${c.email}.`);
+      await refresh();
+    } catch (err) {
+      if (!iqNeedsResults(err)) oops(err);
+    }
+  }
+
   // ---------------- Stat tiles → detail views ----------------
   const fmtWhen = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   function candRow(c, metaHtml, sideHtml = '', extraHtml = '') {
@@ -782,6 +856,7 @@
             </div>
             ${nativeActs({ phone: (c && c.phone) || i.inviteePhone, email: i.inviteeEmail || (c && c.email), name: who }, { size: 32, cls: 'tile-native m-only' })}
             <div class="tile-side">
+              ${iqTile(i.inviteeEmail || (c && c.email))}
               ${i.joinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.joinUrl)}">Join call</a>` : ''}
               ${i.rescheduleUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.rescheduleUrl)}">Reschedule</a>` : ''}
               ${c ? statusSelect(c) : `<button class="tile-link link-btn" data-uri="${esc(i.uri)}" data-email="${esc(i.inviteeEmail || '')}" data-name="${esc(i.inviteeName || '')}">${icon('users', 13)} Link to candidate</button>`}
@@ -790,7 +865,7 @@
         });
       } else {
         rows = bookedCands.map((c) => candRow(c, `Interview ${c.bookedAt ? fmtWhen(c.bookedAt) : 'time not recorded'}${c.bookedEvent ? ` · ${esc(c.bookedEvent)}` : ''}${c.bookedAt ? startsSoon(c.bookedAt) : ''}`,
-          `${c.bookedJoinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(c.bookedJoinUrl)}">Join call</a>` : ''}${statusSelect(c)}`));
+          `${iqTile(c.email)}${c.bookedJoinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(c.bookedJoinUrl)}">Join call</a>` : ''}${statusSelect(c)}`));
       }
     }
     list.innerHTML = rows.length ? rows.join('') : '<li class="tile-empty">Nothing here yet.</li>';
@@ -804,7 +879,25 @@
   $('#tileActions').addEventListener('click', (e) => {
     if (e.target.closest('#tileFollowUpBtn')) { closeModal($('#tileModal')); openCompose(followUpDueIds(), null, { followUp: true }); }
   });
-  $('#tileList').addEventListener('click', (e) => {
+  $('#tileList').addEventListener('click', async (e) => {
+    const iq = e.target.closest('.iq-send');
+    if (iq) {
+      iq.disabled = true;
+      try {
+        const r = await window.SalesIQ.sendInvite(iq.dataset.iq);
+        const who = r.cand.name || r.cand.email;
+        toast(r.already === 'completed' ? `${who} has already completed the Sales IQ questionnaire.`
+          : r.already ? `${who} has already been sent the Sales IQ questionnaire.`
+          : r.draft ? `Your mail app has opened with ${String(r.cand.name || '').split(' ')[0] || 'their'}'s questionnaire invite — just hit send.`
+          : `Sales IQ questionnaire emailed to ${r.cand.email}.`);
+        await refresh();
+        openTile('booked');
+      } catch (err) {
+        iq.disabled = false;
+        if (!iqNeedsResults(err)) oops(err);
+      }
+      return;
+    }
     const fu = e.target.closest('.tile-followup');
     if (fu) { closeModal($('#tileModal')); openCompose([fu.dataset.id], null, { followUp: true }); return; }
     const btn = e.target.closest('.link-btn');
@@ -922,6 +1015,9 @@
     texted:         { ico: 'send',     cls: 'tint-blue',  ch: 'text',  tag: 'Text' },
     booked:         { ico: 'calendar', cls: 'tint-green', ch: 'both',  tag: '' },
     canceled:       { ico: 'xcircle',  cls: 'tint-red',   ch: 'both',  tag: '' },
+    // A finished Sales IQ questionnaire: the step after a booking, so it too
+    // shows whichever channel the feed is filtered to.
+    assessed:       { ico: 'clipboard', cls: 'tint-blue', ch: 'both',  tag: '' },
   };
 
   function readFeedChannel() {
@@ -960,7 +1056,7 @@
       ? 'No texting updates yet — reads, replies and opt-outs show up here.'
       : feedChannel === 'email'
         ? 'No email updates yet — opens and replies show up here.'
-        : 'No updates yet — opens, replies, texts, bookings and cancellations show up here.';
+        : 'No updates yet — opens, replies, texts, bookings, cancellations and finished questionnaires show up here.';
     $('#activityList').innerHTML = list.length
       ? list.map((ev) => {
           const k = FEED_KIND[ev.type];
@@ -1398,7 +1494,7 @@
         <td class="col-check" data-col="check"><input type="checkbox" class="row-check" ${selected.has(c.id) ? 'checked' : ''}></td>
         <td data-col="name"><div class="name-cell">
           <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
-          <div><div class="cand-name">${esc(displayName)}</div>
+          <div><div class="cand-name">${esc(displayName)}</div>${iqLine(c)}
           ${(c.role || c.company) ? `<div class="cand-line m-only">${esc([c.role, c.company].filter(Boolean).join(' · '))}</div>` : ''}
           ${c.pastRoles ? `<div class="cand-past m-only">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}
           ${pri ? `<div class="cand-sub why-text">${esc(pri.reason)}</div>`
@@ -1415,6 +1511,7 @@
           <button class="icon-btn act-edit" title="Edit details (name, phone, role…)">${icon('doc', 16)}</button>
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
           ${textPhoneOf(c) ? `<button class="icon-btn act-text" title="Send a text">${icon('bubble', 16)}</button>` : ''}
+          ${c.email ? `<button class="icon-btn act-iq" title="${esc(iqActionLabel(c))}">${icon('clipboard', 16)}</button>` : ''}
           ${c.status === 'emailed' ? `<button class="icon-btn act-followup" title="Follow up (reply in the same conversation)">${icon('reply', 16)}</button>` : ''}
           <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
         </div></td>
@@ -1474,7 +1571,7 @@
     // The Text column is the fastest way in for the thing people actually
     // want: putting a number on someone who has none.
     if (e.target.closest('.add-number')) { openCandidate(cand, { focus: 'phone' }); return; }
-    const act = ['act-edit', 'act-email', 'act-text', 'act-followup', 'act-delete'].find((a) => e.target.closest(`.${a}`));
+    const act = ['act-edit', 'act-email', 'act-text', 'act-followup', 'act-iq', 'act-delete'].find((a) => e.target.closest(`.${a}`));
     if (act) candidateAction(act, cand);
   });
 
@@ -1488,6 +1585,7 @@
     else if (act === 'act-email') openCompose([id]);
     else if (act === 'act-text') openTextCompose([id]);
     else if (act === 'act-followup') openCompose([id], null, { followUp: true });
+    else if (act === 'act-iq') sendIq(cand);
     else if (act === 'act-delete') {
       if (confirm(`Remove ${cand.name || cand.email} from the pipeline?`)) {
         api(`/api/candidates/${id}`, { method: 'DELETE' })
@@ -1507,6 +1605,7 @@
     ['act-email', 'Send outreach email', 'mail'],
     ['act-text', 'Send text from the Mac', 'bubble'],
     ['act-followup', 'Follow up', 'reply'],
+    ['act-iq', 'Send Sales IQ questionnaire', 'clipboard'],
     ['act-edit', 'Edit details', 'doc'],
     ['act-delete', 'Remove from list', 'trash'],
   ];
@@ -1521,7 +1620,7 @@
       .map((t) => `<span class="nowrap">${esc(t)}</span>`).join(' · ');
     $('#actionSheetButtons').innerHTML = SHEET_ACTS
       .filter(([cls]) => tr.querySelector(`.row-actions .${cls}`))
-      .map(([cls, label, ico]) => `<button type="button" class="sheet-btn${cls === 'act-delete' ? ' is-danger' : ''}" data-act="${cls}">${icon(ico, 18)}<span>${label}</span></button>`)
+      .map(([cls, label, ico]) => `<button type="button" class="sheet-btn${cls === 'act-delete' ? ' is-danger' : ''}" data-act="${cls}">${icon(ico, 18)}<span>${cls === 'act-iq' ? esc(iqActionLabel(c)) : label}</span></button>`)
       .join('');
     openModal('#actionSheet');
   }
@@ -4555,6 +4654,7 @@
     if (state.queue && state.queue.active) return true;
     if (state.texting && state.texting.queue && state.texting.queue.active) return true;
     if ($('.modal-backdrop:not([hidden])')) return true;
+    if (window.SalesIQ && window.SalesIQ.busy()) return true;
     if (templateDirty || followUpDirty || settingsDirty || textTemplateDirty) return true;
     const el = document.activeElement;
     if (el && /^(INPUT|TEXTAREA)$/.test(el.tagName) && el.value) return true;

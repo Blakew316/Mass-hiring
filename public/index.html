@@ -90,6 +90,9 @@
 <!-- Everything in here is inside a media query, so on a desktop it changes
      nothing. It loads second so its phone rules win on equal specificity. -->
 <link rel="stylesheet" href="/mobile.css">
+<!-- The Sales IQ page. Everything in it is scoped under .siq, so it can load
+     last without reaching anything else on the site. -->
+<link rel="stylesheet" href="/salesiq.css">
 <script>
 /* Runs before the first paint, so a dark-mode load never flashes white on its
    way there. The remembered choice wins; with none, follow the OS. */
@@ -131,6 +134,9 @@
       <button class="nav-item" data-view="texting" data-short="Texts">
         <span class="nav-ico" data-icon="bubble" data-size="17"></span> <span class="nav-label">Texting</span>
       </button>
+      <button class="nav-item" data-view="salesiq" data-short="Sales IQ">
+        <span class="nav-ico" data-icon="clipboard" data-size="17"></span> <span class="nav-label">Sales IQ</span>
+      </button>
       <button class="nav-item" data-view="settings" data-short="Settings">
         <span class="nav-ico" data-icon="gear" data-size="17"></span> <span class="nav-label">Settings</span>
       </button>
@@ -166,6 +172,8 @@
       <div class="bell-body" id="bellBody"></div>
     </div>
     <div class="notices" id="notices"></div>
+    <!-- The Sales IQ page's background: fixed behind it, shown only there. -->
+    <div class="siq siq-wash" aria-hidden="true"><div class="q-blob q-blob-blue"></div><div class="q-blob q-blob-green"></div></div>
 
     <!-- ===== Dashboard ===== -->
     <section class="view active" id="view-dashboard">
@@ -220,7 +228,7 @@
             <h2>Candidate updates</h2>
             <div class="feed-filters" id="feedFilters"></div>
           </div>
-          <ul class="activity" id="activityList"><li class="empty-line">No updates yet — opens, replies, texts, bookings and cancellations show up here.</li></ul>
+          <ul class="activity" id="activityList"><li class="empty-line">No updates yet — opens, replies, texts, bookings, cancellations and finished questionnaires show up here.</li></ul>
         </div>
       </div>
 
@@ -598,6 +606,208 @@
     </section>
 
     <!-- ===== Settings ===== -->
+    <!-- ===== Sales IQ =====
+         The Sales IQ hiring dashboard, as it looked on its own site — its
+         markup, its classes, its stylesheet (/salesiq.css, all under .siq) —
+         with its data kept here, on this team, instead of in one browser. -->
+    <section class="view" id="view-salesiq">
+      <div class="siq siq-view" id="siq">
+        <div class="stage stage-dash">
+
+          <div class="dash-head siq-head">
+            <div class="siq-head-text">
+              <p class="dash-date" id="siq-dash-date"></p>
+              <h1 class="dash-title">Hiring Dashboard</h1>
+              <p class="dash-subtitle" id="siq-dash-subtitle">Interviews, questionnaires and results in one place.</p>
+            </div>
+            <div class="siq-head-side">
+              <a class="header-pill" id="siq-btn-preview" href="/assessment/?preview=1" target="_blank" rel="noopener" title="Open the assessment as a candidate sees it — nothing is recorded">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                <span>Preview<span class="hide-sm"> assessment</span></span>
+              </a>
+              <div class="head-chrome"></div>
+            </div>
+          </div>
+
+          <div class="stats" id="siq-stats">
+            <button type="button" class="stat" data-stat="upcoming" aria-label="Upcoming interviews">
+              <span class="stat-icon sq-green">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              </span>
+              <span class="stat-num" id="siq-stat-upcoming">0</span>
+              <span class="q-stat-label">Upcoming interviews</span>
+            </button>
+            <button type="button" class="stat" data-stat="added" aria-pressed="false" aria-label="Candidates not sent the questionnaire">
+              <span class="stat-icon sq-gray">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              </span>
+              <span class="stat-num" id="siq-stat-added">0</span>
+              <span class="q-stat-label">Not sent</span>
+            </button>
+            <button type="button" class="stat" data-stat="invited" aria-pressed="false" aria-label="Candidates sent the questionnaire, awaiting results">
+              <span class="stat-icon sq-blue">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </span>
+              <span class="stat-num" id="siq-stat-invited">0</span>
+              <span class="q-stat-label">Awaiting results</span>
+            </button>
+            <button type="button" class="stat" data-stat="completed" aria-pressed="false" aria-label="Candidates who completed the questionnaire">
+              <span class="stat-icon sq-green">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span class="stat-num" id="siq-stat-completed">0</span>
+              <span class="q-stat-label">Completed</span>
+            </button>
+          </div>
+
+          <div class="dash-grid">
+            <div class="dash-main">
+
+              <!-- Upcoming interviews: reach a candidate who isn't on yet -->
+              <section class="block block-upcoming" id="siq-block-upcoming" hidden aria-labelledby="siq-upcoming-title">
+                <div class="block-head">
+                  <h2 class="block-title" id="siq-upcoming-title">Upcoming interviews <span class="count-badge" id="siq-upcoming-count"></span></h2>
+                </div>
+                <div class="panel panel-flush">
+                  <div class="list" id="siq-upcoming-list"></div>
+                </div>
+                <p class="block-foot">Candidate not on yet? Tap <strong>Message</strong>, <strong>Call</strong> or <strong>Email</strong> &mdash; it opens on your phone, ready to send.</p>
+              </section>
+
+              <section class="block block-candidates" id="siq-block-candidates" aria-labelledby="siq-cand-title">
+                <div class="block-head">
+                  <h2 class="block-title" id="siq-cand-title" tabindex="-1">Candidates <span class="count-badge" id="siq-cand-count" hidden></span></h2>
+                  <div class="segmented" id="siq-cand-filter" role="group" aria-label="Show candidates">
+                    <button type="button" class="seg is-on" data-filter="all" aria-pressed="true">All</button>
+                    <button type="button" class="seg" data-filter="added" aria-pressed="false">Not sent</button>
+                    <button type="button" class="seg" data-filter="invited" aria-pressed="false">Sent</button>
+                    <button type="button" class="seg" data-filter="completed" aria-pressed="false">Done</button>
+                  </div>
+                </div>
+                <div class="panel panel-flush">
+                  <div class="list" id="siq-roster-list"></div>
+                  <div class="list-empty" id="siq-roster-empty">
+                    <div class="squircle sq-gray">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="16" y1="11" x2="22" y2="11"/></svg>
+                    </div>
+                    <p class="list-empty-title">No candidates yet</p>
+                    <p class="list-empty-sub">Upload a résumé or add a new hire &mdash; interview bookings appear here on their own.</p>
+                  </div>
+                </div>
+                <div class="sendbar" id="siq-sendbar" hidden>
+                  <button class="q-btn q-btn-primary btn-wide" id="siq-btn-send-all">
+                    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    <span id="siq-btn-send-all-label">Send questionnaire</span>
+                  </button>
+                  <p class="sendbar-note" id="siq-sendbar-note"></p>
+                </div>
+              </section>
+
+              <section class="block block-reports" id="siq-block-reports" aria-labelledby="siq-report-title">
+                <div class="block-head">
+                  <h2 class="block-title" id="siq-report-title">Reports <span class="count-badge" id="siq-report-count" hidden></span></h2>
+                </div>
+                <div class="panel panel-flush">
+                  <div class="list" id="siq-report-list"></div>
+                  <div class="list-empty" id="siq-report-empty">
+                    <div class="squircle sq-gray">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+                    </div>
+                    <p class="list-empty-title">No reports yet</p>
+                    <p class="list-empty-sub">When a new hire completes the questionnaire, their score and time appear here &mdash; and in your email.</p>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <div class="dash-side">
+              <section class="block block-add" id="siq-block-add" aria-labelledby="siq-add-title">
+                <div class="block-head">
+                  <h2 class="block-title" id="siq-add-title">Add candidates</h2>
+                </div>
+                <div class="action-tiles">
+                  <button class="tile" id="siq-tile-upload" aria-label="Upload a resume PDF — name, email and phone are read automatically">
+                    <span class="squircle sq-blue">
+                      <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg>
+                    </span>
+                    <span class="tile-title">Upload Résumé</span>
+                    <span class="q-tile-sub">PDF details fill in automatically</span>
+                  </button>
+                  <button class="tile" id="siq-tile-add" aria-label="Add a new hire manually">
+                    <span class="squircle sq-green">
+                      <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </span>
+                    <span class="tile-title">Add Manually</span>
+                    <span class="q-tile-sub">Name, email &amp; phone</span>
+                  </button>
+                </div>
+                <p class="panel-status" id="siq-upload-status" role="status"></p>
+                <input type="file" id="siq-resume-input" accept="application/pdf,.pdf" hidden />
+              </section>
+
+              <section class="block block-bookings" id="siq-block-bookings" aria-labelledby="siq-bookings-title">
+                <div class="block-head">
+                  <h2 class="block-title" id="siq-bookings-title">Interview bookings</h2>
+                </div>
+                <div class="panel panel-flush">
+                  <div class="settings-row">
+                    <span class="squircle sq-green">
+                      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                    </span>
+                    <div class="settings-info">
+                      <p class="q-settings-title">Calendly <span class="conn-chip" id="siq-conn-chip">Not connected</span></p>
+                      <p class="settings-sub" id="siq-conn-sub">Connect Calendly in Settings and everyone who books an interview is added here automatically &mdash; you choose when to send them the questionnaire.</p>
+                    </div>
+                  </div>
+                  <div class="conn-connect-row">
+                    <button class="q-btn q-btn-primary btn-block" id="siq-conn-connect">Connect Calendly</button>
+                  </div>
+                  <div class="menu-list conn-menu">
+                    <button type="button" class="menu-item" id="siq-conn-sync" hidden>
+                      <span>Sync now</span>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"/></svg>
+                    </button>
+                    <button type="button" class="menu-item" id="siq-conn-settings" hidden title="Your Calendly link and token, in Settings">
+                      <span>Calendly settings</span>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="block block-results" id="siq-block-results" aria-labelledby="siq-results-title">
+                <div class="block-head">
+                  <h2 class="block-title" id="siq-results-title">Results delivery</h2>
+                </div>
+                <div class="panel">
+                  <div class="form-row">
+                    <label for="siq-team-select" class="form-label">Your team</label>
+                    <div class="select-row">
+                      <select id="siq-team-select" class="apple-input apple-select" required>
+                        <option value="" disabled selected>Choose your team&hellip;</option>
+                      </select>
+                      <span class="select-chevron" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 9 12 4 17 9"/><polyline points="7 15 12 20 17 15"/></svg>
+                      </span>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <label for="siq-manager-email" class="form-label">Results email</label>
+                    <div class="settings-input-row">
+                      <input type="email" id="siq-manager-email" class="apple-input" placeholder="manager@wholesalepayments.com" autocomplete="email" data-no-dirty />
+                      <span class="save-check" id="siq-manager-email-check" aria-live="polite"></span>
+                    </div>
+                  </div>
+                  <p class="form-foot">Every completed assessment is scored and emailed here. Candidates never see their results.</p>
+                  <p class="form-foot" id="siq-mail-note" hidden></p>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="view dense" id="view-settings">
       <header class="page-head">
         <div>
@@ -713,7 +923,7 @@
             <input type="password" id="setSmtpPass" class="input" placeholder="16-character app password">
           </div>
 
-          <div class="card">
+          <div class="card" id="calendlyCard">
             <div class="card-head"><h2><span class="card-ico tone-navy" data-icon="calendar" data-size="15"></span>Calendly</h2></div>
             <label class="label">Your Calendly booking link (added to every email)</label>
             <input type="text" id="setCalendlyUrl" class="input" placeholder="https://calendly.com/you/interview">
@@ -730,7 +940,7 @@
               <h2><span class="card-ico tone-green" data-icon="users" data-size="15"></span>Sales IQ</h2>
               <span class="badge" id="salesiqChip">checking…</span>
             </div>
-            <div class="hint">Sends everyone who books an interview on your Calendly to the Sales IQ hiring dashboard — name, email, phone and interview time, nothing else.</div>
+            <div class="hint">Sales IQ is built in — it’s the <button type="button" class="btn-link" data-goto="salesiq">Sales IQ</button> page, and needs nothing here. This code is only for the separate Sales IQ app: it sends that app everyone who books an interview on your Calendly — name, email, phone and interview time, nothing else.</div>
             <label class="label" for="salesiqCodeInput">Connection code</label>
             <div class="field-row">
               <input type="text" id="salesiqCodeInput" class="input" data-no-dirty readonly autocomplete="off" spellcheck="false" placeholder="No code yet — generate one">
@@ -1178,6 +1388,66 @@
 </div>
 
 <div class="toast-wrap" id="toasts"></div>
+<!-- ================= Sales IQ: sheets and the toast =================
+     Outside the page area, as they were outside the Sales IQ page's content:
+     they cover the whole window, the tab bar included. -->
+<div class="siq siq-layer" id="siq-layer">
+  <!-- ============ CANDIDATE CARD ============ -->
+  <div class="sheet-backdrop" id="siq-card-backdrop" hidden>
+    <div class="sheet card-sheet" role="dialog" aria-modal="true" aria-labelledby="siq-card-name">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <button type="button" class="sheet-close" id="siq-card-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </button>
+      <div id="siq-card-body"></div>
+    </div>
+  </div>
+
+  <!-- ============ ADD / EDIT CANDIDATE SHEET ============ -->
+  <div class="sheet-backdrop" id="siq-sheet-backdrop" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="siq-sheet-title">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <h3 id="siq-sheet-title">New hire</h3>
+      <p class="q-sheet-sub" id="siq-sheet-sub">Enter the candidate's contact details.</p>
+      <form id="siq-sheet-form" novalidate>
+        <div class="field">
+          <label for="siq-sheet-name">Full name</label>
+          <input type="text" id="siq-sheet-name" autocomplete="off" placeholder="e.g. Jordan Rivers" required />
+          <small class="field-error" id="siq-sheet-err-name">Please enter a name.</small>
+        </div>
+        <div class="field">
+          <label for="siq-sheet-email">Email address</label>
+          <input type="email" id="siq-sheet-email" autocomplete="off" placeholder="e.g. jordan@email.com" required />
+          <small class="field-error" id="siq-sheet-err-email">Please enter a valid email address.</small>
+        </div>
+        <div class="field">
+          <label for="siq-sheet-phone">Phone number <span class="optional">(for Message &amp; Call)</span></label>
+          <input type="tel" id="siq-sheet-phone" autocomplete="off" placeholder="e.g. (806) 555-0142" />
+        </div>
+        <div class="btn-row">
+          <button type="button" class="q-btn q-btn-ghost" id="siq-sheet-cancel">Cancel</button>
+          <button type="submit" class="q-btn q-btn-primary" id="siq-sheet-save">Save candidate</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ ONE-BY-ONE SEND SHEET (no mailbox connected) ============ -->
+  <div class="sheet-backdrop" id="siq-send-backdrop" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="siq-send-title">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <h3 id="siq-send-title">Send the questionnaire</h3>
+      <p class="q-sheet-sub">Each new hire gets their own personal link, so each one is its own email. Tap a name to open a ready-to-send draft in your mail app.</p>
+      <div class="send-list" id="siq-send-list"></div>
+      <div class="btn-row">
+        <button type="button" class="q-btn q-btn-primary" id="siq-send-done">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="q-toast" id="siq-toast" role="status" aria-live="polite" hidden></div>
+</div>
+<script src="/salesiq.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

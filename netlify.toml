@@ -40,6 +40,14 @@
     Cache-Control = "public, max-age=0, must-revalidate"
     Service-Worker-Allowed = "/"
 
+# The Sales IQ questionnaire candidates open from their invite. Its page,
+# script, stylesheet and worker change with the app and must never be served
+# stale from a browser's cache.
+[[headers]]
+  for = "/assessment/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
 # Some browsers refuse a manifest served as text/plain, and then the app is
 # quietly not installable with nothing in the console to say why.
 [[headers]]
