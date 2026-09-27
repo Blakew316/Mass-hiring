@@ -209,7 +209,13 @@ async function rawFetch(path, opts = {}) {
     res = await fetch(route(path), {
       ...opts,
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        // Refused by the server if this browser has since signed in to
+        // another team (see lib/onboarding-routes.js).
+        ...(state.teamId ? { 'X-Team-Expected': encodeURIComponent(state.teamId) } : {}),
+        ...(opts.headers || {}),
+      },
     });
   } catch {
     // A dropped connection reads as "Failed to fetch", which tells nobody
@@ -221,6 +227,16 @@ async function rawFetch(path, opts = {}) {
     );
   }
   if (res.status === 401) host.signedOut();
+  // Answered for another team: this browser was signed in to it elsewhere.
+  // Nothing of it is shown or kept under this team's name; the site looks
+  // again, finds the team it is now signed in to, and the page starts over.
+  const team = res.headers.get('X-Team');
+  if (team && state.teamId && decodeURIComponent(team) !== state.teamId) {
+    host.changed();
+    const err = new Error('This browser is now signed in to another team — switching to it.');
+    err.otherTeam = true;
+    throw err;
+  }
   return res;
 }
 
@@ -300,8 +316,11 @@ function showTab(name, { scroll = true } = {}) {
   document.querySelectorAll('#view-onboarding .wh-seg-btn').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
   // Which section is open is in the address bar, so a reload or a link lands
   // on it. Replaced, not pushed: Back leaves the page, as it does elsewhere.
-  if (state.active) {
-    const want = name === 'pipeline' ? '#onboarding' : `#onboarding?tab=${name}`;
+  // Only once the page's own entry is the current one — opened from another
+  // page, the entry still showing is that page's, and the site pushes this
+  // one's address (address() below) itself.
+  if (state.active && location.hash.split('?')[0] === '#onboarding') {
+    const want = address();
     if (location.hash !== want) history.replaceState(history.state, '', want);
   }
   if (scroll) scrollToTop();
@@ -361,14 +380,18 @@ function chipClass(label) {
 // The BambooHR hiring stages, used to group the board and fill the per-card
 // status dropdowns. Candidates themselves are only pulled on Sync.
 async function loadStages() {
+  const gen = state.generation;
   const res = await api('/api/statuses');
+  if (gen !== state.generation) return;
   state.statuses = res.statuses.map((x) => ({ id: x.id, label: x.label || x.name }));
   const hired = state.statuses.find((x) => /hire/i.test(x.label));
   state.hiredStatusId = hired ? hired.id : null;
 }
 
 async function loadCandidates() {
+  const gen = state.generation;
   const res = await api('/api/candidates');
+  if (gen !== state.generation) return 0;
   state.candidates = res.applications || [];
   state.synced = true;
   renderStats();
@@ -1132,12 +1155,15 @@ $('#wh-sync-btn').addEventListener('click', async () => {
   btn.classList.remove('is-done');
   btn.classList.add('is-syncing');
   label.textContent = 'Syncing';
+  const gen = state.generation;
   try {
     await loadSaved();
     await loadStages();
     const pulled = await loadCandidates();
     await loadDirectory();
     btn.classList.remove('is-syncing');
+    // The team changed while it ran: what came back was dropped, not synced.
+    if (gen !== state.generation) { label.textContent = 'Sync'; return; }
     btn.classList.add('is-done');
     label.textContent = 'Synced';
     toast(pulled === 1 ? '1 candidate synced from BambooHR' : `${pulled} candidates synced from BambooHR`);
@@ -1329,10 +1355,34 @@ const SETTING_INPUTS = {
 let settingsDirty = false;
 let clearApiKey = false;
 let settingsFor = null;
+// The fields typed into since the last save. Every other field always shows
+// what the team has saved, even when its answer lands after the typing — so
+// saving one change never sends the others back empty.
+const touched = new Set();
 const keyInput = $('#onbBambooApiKey');
+// The card as the page first drew it, for a team whose answer has not come:
+// nothing of the last team's (a placeholder showing its address, its badge,
+// the last four of its key) is left behind.
+const CARD_AS_DRAWN = {
+  placeholders: Object.fromEntries([...Object.values(SETTING_INPUTS), '#onbBambooApiKey'].map((sel) => [sel, $(sel).placeholder])),
+  badge: $('#onbModeBadge').textContent,
+  badgeClass: $('#onbModeBadge').className,
+  hint: $('#onbBambooHint').textContent,
+};
+function clearSettingsCard() {
+  settingsDirty = false;
+  touched.clear();
+  clearApiKey = false;
+  settingsFor = null;
+  for (const [sel, ph] of Object.entries(CARD_AS_DRAWN.placeholders)) { $(sel).value = ''; $(sel).placeholder = ph; }
+  $('#onbBambooClear').hidden = true;
+  $('#onbModeBadge').textContent = CARD_AS_DRAWN.badge;
+  $('#onbModeBadge').className = CARD_AS_DRAWN.badgeClass;
+  $('#onbBambooHint').textContent = CARD_AS_DRAWN.hint;
+}
 
 [...Object.values(SETTING_INPUTS), '#onbBambooApiKey'].forEach((sel) =>
-  $(sel).addEventListener('input', () => { settingsDirty = true; })
+  $(sel).addEventListener('input', () => { touched.add(sel); settingsDirty = true; })
 );
 $('#onbBambooClear').addEventListener('click', () => {
   clearApiKey = true;
@@ -1349,13 +1399,13 @@ function renderSettingsCard(s) {
   const eff = set.effective || {};
   for (const [k, sel] of Object.entries(SETTING_INPUTS)) {
     const el = $(sel);
-    if (!settingsDirty && document.activeElement !== el) el.value = set[k] || '';
+    if (!touched.has(sel)) el.value = set[k] || '';
     // What applies when the field is left empty.
-    if (eff[k] && !set[k]) el.placeholder = eff[k];
+    el.placeholder = eff[k] && !set[k] ? eff[k] : CARD_AS_DRAWN.placeholders[sel];
   }
   if (!eff.paperworkInbox) $('#onbPaperworkInbox').placeholder = s.email && s.email.from ? `${s.email.from} (your sending account)` : 'your sending account';
   if (!eff.ccEmail && !eff.hrEmail) $('#onbCcEmail').placeholder = 'the HR email, if set';
-  if (!settingsDirty) {
+  if (!touched.has('#onbBambooApiKey')) {
     keyInput.value = '';
     clearApiKey = false;
     keyInput.placeholder = set.bambooApiKeySet
@@ -1385,12 +1435,17 @@ async function loadSettingsCard() {
 
 async function saveSettings() {
   if (!settingsDirty) return null;
+  // Every field is sent, so the card has to be this team's: typed into before
+  // its answer came, the empty fields would clear what the team had saved.
+  if (settingsFor !== state.teamId) await loadSettingsCard();
+  if (settingsFor !== state.teamId) throw new Error('The Onboarding docs settings could not be loaded, so nothing was saved — try again in a moment.');
   const body = {};
   for (const [k, sel] of Object.entries(SETTING_INPUTS)) body[k] = $(sel).value.trim();
   if (keyInput.value.trim()) body.bambooApiKey = keyInput.value.trim();
   else if (clearApiKey) body.clearBambooApiKey = true;
   const r = await api('/api/settings', { method: 'PUT', body });
   settingsDirty = false;
+  touched.clear();
   clearApiKey = false;
   await loadSettingsCard();
   if (state.booted) loadStatus().catch(() => {});
@@ -1446,9 +1501,23 @@ async function boot() {
 const POLL_MS = 30 * 1000;
 
 function tabFromAddress() {
+  if (location.hash.split('?')[0] !== '#onboarding') return '';
   const m = location.hash.match(/[?&]tab=([a-z]+)/);
   return m && TABS.includes(m[1]) ? m[1] : '';
 }
+
+// The page's address, with the section that is open (or about to be).
+function address() {
+  const tab = state.active ? state.tab : tabFromAddress() || state.tab;
+  return tab === 'pipeline' ? '#onboarding' : `#onboarding?tab=${tab}`;
+}
+
+// A section typed into the address bar, or reached by Back, while the page is
+// already open: the site sees the same page and does nothing, so this does.
+['hashchange', 'popstate'].forEach((type) => window.addEventListener(type, () => {
+  const tab = tabFromAddress();
+  if (state.active && tab && tab !== state.tab) showTab(tab, { scroll: false });
+}));
 
 function activate() {
   if (state.active) return;
@@ -1498,11 +1567,7 @@ function reset(signedIn, teamId) {
   $('#wh-pipeline-board').innerHTML = '<div class="wh-empty-state" id="wh-pipeline-loading">Loading candidates…</div>';
   $('#wh-signed-list').innerHTML = '<p class="signed-empty">Loading…</p>';
   // The settings card is this team's too.
-  settingsDirty = false;
-  clearApiKey = false;
-  settingsFor = null;
-  Object.values(SETTING_INPUTS).forEach((sel) => { $(sel).value = ''; });
-  keyInput.value = '';
+  clearSettingsCard();
   if (wasActive && signedIn) activate();
 }
 
@@ -1516,7 +1581,7 @@ async function openSigned(email) {
 }
 
 window.Onboarding = {
-  activate, deactivate, reset, busy, addFromCrm, openSigned,
+  activate, deactivate, reset, busy, addFromCrm, openSigned, address,
   loadSettingsCard, saveSettings,
   settingsDirty: () => settingsDirty,
   settingsFor: () => settingsFor,

@@ -571,7 +571,12 @@
       mainEl.scrollTop = back;
       mainEl.classList.toggle('scrolled', back > 14);
     });
-    if (record && location.hash !== `#${view}`) history.pushState({ view }, '', `#${view}`);
+    if (record && location.hash !== addressFor(view)) history.pushState({ view }, '', addressFor(view));
+  }
+  // A page's place in the address bar. Onboarding docs adds the section that
+  // is open (#onboarding?tab=hire), so a reload or a shared link lands on it.
+  function addressFor(view) {
+    return view === 'onboarding' && window.Onboarding ? window.Onboarding.address() : `#${view}`;
   }
   const viewInAddressBar = () => {
     const want = location.hash.replace('#', '').split('?')[0];
@@ -4352,6 +4357,9 @@
     // Signing back in while Settings is on screen never passes through show(),
     // so the Sales IQ card would sit on the last team's answer, or none.
     if (currentView === 'settings' && salesiqFor !== (currentTeam ? currentTeam.id : '')) loadSalesiq();
+    // The Onboarding docs card likewise: shown for the team it was loaded for,
+    // it would be saved over this one's.
+    if (currentView === 'settings' && currentTeam && window.Onboarding && window.Onboarding.settingsFor() !== currentTeam.id) window.Onboarding.loadSettingsCard();
     const s = state.settings;
     // Never overwrite what the user is typing: skip the form while it has unsaved edits.
     const setIf = (sel, val) => { const el = $(sel); if (!settingsDirty && document.activeElement !== el) el.value = val || ''; };
@@ -5086,7 +5094,7 @@
     }
     // Keep the page, drop the one-shot Google sign-in parameters, and give the
     // first entry a state object so Back from the second page works.
-    history.replaceState({ view: currentView }, '', `#${currentView}`);
+    history.replaceState({ view: currentView }, '', addressFor(currentView));
     // Polling a tab nobody is looking at buys nothing and costs a function
     // call every 30 seconds for as long as it stays open. Coming back to the
     // tab refreshes straight away, so it is also fresher than waiting out the
