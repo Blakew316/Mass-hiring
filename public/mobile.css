@@ -418,8 +418,11 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   td[data-col="act"]    { grid-area: act; }
   /* Role and company are the line under the name on a card. */
   #candTableWrap td[data-col="role"], #candTableWrap td[data-col="company"] { display: none; }
-  /* The rank, in the Best to text next list, is a badge on the avatar. */
-  td[data-col="rank"] {
+  /* The rank, in the Best to text next list, is a badge on the avatar —
+     written as specifically as the desktop's 44px column and cell padding,
+     or those win and it is a bar across the avatar. Nobody unranked gets one. */
+  #candTableWrap .table td[data-col="rank"] {
+    width: auto;
     grid-area: name;
     justify-self: start; align-self: start;
     z-index: 1;
@@ -430,7 +433,7 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     font-size: 11px; font-weight: 700; line-height: 20px; text-align: center;
     box-shadow: 0 0 0 2px var(--card);
   }
-  td[data-col="rank"] .muted { color: #fff; }
+  #candTableWrap .table td[data-col="rank"]:has(.muted) { display: none; }
 
   .name-cell { min-width: 0; }
   .name-cell .avatar { width: 40px; height: 40px; font-size: 14px; margin-right: 12px; flex: none; }
@@ -573,7 +576,7 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .thread-who > div:not(.thread-native) { flex: 1 1 auto; min-width: 0; }
   .thread-native { margin-left: auto; flex: none; }
   .thread-native .native-acts { gap: 2px; }
-  .thread-native .native-act { min-width: 40px; padding: 0; }
+  .thread-native .native-act { min-width: 44px; padding: 0; }
 
   /* ---- the tiles' lists (Interviews booked, Emailed, Replied) ----
      One column: who and when across the full width, then Call / Message /

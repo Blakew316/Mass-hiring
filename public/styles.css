@@ -1375,7 +1375,10 @@ tr.row-muted { opacity: .55; }
    Call / Message / Mail row, the line under a name that the desktop gives
    its own columns. !important because each of them also has a display of
    its own (flex, grid) that must lose to this at the other width. */
-@media (min-width: 801px) { .m-only { display: none !important; } }
+/* "not (max-width: 800px)" rather than min-width: 801px, which left a
+   one-pixel gap — at 800.5px (zoom, 125% scaling) neither applied and both
+   layouts' parts showed at once. */
+@media not all and (max-width: 800px) { .m-only { display: none !important; } }
 @media (max-width: 800px) { .d-only { display: none !important; } }
 
 /* ---------------- The Phone, Messages and Mail app icons ----------------

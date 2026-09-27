@@ -1400,6 +1400,7 @@
           <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
           <div><div class="cand-name">${esc(displayName)}</div>
           ${(c.role || c.company) ? `<div class="cand-line m-only">${esc([c.role, c.company].filter(Boolean).join(' · '))}</div>` : ''}
+          ${c.pastRoles ? `<div class="cand-sub m-only">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}
           ${pri ? `<div class="cand-sub why-text">${esc(pri.reason)}</div>`
             : blockedWhy ? `<div class="cand-sub muted">not texting: ${esc(blockedWhy)}</div>`
             : (c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
@@ -1470,29 +1471,38 @@
       return;
     }
     if (e.target.closest('.act-more')) { openActionSheet(tr); return; }
-    if (e.target.closest('.act-edit')) { openCandidate(cand); return; }
     // The Text column is the fastest way in for the thing people actually
     // want: putting a number on someone who has none.
     if (e.target.closest('.add-number')) { openCandidate(cand, { focus: 'phone' }); return; }
-    if (e.target.closest('.act-email')) { openCompose([id]); return; }
-    if (e.target.closest('.act-text')) { openTextCompose([id]); return; }
-    if (e.target.closest('.act-followup')) { openCompose([id], null, { followUp: true }); return; }
-    if (e.target.closest('.act-delete')) {
+    const act = ['act-edit', 'act-email', 'act-text', 'act-followup', 'act-delete'].find((a) => e.target.closest(`.${a}`));
+    if (act) candidateAction(act, cand);
+  });
+
+  // What a row's buttons do — and the phone's More sheet, which acts on the
+  // person by id so that a refresh redrawing the list under it cannot leave
+  // it pressing a button that is no longer there.
+  function candidateAction(act, cand) {
+    if (!cand) { toast('That candidate is no longer on the list.', true); return; }
+    const id = cand.id;
+    if (act === 'act-edit') openCandidate(cand);
+    else if (act === 'act-email') openCompose([id]);
+    else if (act === 'act-text') openTextCompose([id]);
+    else if (act === 'act-followup') openCompose([id], null, { followUp: true });
+    else if (act === 'act-delete') {
       if (confirm(`Remove ${cand.name || cand.email} from the pipeline?`)) {
         api(`/api/candidates/${id}`, { method: 'DELETE' })
           .then(() => { selected.delete(id); return refresh(); })
           .catch(oops);
       }
-      return;
     }
-  });
+  }
 
   // ---------------- "More" on a candidate card (phone) ----------------
   // An iOS action sheet. On a phone the card's own row is Call, Message and
   // Mail through the phone's apps; this app's actions for the person — the
   // tracked email, the text from the Mac, a follow-up, editing, removing —
-  // are one tap further, here. Each entry presses the card's real button, so
-  // there is one set of handlers and the two can never disagree.
+  // are one tap further, here. Each entry runs the same candidateAction() as
+  // the card's own buttons, so the two can never disagree.
   const SHEET_ACTS = [
     ['act-email', 'Send outreach email', 'mail'],
     ['act-text', 'Send text from the Mac', 'bubble'],
@@ -1519,10 +1529,9 @@
     const b = e.target.closest('[data-act]');
     if (!b) return;
     closeModal($('#actionSheet'));
-    // Looked up again: a refresh may have redrawn the list while the sheet was open.
-    const tr = [...document.querySelectorAll('#candidateRows tr[data-id]')].find((r) => r.dataset.id === sheetFor);
-    const target = tr && tr.querySelector(`.row-actions .${b.dataset.act}`);
-    if (target) target.click();
+    // By id, from the current state: a refresh may have redrawn the list, or
+    // moved the person out of the filter, while the sheet was open.
+    candidateAction(b.dataset.act, state.candidates.find((c) => c.id === sheetFor));
   });
 
   $('#candidateRows').addEventListener('change', (e) => {
