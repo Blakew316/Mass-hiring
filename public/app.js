@@ -555,7 +555,6 @@
     // The editors moved to Settings; Email and Texting are conversations only.
     if (view === 'settings') {
       renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls();
-      if (window.Onboarding && currentTeam) window.Onboarding.loadSettingsCard();
     }
     if (view === 'texting') renderTexting();
     // Arriving at a page is arriving at its list, never at whatever thread was
@@ -4357,9 +4356,6 @@
     // Signing back in while Settings is on screen never passes through show(),
     // so the Sales IQ card would sit on the last team's answer, or none.
     if (currentView === 'settings' && salesiqFor !== (currentTeam ? currentTeam.id : '')) loadSalesiq();
-    // The Onboarding docs card likewise: shown for the team it was loaded for,
-    // it would be saved over this one's.
-    if (currentView === 'settings' && currentTeam && window.Onboarding && window.Onboarding.settingsFor() !== currentTeam.id) window.Onboarding.loadSettingsCard();
     const s = state.settings;
     // Never overwrite what the user is typing: skip the form while it has unsaved edits.
     const setIf = (sel, val) => { const el = $(sel); if (!settingsDirty && document.activeElement !== el) el.value = val || ''; };
@@ -4431,9 +4427,6 @@
   }
 
   async function saveSettings(extra = {}) {
-    // The Onboarding docs card first: its fields are checked on the server
-    // (an email address, a time zone), and nothing is saved while one is wrong.
-    if (window.Onboarding) await window.Onboarding.saveSettings();
     const body = {
       calendlyUrl: $('#setCalendlyUrl').value,
       calendlyToken: $('#calendlyToken').value,
@@ -4748,7 +4741,7 @@
     if (state.texting && state.texting.queue && state.texting.queue.active) return true;
     if ($('.modal-backdrop:not([hidden])')) return true;
     if (window.SalesIQ && window.SalesIQ.busy()) return true;
-    if (window.Onboarding && (window.Onboarding.busy() || window.Onboarding.settingsDirty())) return true;
+    if (window.Onboarding && window.Onboarding.busy()) return true;
     if (templateDirty || followUpDirty || settingsDirty || textTemplateDirty) return true;
     const el = document.activeElement;
     if (el && /^(INPUT|TEXTAREA)$/.test(el.tagName) && el.value) return true;

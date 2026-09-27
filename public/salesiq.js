@@ -657,12 +657,11 @@
     $("#siq-block-candidates").scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
-  /* ---- header line ---- */
+  /* ---- header ---- */
+  // The page's header is the site's own (public/index.html); what is left of
+  // the Sales IQ app's is the class that puts unfinished setup first.
 
   function renderHead() {
-    const date = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
-    const team = teamSelect.value;
-    $("#siq-dash-date").textContent = team ? `${date} · ${team}` : date;
     // Setup that still needs doing moves to the top on phones (see salesiq.css).
     root.classList.toggle("needs-results", loaded && !settings.managerEmail);
   }

@@ -1233,11 +1233,6 @@
   background: var(--wh-nav-bg);
 }
 .wph .nav-inner { align-items: center; padding: 0; }
-/* WPI Hire's header badge ("Demo data", "Email simulated"), at the end of
-   the tab row now that the header it sat in is this site's. */
-.wph .wh-nav-status { margin-left: auto; padding-left: 12px; display: flex; align-items: center; flex: none; }
-.wph .wh-nav-status .pill { border: 0; margin: 0; font-family: inherit; cursor: pointer; }
-.wph .wh-nav-status .pill:hover { color: var(--wh-accent-deep); box-shadow: inset 0 0 0 1px var(--wh-accent); }
 
 /* The page's column: as wide as the page, up to WPI Hire's own 1120px, and
    lined up with the title above it rather than centred under it. */
@@ -1255,27 +1250,6 @@
    along the bottom is for switching screens. */
 #view-onboarding .wh-seg { display: none; }
 
-/* WPI Hire's warning badge ("Records not saving", "Email simulated") showed
-   at every window wider than 760px. Where the tab row that carries it is too
-   narrow for it — the page column beside the sidebar under 760px, a window
-   up to 1064px — or hidden, as in the phone layout on a small tablet, it is
-   in the page header instead. On a phone it is hidden, as it was. */
-#view-onboarding .wh-head-status { display: none; }
-@media (min-width: 761px) and (max-width: 1064px) {
-  #view-onboarding .wh-head-status:not([hidden]) {
-    display: inline-flex;
-    align-items: center;
-    flex: none;
-    border: 0;
-    font: inherit;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-}
 @media (max-width: 800px) {
   #view-onboarding .wph .site-nav { display: none; }
   #view-onboarding .wh-head-actions { width: 100%; }

@@ -1858,6 +1858,14 @@
 .siq-wash .q-blob-green { width: 30rem; height: 30rem; bottom: -12rem; left: -10rem; background: var(--q-blob-green); }
 .siq { --q-blob-blue: #d9edfb; --q-blob-green: #dcf7ea; }
 
+/* The site's own page header, at the top of the page's column — as high as
+   every other page's, and on a phone over this page's own background. */
+#view-salesiq .stage-dash { padding-top: 28px; }
+@media (max-width: 800px) {
+  #view-salesiq .stage-dash { padding-top: 0; }
+  #view-salesiq .page-head { background: var(--q-bg); }
+}
+
 /* The heading row: the Sales IQ title on the left; Preview and this site's
    own header controls (offline, theme, replies) where Preview always was. */
 .siq .siq-head {

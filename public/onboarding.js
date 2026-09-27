@@ -8,28 +8,27 @@
    - its ids and the class names this site already used are wh-* (see the
      top of public/onboarding.css)
    - everything it cached in this browser is cached per team
-   - its four sections are tabs within the page, remembered in the address
-     bar (#onboarding?tab=hire), with an iOS segmented control on a phone
+   - no BambooHR: its Sync, Hire and Directory, its stage menus and its
+     sample data are gone, and so are Add hire and Upload resume — people
+     come here from the Candidates page, which already has all of that
+   - its two remaining sections are tabs within the page, remembered in the
+     address bar (#onboarding?tab=onboarding), with an iOS segmented control
+     on a phone
    - it starts when the page is first opened, looks again every 30 seconds
      while it is open, and forgets everything when the team changes
    - the site's header, offline marker and service worker do what WPI Hire's
      own did
    - new: the Signed paperwork list (the signing record and the signed copies
-     of every completed packet), its settings card in Settings, and "Send
-     onboarding docs" from the Candidates page. */
+     of every completed packet), and "Send onboarding docs" from the
+     Candidates page. The company's details are fixed (lib/onboarding.js). */
 (() => {
 const state = {
-  statuses: [],
-  candidates: [],
   localCandidates: [],
   overrides: {},
   storage: null,
   documents: [],
-  hiredStatusId: null,
-  hiredThisSession: new Set(),
   sends: {},
   completedHires: [],
-  synced: false,
   // As a page of this site: whose data this is, whether the page is open,
   // and which of its four sections is showing.
   teamId: '',
@@ -102,7 +101,7 @@ function forgetLocal(id) {
   renderBoard();
 }
 function allCandidates() {
-  return [...state.localCandidates, ...state.candidates];
+  return state.localCandidates;
 }
 
 // Pulls the saved records from the server; the cache covers a failed request.
@@ -173,29 +172,6 @@ function noteSend(email) {
 
 function loadOverrides() {
   return state.overrides || {};
-}
-
-async function saveOverride(id, data) {
-  state.localEdits++;
-  if (data) state.overrides[String(id)] = data;
-  else delete state.overrides[String(id)];
-  cacheSet(OVERRIDES_KEY, state.overrides);
-  try {
-    await api('/api/saved/overrides', { method: 'POST', body: { id: String(id), details: data || null } });
-  } catch (err) {
-    if (err.refused) {
-      delete state.overrides[String(id)];
-      cacheSet(OVERRIDES_KEY, state.overrides);
-      renderBoard();
-      toast(err.message, true);
-      return;
-    }
-    toast(`Saved on this device only — ${err.message}`, true);
-  }
-}
-
-function hasOverride(id) {
-  return Boolean(loadOverrides()[String(id)]);
 }
 
 // The candidate's contact details with any manual edits applied.
@@ -309,7 +285,7 @@ function avatar(name, cls = 'wh-avatar') {
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 
-const TABS = ['pipeline', 'hire', 'onboarding', 'directory'];
+const TABS = ['pipeline', 'onboarding'];
 const wph = $('#wph');
 
 // The page scrolls in this site's page area on a phone, and in the window on
@@ -341,85 +317,11 @@ document.querySelectorAll('#wph .nav-tab, #view-onboarding .wh-seg-btn').forEach
   t.addEventListener('click', () => showTab(t.dataset.tab))
 );
 
-// ── Status / header ──────────────────────────────────────────────────────────
-
-async function loadStatus() {
-  const gen = state.generation;
-  const s = await api('/api/status');
-  if (gen !== state.generation) return;
-  state.status = s;
-  // Surface a badge only when something needs attention.
-  const badge = $('#wh-email-badge');
-  const warning =
-    s.storage && !s.storage.persistent
-      ? 'Records not saving'
-      : s.storage && !s.storage.sharedAcrossDevices
-        ? 'Records: this device only'
-        : s.mode !== 'live'
-          ? 'Demo data'
-          : !s.emailConfigured
-            ? 'Email simulated'
-            : '';
-  // A setting can change while the page is open (Settings → Onboarding docs),
-  // so the badge can go as well as come.
-  badge.textContent = warning || '\u00a0';
-  badge.hidden = !warning;
-  // The same, in the page header, for widths where the tab row that carries
-  // it is hidden or too narrow for it (see onboarding.css).
-  const head = $('#wh-head-status');
-  head.textContent = warning;
-  head.hidden = !warning;
-}
-// Each of those is put right in Settings.
-$('#wh-email-badge').addEventListener('click', () => openSettings());
-$('#wh-head-status').addEventListener('click', () => openSettings());
-
-function openSettings() {
-  host.show('settings');
-  setTimeout(() => {
-    const card = $('#onbSettingsCard');
-    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 80);
-}
-
 // ── Pipeline ─────────────────────────────────────────────────────────────────
-
-function chipClass(label) {
-  const l = (label || '').toLowerCase();
-  if (/(not a fit|reject|decline|disqualif)/.test(l)) return 'chip-red';
-  if (/hire/.test(l)) return 'chip-green';
-  if (/offer/.test(l)) return 'chip-violet';
-  if (/interview/.test(l)) return 'chip-amber';
-  if (/(phone|screen)/.test(l)) return 'chip-teal';
-  if (/review/.test(l)) return 'chip-blue';
-  return 'chip-gray';
-}
-
-// The BambooHR hiring stages, used to group the board and fill the per-card
-// status dropdowns. Candidates themselves are only pulled on Sync.
-async function loadStages() {
-  const gen = state.generation;
-  const res = await api('/api/statuses');
-  if (gen !== state.generation) return;
-  state.statuses = res.statuses.map((x) => ({ id: x.id, label: x.label || x.name }));
-  const hired = state.statuses.find((x) => /hire/i.test(x.label));
-  state.hiredStatusId = hired ? hired.id : null;
-}
-
-async function loadCandidates() {
-  const gen = state.generation;
-  const res = await api('/api/candidates');
-  if (gen !== state.generation) return 0;
-  state.candidates = res.applications || [];
-  state.synced = true;
-  renderStats();
-  renderBoard();
-  return state.candidates.length;
-}
 
 // The tiles read from the records this app owns — candidates on the board,
 // packets it has sent, and paperwork that has come back signed. Nothing here
-// needs a BambooHR round-trip, so the numbers move the moment anything changes.
+// needs a round-trip anywhere else, so the numbers move the moment anything changes.
 function renderStats() {
   const el = $('#wh-pipeline-stats');
   const all = allCandidates();
@@ -451,11 +353,7 @@ function candidateCard(c) {
   const a = applicantOf(c);
   const name = `${a.firstName || ''} ${a.lastName || ''}`.trim() || 'Unknown';
   const role = c.job?.title?.label || c.job?.title || '';
-  const statusLabel = c.status?.label || c.status?.name || '—';
-  const edited = hasOverride(c.id);
-  const statusOptions = state.statuses
-    .map((s) => `<option value="${s.id}" ${String(s.id) === String(c.status?.id) ? 'selected' : ''}>${esc(s.label)}</option>`)
-    .join('');
+  const statusLabel = c.status?.label || c.status?.name || 'Added';
   const { sentAt, signedAt } = progressOf(c);
   const meta = [
     a.email && `<div class="meta-line">${ICONS.mail}<span>${esc(a.email)}</span></div>`,
@@ -473,10 +371,10 @@ function candidateCard(c) {
     <div class="candidate-head">
       ${avatar(name)}
       <div class="candidate-id">
-        <div class="candidate-name">${esc(name)}${edited ? '<span class="tag-edited">Edited</span>' : ''}</div>
+        <div class="candidate-name">${esc(name)}</div>
         <div class="candidate-role">${esc(role)}</div>
       </div>
-      <span class="wh-chip ${c.local ? 'chip-blue' : chipClass(statusLabel)}">${esc(statusLabel)}</span>
+      <span class="wh-chip chip-blue">${esc(statusLabel)}</span>
       <button class="wh-icon-btn edit-btn" type="button" aria-label="Edit contact details" title="Edit contact details">${ICONS.pencil}</button>
     </div>
     <form class="edit-form" hidden>
@@ -489,22 +387,17 @@ function candidateCard(c) {
       <div class="edit-actions">
         <button type="submit" class="wh-btn wh-btn-primary wh-btn-sm">Save</button>
         <button type="button" class="wh-btn wh-btn-ghost wh-btn-sm cancel-edit">Cancel</button>
-        ${edited ? '<button type="button" class="wh-btn wh-btn-ghost wh-btn-sm reset-edit">Reset to BambooHR</button>' : ''}
       </div>
     </form>
     ${meta ? `<div class="candidate-meta">${meta}</div>` : ''}
     <div class="candidate-actions">
-      ${c.local
-        ? `<button class="wh-btn wh-btn-primary wh-btn-sm hire-btn" style="flex:1">Hire</button>
-           <button class="wh-btn wh-btn-ghost wh-btn-sm remove-local">Remove</button>`
-        : `<select class="wh-select wh-status-select" aria-label="Move to stage">${statusOptions}</select>
-           <button class="wh-btn wh-btn-primary wh-btn-sm hire-btn">Hire</button>`}
       ${state.sending.has(String(c.id))
-        ? '<button class="wh-btn wh-btn-ghost wh-btn-sm send-packet-quick" disabled>Sending…</button>'
-        : `<button class="wh-btn wh-btn-ghost wh-btn-sm send-packet-quick" ${a.email ? '' : 'disabled title="No email on file"'}>
+        ? '<button class="wh-btn wh-btn-primary wh-btn-sm send-packet-quick" style="flex:1" disabled>Sending…</button>'
+        : `<button class="wh-btn wh-btn-primary wh-btn-sm send-packet-quick" style="flex:1" ${a.email ? '' : 'disabled title="No email on file"'}>
         <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Send onboarding packet
+        ${signedAt ? 'Send again' : sentAt ? 'Send again' : 'Send onboarding packet'}
       </button>`}
+      <button class="wh-btn wh-btn-ghost wh-btn-sm remove-local">Remove</button>
     </div>
   </div>`;
 }
@@ -531,7 +424,7 @@ async function quickSendPacket(c, btn) {
     };
     const res = await api('/api/onboarding/send', {
       method: 'POST',
-      body: { hire, options: { sendEmail: true, ccHr: true, uploadToBamboo: true } },
+      body: { hire, options: { sendEmail: true } },
     });
 
     // Mirror the send in the Onboarding tab so the details and results are there.
@@ -542,6 +435,7 @@ async function quickSendPacket(c, btn) {
     p.phone.value = hire.phone;
     p.jobTitle.value = hire.jobTitle;
     if (hire.startDate) p.startDate.value = hire.startDate;
+    packetSettled();
     renderPacketResult(res);
     noteSend(hire.email);
 
@@ -571,16 +465,13 @@ function renderBoard() {
   const board = $('#wh-pipeline-board');
   const all = allCandidates();
   if (!all.length) {
-    board.innerHTML = state.synced
-      ? '<div class="wh-empty-state">No candidates in BambooHR yet.</div>'
-      : '<div class="wh-empty-state">No candidates yet — press Sync to pull them from BambooHR.</div>';
+    board.innerHTML = '<div class="wh-empty-state">No one here yet — on the Candidates page, use Send onboarding docs (or Add to Onboarding docs) on anyone you are hiring.</div>';
     return;
   }
 
-  // Group candidates by stage: uploaded resumes first, then pipeline order.
-  const order = state.statuses.map((s) => s.label);
+  // Group candidates by how they came: added from Candidates first.
   const OWN_STAGES = ['Added', 'Uploaded'];
-  const rank = (label) => (OWN_STAGES.includes(label) ? OWN_STAGES.indexOf(label) - 2 : order.indexOf(label) + 1 || 99);
+  const rank = (label) => (OWN_STAGES.includes(label) ? OWN_STAGES.indexOf(label) : 99);
   const groups = new Map();
   for (const c of all) {
     const label = c.status?.label || 'Other';
@@ -603,35 +494,7 @@ function renderBoard() {
     )
     .join('');
 
-  board.querySelectorAll('.wh-status-select').forEach((sel) =>
-    sel.addEventListener('change', async (e) => {
-      const card = e.target.closest('.candidate-card');
-      try {
-        await api(`/api/candidates/${card.dataset.id}/status`, {
-          method: 'POST',
-          body: { statusId: Number(e.target.value) },
-        });
-        const label = state.statuses.find((s) => String(s.id) === e.target.value)?.label;
-        const c = state.candidates.find((x) => String(x.id) === String(card.dataset.id));
-        if (c) c.status = { id: Number(e.target.value), label };
-        toast(`Moved to ${label}`);
-        renderStats();
-        renderBoard();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    })
-  );
-
   const findCandidate = (id) => allCandidates().find((x) => String(x.id) === String(id));
-
-  board.querySelectorAll('.hire-btn').forEach((btn) =>
-    btn.addEventListener('click', (e) => {
-      const c = findCandidate(e.target.closest('.candidate-card').dataset.id);
-      prefillHireForm(c);
-      showTab('hire');
-    })
-  );
 
   board.querySelectorAll('.open-signed').forEach((btn) =>
     btn.addEventListener('click', () => openSignedFor(btn.dataset.email))
@@ -674,15 +537,6 @@ function renderBoard() {
     })
   );
 
-  board.querySelectorAll('.reset-edit').forEach((btn) =>
-    btn.addEventListener('click', (e) => {
-      const card = e.target.closest('.candidate-card');
-      saveOverride(card.dataset.id, null);
-      renderBoard();
-      toast('Restored details from BambooHR');
-    })
-  );
-
   board.querySelectorAll('.edit-form').forEach((form) =>
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -696,8 +550,8 @@ function renderBoard() {
       };
       if (refuseOwnCompany(details.email)) return;
       const c = findCandidate(card.dataset.id);
-      if (c?.local) {
-        // Uploaded candidates are stored as records, so update in place.
+      if (c) {
+        // Every candidate here is a record of this page's: updated in place.
         const before = c.applicant;
         c.applicant = { ...c.applicant, ...details };
         saveLocalCandidates();
@@ -708,265 +562,12 @@ function renderBoard() {
           renderBoard();
           toast(err.message, true);
         });
-      } else {
-        saveOverride(card.dataset.id, details);
       }
       renderBoard();
       toast('Details saved — packets will use the updated info');
     })
   );
 }
-
-// ── Add a hire by hand ───────────────────────────────────────────────────────
-// The same record shape the resume upload produces, so an added hire behaves
-// exactly like an uploaded one: it persists, it can be edited, and its packet
-// can be sent straight from the card.
-
-const addHirePanel = $('#wh-add-hire-panel');
-const addHireForm = $('#wh-add-hire-form');
-
-function toggleAddHire(show) {
-  addHirePanel.hidden = show === undefined ? !addHirePanel.hidden : !show;
-  if (!addHirePanel.hidden) {
-    $('#wh-upload-panel').hidden = true;
-    addHirePanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    addHireForm.firstName.focus();
-  }
-}
-
-$('#wh-add-hire-btn').addEventListener('click', () => toggleAddHire());
-$('#wh-add-hire-cancel').addEventListener('click', () => {
-  addHireForm.reset();
-  toggleAddHire(false);
-});
-
-addHireForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const f = e.target;
-  const email = f.email.value.trim();
-
-  // One record per person: adding someone already on the board would leave two
-  // cards fighting over the same packet.
-  if (refuseOwnCompany(email)) return;
-  const existing = allCandidates().find((c) => emailKey(applicantOf(c).email) === emailKey(email));
-  if (existing) {
-    const a = applicantOf(existing);
-    return toast(`${a.firstName || ''} ${a.lastName || ''}`.trim() + ` is already in the pipeline with that email`, true);
-  }
-
-  const candidate = {
-    id: `hire-${Date.now()}`,
-    local: true,
-    appliedDate: new Date().toISOString().slice(0, 10),
-    startDate: f.startDate.value || '',
-    applicant: {
-      firstName: f.firstName.value.trim(),
-      lastName: f.lastName.value.trim(),
-      email,
-      phoneNumber: f.phone.value.trim(),
-    },
-    job: { title: { label: f.jobTitle.value.trim() || 'Account Executive' } },
-    status: { id: 'local', label: 'Added' },
-  };
-
-  state.localCandidates.unshift(candidate);
-  saveLocalCandidates();
-  api('/api/saved/candidates', { method: 'POST', body: { candidate } }).catch((err) => {
-    if (!err.refused) return toast(`Saved on this device only — ${err.message}`, true);
-    forgetLocal(candidate.id);
-    toast(err.message, true);
-  });
-
-  f.reset();
-  f.jobTitle.value = 'Account Executive';
-  toggleAddHire(false);
-  renderStats();
-  renderBoard();
-  toast(`${candidate.applicant.firstName} ${candidate.applicant.lastName} added — ready to send their packet`);
-  document.querySelector(`.candidate-card[data-id="${candidate.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-});
-
-// ── Resume upload ────────────────────────────────────────────────────────────
-
-const uploadPanel = $('#wh-upload-panel');
-const dropzone = $('#wh-dropzone');
-const resumeFile = $('#wh-resume-file');
-const uploadReview = $('#wh-upload-review');
-const uploadStatus = $('#wh-upload-status');
-let pendingResumeName = '';
-
-$('#wh-upload-resume-btn').addEventListener('click', () => {
-  uploadPanel.hidden = !uploadPanel.hidden;
-  if (!uploadPanel.hidden) {
-    addHirePanel.hidden = true;
-    uploadPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }
-});
-
-$('#wh-upload-cancel').addEventListener('click', () => {
-  uploadReview.hidden = true;
-  uploadPanel.hidden = true;
-});
-
-dropzone.addEventListener('click', () => resumeFile.click());
-dropzone.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  dropzone.classList.add('wh-drag');
-});
-dropzone.addEventListener('dragleave', () => dropzone.classList.remove('wh-drag'));
-dropzone.addEventListener('drop', (e) => {
-  e.preventDefault();
-  dropzone.classList.remove('wh-drag');
-  const file = e.dataTransfer.files?.[0];
-  if (file) handleResumeFile(file);
-});
-resumeFile.addEventListener('change', () => {
-  if (resumeFile.files?.[0]) handleResumeFile(resumeFile.files[0]);
-});
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(',')[1] || '');
-    r.onerror = () => reject(new Error('Could not read the file'));
-    r.readAsDataURL(file);
-  });
-}
-
-async function handleResumeFile(file) {
-  if (file.size > 4 * 1024 * 1024) return toast("Resume is too large (4 MB max)", true);
-  pendingResumeName = file.name;
-  uploadStatus.hidden = false;
-  uploadStatus.textContent = `Reading ${file.name}…`;
-  uploadReview.hidden = true;
-  const f = uploadReview;
-  try {
-    const contentBase64 = await fileToBase64(file);
-    const res = await api('/api/resume/parse', {
-      method: 'POST',
-      body: { filename: file.name, contentBase64 },
-    });
-    f.firstName.value = res.candidate.firstName || '';
-    f.lastName.value = res.candidate.lastName || '';
-    f.email.value = res.candidate.email || '';
-    f.phone.value = res.candidate.phone || '';
-    $('#wh-upload-note').textContent = res.note || '';
-  } catch (err) {
-    // Never dead-end the upload: open the form empty so the details can be
-    // typed in even when parsing is unavailable.
-    f.firstName.value = '';
-    f.lastName.value = '';
-    f.email.value = '';
-    f.phone.value = '';
-    $('#wh-upload-note').textContent = `Couldn't read the resume automatically (${err.message}) — enter the details below and the candidate will still be added.`;
-    toast(err.message, true);
-  } finally {
-    uploadStatus.hidden = true;
-    uploadReview.hidden = false;
-    resumeFile.value = '';
-  }
-}
-
-uploadReview.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const f = e.target;
-  if (refuseOwnCompany(f.email.value)) return;
-  const candidate = {
-    id: `local-${Date.now()}`,
-    local: true,
-    resumeName: pendingResumeName,
-    appliedDate: new Date().toISOString().slice(0, 10),
-    applicant: {
-      firstName: f.firstName.value.trim(),
-      lastName: f.lastName.value.trim(),
-      email: f.email.value.trim(),
-      phoneNumber: f.phone.value.trim(),
-    },
-    job: { title: { label: f.jobTitle.value.trim() || 'Uploaded resume' } },
-    status: { id: 'local', label: 'Uploaded' },
-  };
-  state.localCandidates.unshift(candidate);
-  saveLocalCandidates();
-  api('/api/saved/candidates', { method: 'POST', body: { candidate } }).catch((err) => {
-    if (!err.refused) return toast(`Saved on this device only — ${err.message}`, true);
-    forgetLocal(candidate.id);
-    toast(err.message, true);
-  });
-  f.reset();
-  uploadReview.hidden = true;
-  uploadPanel.hidden = true;
-  renderStats();
-  renderBoard();
-  toast(`${candidate.applicant.firstName} ${candidate.applicant.lastName} added — ready to send their packet`);
-  document.querySelector('.candidate-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-});
-
-// ── Hire ─────────────────────────────────────────────────────────────────────
-
-function prefillHireForm(c) {
-  const f = $('#wh-hire-form');
-  const a = applicantOf(c);
-  f.firstName.value = a.firstName || '';
-  f.lastName.value = a.lastName || '';
-  f.workEmail.value = a.email || '';
-  f.mobilePhone.value = a.phoneNumber || '';
-  f.jobTitle.value = c.job?.title?.label || c.job?.title || '';
-  if (c.startDate) f.hireDate.value = c.startDate;
-  f.department.value = '';
-  f.applicationId.value = c.local ? '' : c.id;
-  const banner = $('#wh-hire-context');
-  banner.innerHTML = `${avatar(`${a.firstName || ''} ${a.lastName || ''}`.trim(), 'wh-avatar')}<span>Hiring <strong>${esc(a.firstName)} ${esc(a.lastName)}</strong> from the pipeline — their application will be marked Hired.</span>`;
-  banner.hidden = false;
-}
-
-$('#wh-hire-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const f = e.target;
-  const btn = f.querySelector('button[type=submit]');
-  btn.disabled = true;
-  try {
-    const res = await api('/api/hire', {
-      method: 'POST',
-      body: {
-        employee: {
-          firstName: f.firstName.value.trim(),
-          lastName: f.lastName.value.trim(),
-          workEmail: f.workEmail.value.trim(),
-          mobilePhone: f.mobilePhone.value.trim(),
-          jobTitle: f.jobTitle.value.trim(),
-          department: f.department.value.trim(),
-          hireDate: f.hireDate.value,
-          location: f.location.value.trim(),
-        },
-        applicationId: f.applicationId.value || undefined,
-        hiredStatusId: state.hiredStatusId || undefined,
-      },
-    });
-    toast(`Employee #${res.employeeId} created${res.statusUpdated ? ' — application marked Hired' : ''}`);
-    state.hiredThisSession.add(String(res.employeeId));
-
-    // Hand off to onboarding, prefilled.
-    const p = $('#wh-packet-form');
-    p.firstName.value = f.firstName.value;
-    p.lastName.value = f.lastName.value;
-    p.email.value = f.workEmail.value;
-    p.phone.value = f.mobilePhone.value;
-    p.jobTitle.value = 'Account Executive';
-    p.department.value = f.department.value;
-    p.startDate.value = f.hireDate.value;
-    p.employeeId.value = res.employeeId || '';
-    p.workLocation.value = f.location.value;
-    $('#wh-hire-context').hidden = true;
-    f.reset();
-    showTab('onboarding');
-    loadStages();
-    loadDirectory();
-  } catch (err) {
-    toast(err.message, true);
-  } finally {
-    btn.disabled = false;
-  }
-});
 
 // ── Onboarding packet ────────────────────────────────────────────────────────
 
@@ -1015,6 +616,13 @@ async function loadDocuments() {
   );
 }
 
+// What the packet form held when it was last filled in, sent or cleared:
+// anything different is typing that a reload would lose.
+const packetValues = () => [...$('#wh-packet-form').querySelectorAll('input[name], select[name], textarea[name]')]
+  .map((i) => (i.type === 'checkbox' || i.type === 'radio' ? i.checked : i.value)).join('\u0001');
+let packetBaseline = packetValues();
+function packetSettled() { packetBaseline = packetValues(); }
+
 function readHireForm() {
   const f = $('#wh-packet-form');
   return {
@@ -1029,7 +637,6 @@ function readHireForm() {
     salary: f.salary.value.trim(),
     employmentType: f.employmentType.value,
     workLocation: f.workLocation.value.trim(),
-    employeeId: f.employeeId.value.trim() || undefined,
   };
 }
 
@@ -1077,14 +684,11 @@ $('#wh-packet-form').addEventListener('submit', async (e) => {
       body: {
         hire: readHireForm(),
         documents: selectedDocs,
-        options: {
-          sendEmail: f.sendEmail.checked,
-          ccHr: f.ccHr.checked,
-          uploadToBamboo: f.uploadToBamboo.checked,
-        },
+        options: { sendEmail: f.sendEmail.checked },
       },
     });
     renderPacketResult(res);
+    packetSettled();
     if (f.sendEmail.checked) noteSend(f.email.value);
     $('#wh-packet-result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     toast(res.ok ? 'Onboarding packet on its way' : 'Sent, but check the results panel', !res.ok);
@@ -1116,107 +720,6 @@ $('#wh-test-email-btn').addEventListener('click', async () => {
   }
 });
 
-// ── Directory ────────────────────────────────────────────────────────────────
-
-function dirValue(v) {
-  return v?.label || (typeof v === 'string' ? v : '') || '—';
-}
-
-async function loadDirectory() {
-  const el = $('#wh-directory-list');
-  const gen = state.generation;
-  try {
-    const res = await api('/api/employees');
-    if (gen !== state.generation) return;
-    if (!res.employees.length) {
-      el.innerHTML = '<div class="wh-empty-state">No employees yet.</div>';
-      return;
-    }
-    const rows = res.employees.map((emp) => {
-      const name = emp.displayName || `${emp.firstName || ''} ${emp.lastName || ''}`.trim();
-      const isNew = state.hiredThisSession.has(String(emp.id));
-      return { emp, name, isNew };
-    });
-
-    el.innerHTML = `
-      <table class="dir-table">
-        <thead><tr><th>Name</th><th>Title</th><th>Department</th><th>Email</th><th>Location</th></tr></thead>
-        <tbody>
-          ${rows
-            .map(
-              ({ emp, name, isNew }) => `
-              <tr>
-                <td><span class="dir-person">${avatar(name)}<span class="dir-name">${esc(name)}</span>${isNew ? '<span class="tag-new">New</span>' : ''}</span></td>
-                <td>${esc(dirValue(emp.jobTitle))}</td>
-                <td>${esc(dirValue(emp.department))}</td>
-                <td>${esc(emp.workEmail || '—')}</td>
-                <td>${esc(dirValue(emp.location))}</td>
-              </tr>`
-            )
-            .join('')}
-        </tbody>
-      </table>
-      <div class="dir-cards">
-        ${rows
-          .map(
-            ({ emp, name, isNew }) => `
-            <div class="dir-card">
-              ${avatar(name)}
-              <div class="dir-card-body">
-                <div class="dir-card-name">${esc(name)}${isNew ? '<span class="tag-new">New</span>' : ''}</div>
-                <div class="dir-card-sub">${esc([dirValue(emp.jobTitle), dirValue(emp.department)].filter((x) => x !== '—').join(' · ') || dirValue(emp.workEmail))}</div>
-              </div>
-            </div>`
-          )
-          .join('')}
-      </div>`;
-  } catch (err) {
-    if (gen !== state.generation) return;
-    el.innerHTML = `<div class="wh-empty-state">Could not load directory: ${esc(err.message)}</div>`;
-  }
-}
-
-$('#wh-refresh-directory').addEventListener('click', loadDirectory);
-
-// ── Sync ─────────────────────────────────────────────────────────────────────
-// Pulls candidates and the employee directory from BambooHR, only when asked.
-
-$('#wh-sync-btn').addEventListener('click', async () => {
-  const btn = $('#wh-sync-btn');
-  const label = btn.querySelector('.sync-label');
-  if (btn.disabled) return;
-  btn.disabled = true;
-  btn.classList.remove('is-done');
-  btn.classList.add('is-syncing');
-  label.textContent = 'Syncing';
-  const gen = state.generation;
-  try {
-    await loadSaved();
-    await loadStages();
-    const pulled = await loadCandidates();
-    await loadDirectory();
-    btn.classList.remove('is-syncing');
-    // The team changed while it ran: what came back was dropped, not synced.
-    if (gen !== state.generation) { label.textContent = 'Sync'; return; }
-    btn.classList.add('is-done');
-    label.textContent = 'Synced';
-    toast(pulled === 1 ? '1 candidate synced from BambooHR' : `${pulled} candidates synced from BambooHR`);
-    setTimeout(() => {
-      btn.classList.remove('is-done');
-      label.textContent = 'Sync';
-    }, 2200);
-  } catch (err) {
-    btn.classList.remove('is-syncing');
-    label.textContent = 'Sync';
-    toast(err.message, true);
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-// WPI Hire's Offline badge: this site's header says so on every page, this
-// one included, and every button that would fail is dimmed while it does.
-
 // ── Installed app ────────────────────────────────────────────────────────────
 
 const isStandalone =
@@ -1225,7 +728,7 @@ const isStandalone =
 // The service worker is this site's (public/sw.js), registered by the site.
 
 // Reopening the app should show current numbers. Only the app's own saved
-// records are re-read — BambooHR is still only ever pulled by pressing Sync.
+// records are re-read.
 // And while the page is open, every 30 seconds, as the rest of the site does:
 // a hire who signs while you watch appears without a reload.
 async function lookAgain() {
@@ -1339,7 +842,7 @@ $('#wh-signed-list').addEventListener('click', async (e) => {
     const h = state.completedHires.find((x) => x.reference === item.dataset.ref);
     if (!h) return;
     const name = `${h.firstName || ''} ${h.lastName || ''}`.trim() || h.email;
-    if (!confirm(`Remove ${name}'s signed paperwork (${h.reference}) from this list? The stored copies are deleted too. Copies already emailed, or filed in BambooHR, are not affected.`)) return;
+    if (!confirm(`Remove ${name}'s signed paperwork (${h.reference}) from this list? The stored copies are deleted too. Copies already emailed are not affected.`)) return;
     try {
       await api(`/api/hires/${encodeURIComponent(h.reference)}`, { method: 'DELETE' });
       state.localEdits++;
@@ -1370,121 +873,6 @@ function openSignedFor(email) {
     const el = $('#wh-signed-list').querySelector(`.signed-item[data-ref="${CSS.escape(h.reference)}"]`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
-}
-
-// ── Settings → Onboarding docs ───────────────────────────────────────────────
-// What WPI Hire read from its environment, set on the site's Settings page and
-// kept for the team. Saved by that page's Save settings button, with the rest.
-
-const SETTING_INPUTS = {
-  bambooSubdomain: '#onbBambooSubdomain',
-  companyName: '#onbCompanyName',
-  companyAddress: '#onbCompanyAddress',
-  companyEin: '#onbCompanyEin',
-  hrName: '#onbHrName',
-  hrEmail: '#onbHrEmail',
-  paperworkInbox: '#onbPaperworkInbox',
-  ccEmail: '#onbCcEmail',
-  timezone: '#onbTimezone',
-};
-let settingsDirty = false;
-let clearApiKey = false;
-let settingsFor = null;
-// The fields typed into since the last save. Every other field always shows
-// what the team has saved, even when its answer lands after the typing — so
-// saving one change never sends the others back empty.
-const touched = new Set();
-const keyInput = $('#onbBambooApiKey');
-// The card as the page first drew it, for a team whose answer has not come:
-// nothing of the last team's (a placeholder showing its address, its badge,
-// the last four of its key) is left behind.
-const CARD_AS_DRAWN = {
-  placeholders: Object.fromEntries([...Object.values(SETTING_INPUTS), '#onbBambooApiKey'].map((sel) => [sel, $(sel).placeholder])),
-  badge: $('#onbModeBadge').textContent,
-  badgeClass: $('#onbModeBadge').className,
-  hint: $('#onbBambooHint').textContent,
-};
-function clearSettingsCard() {
-  settingsDirty = false;
-  touched.clear();
-  clearApiKey = false;
-  settingsFor = null;
-  for (const [sel, ph] of Object.entries(CARD_AS_DRAWN.placeholders)) { $(sel).value = ''; $(sel).placeholder = ph; }
-  $('#onbBambooClear').hidden = true;
-  $('#onbModeBadge').textContent = CARD_AS_DRAWN.badge;
-  $('#onbModeBadge').className = CARD_AS_DRAWN.badgeClass;
-  $('#onbBambooHint').textContent = CARD_AS_DRAWN.hint;
-}
-
-[...Object.values(SETTING_INPUTS), '#onbBambooApiKey'].forEach((sel) =>
-  $(sel).addEventListener('input', () => { touched.add(sel); settingsDirty = true; })
-);
-$('#onbBambooClear').addEventListener('click', () => {
-  clearApiKey = true;
-  keyInput.value = '';
-  keyInput.placeholder = 'Removed when you save';
-  $('#onbBambooClear').hidden = true;
-  settingsDirty = true;
-  // The page's Save settings button marks itself as having something to save.
-  keyInput.dispatchEvent(new Event('input', { bubbles: true }));
-});
-
-function renderSettingsCard(s) {
-  const set = s.settings || {};
-  const eff = set.effective || {};
-  for (const [k, sel] of Object.entries(SETTING_INPUTS)) {
-    const el = $(sel);
-    if (!touched.has(sel)) el.value = set[k] || '';
-    // What applies when the field is left empty.
-    el.placeholder = eff[k] && !set[k] ? eff[k] : CARD_AS_DRAWN.placeholders[sel];
-  }
-  if (!eff.paperworkInbox) $('#onbPaperworkInbox').placeholder = s.email && s.email.from ? `${s.email.from} (your sending account)` : 'your sending account';
-  if (!eff.ccEmail && !eff.hrEmail) $('#onbCcEmail').placeholder = 'the HR email, if set';
-  if (!touched.has('#onbBambooApiKey')) {
-    keyInput.value = '';
-    clearApiKey = false;
-    keyInput.placeholder = set.bambooApiKeySet
-      ? `Saved (${set.bambooApiKeyHint})${set.bambooFromEnv ? ' from the server’s settings' : ''} — type a new one to replace it`
-      : 'BambooHR → your avatar → API Keys';
-    $('#onbBambooClear').hidden = !set.bambooApiKeySet || set.bambooFromEnv;
-  }
-  const badge = $('#onbModeBadge');
-  badge.textContent = s.mode === 'live' ? `BambooHR: ${s.subdomain}` : 'Sample data';
-  badge.className = `badge ${s.mode === 'live' ? 'tint-green' : 'tint-navy'}`;
-  $('#onbBambooHint').textContent = s.mode === 'live'
-    ? `Connected to ${s.subdomain}.bamboohr.com. Sync pulls candidates and the directory from it; hires and signed paperwork are filed on the employee's record.`
-    : 'Without BambooHR the page runs on sample data, as WPI Hire did — adding hires, sending packets and signing all still work.';
-}
-
-async function loadSettingsCard() {
-  const teamAtStart = state.teamId;
-  try {
-    const s = await api('/api/status');
-    if (teamAtStart !== state.teamId) return;
-    settingsFor = teamAtStart;
-    renderSettingsCard(s);
-  } catch {
-    $('#onbModeBadge').textContent = 'unavailable';
-  }
-}
-
-async function saveSettings() {
-  if (!settingsDirty) return null;
-  // Every field is sent, so the card has to be this team's: typed into before
-  // its answer came, the empty fields would clear what the team had saved.
-  if (settingsFor !== state.teamId) await loadSettingsCard();
-  if (settingsFor !== state.teamId) throw new Error('The Onboarding docs settings could not be loaded, so nothing was saved — try again in a moment.');
-  const body = {};
-  for (const [k, sel] of Object.entries(SETTING_INPUTS)) body[k] = $(sel).value.trim();
-  if (keyInput.value.trim()) body.bambooApiKey = keyInput.value.trim();
-  else if (clearApiKey) body.clearBambooApiKey = true;
-  const r = await api('/api/settings', { method: 'PUT', body });
-  settingsDirty = false;
-  touched.clear();
-  clearApiKey = false;
-  await loadSettingsCard();
-  if (state.booted) loadStatus().catch(() => {});
-  return r;
 }
 
 // ── For the rest of the site ─────────────────────────────────────────────────
@@ -1523,10 +911,6 @@ async function boot() {
   const gen = state.generation;
   await loadSaved();
   if (gen !== state.generation) return;
-  loadStatus().catch((e) => toast(e.message, true));
-  // Stage metadata only — candidates and the directory are pulled from
-  // BambooHR when Sync is pressed, never on their own.
-  loadStages().then(renderBoard).catch(() => {});
   loadDocuments().catch((e) => toast(e.message, true));
   renderStats();
   renderBoard();
@@ -1572,23 +956,15 @@ function deactivate() {
 
 // Is something half-done here that a reload would throw away?
 function busy() {
-  const open = (sel) => { const el = $(sel); return el && !el.hidden; };
-  const hireForm = $('#wh-hire-form');
-  return open('#wh-add-hire-panel') || open('#wh-upload-review')
-    || [...document.querySelectorAll('#wph .edit-form')].some((f) => !f.hidden)
+  return [...document.querySelectorAll('#wph .edit-form')].some((f) => !f.hidden)
     || Boolean($('#wh-send-packet-btn').disabled)
-    // A hire half-entered or on its way to BambooHR (pressed twice, it would
-    // be created twice), a card's packet sending, a Sync, a resume being read.
-    || open('#wh-hire-context')
-    || [...hireForm.querySelectorAll('input, select, textarea')].some((i) => i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.value.trim() && i.value !== i.defaultValue)
-    || Boolean(hireForm.querySelector('button[type="submit"]:disabled'))
-    || state.sending.size > 0
-    || Boolean($('#wh-sync-btn').disabled)
-    || open('#wh-upload-status');
+    // A packet being typed, or a card's packet on its way.
+    || packetValues() !== packetBaseline
+    || state.sending.size > 0;
 }
 
 // Signed in to another team, or signed out: nothing of the last team's stays
-// on screen — records, forms, results, the directory — and an answer still on
+// on screen — records, forms, results — and an answer still on
 // its way for it is dropped. `signedIn` says whether there is a team to look
 // again for.
 function reset(signedIn, teamId) {
@@ -1597,22 +973,17 @@ function reset(signedIn, teamId) {
   state.generation++;
   state.teamId = teamId || '';
   Object.assign(state, {
-    statuses: [], candidates: [], localCandidates: [], overrides: {}, storage: null, documents: [],
-    hiredStatusId: null, sends: {}, completedHires: [], synced: false, booted: false, openSigned: '', status: null,
+    localCandidates: [], overrides: {}, storage: null, documents: [],
+    sends: {}, completedHires: [], booted: false, openSigned: '',
   });
-  state.hiredThisSession = new Set();
-  ['#wh-add-hire-form', '#wh-upload-review', '#wh-hire-form', '#wh-packet-form'].forEach((sel) => $(sel).reset());
-  ['#wh-add-hire-panel', '#wh-upload-panel', '#wh-upload-review', '#wh-hire-context', '#wh-packet-result'].forEach((sel) => { $(sel).hidden = true; });
+  $('#wh-packet-form').reset();
+  packetSettled();
+  $('#wh-packet-result').hidden = true;
   $('#wh-doc-list').innerHTML = '';
   $('#wh-email-test-result').textContent = '';
-  $('#wh-email-badge').hidden = true;
-  $('#wh-head-status').hidden = true;
-  $('#wh-directory-list').innerHTML = '<div class="wh-empty-state">Press Refresh to load the directory from BambooHR.</div>';
   $('#wh-pipeline-stats').hidden = true;
   $('#wh-pipeline-board').innerHTML = '<div class="wh-empty-state" id="wh-pipeline-loading">Loading candidates…</div>';
   $('#wh-signed-list').innerHTML = '<p class="signed-empty">Loading…</p>';
-  // The settings card is this team's too.
-  clearSettingsCard();
   if (wasActive && signedIn) activate();
 }
 
@@ -1641,9 +1012,6 @@ async function openSigned(email) {
 
 window.Onboarding = {
   activate, deactivate, reset, busy, addFromCrm, openSigned, address, showCached,
-  loadSettingsCard, saveSettings,
-  settingsDirty: () => settingsDirty,
-  settingsFor: () => settingsFor,
   connect(hooks) { Object.assign(host, hooks); },
 };
 

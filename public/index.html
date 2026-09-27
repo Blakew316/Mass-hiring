@@ -626,21 +626,17 @@
     <section class="view" id="view-salesiq">
       <div class="siq siq-view" id="siq">
         <div class="stage stage-dash">
-
-          <div class="dash-head siq-head">
-            <div class="siq-head-text">
-              <p class="dash-date" id="siq-dash-date"></p>
-              <h1 class="dash-title">Hiring Dashboard</h1>
-              <p class="dash-subtitle" id="siq-dash-subtitle">Interviews, questionnaires and results in one place.</p>
+          <!-- The site's own header, as on every page: the Sales IQ app's
+               (its date line, "Hiring Dashboard" and subtitle) is not needed. -->
+          <header class="page-head">
+            <div>
+              <h1>Sales IQ</h1>
             </div>
-            <div class="siq-head-side">
-              <a class="header-pill" id="siq-btn-preview" href="/assessment/?preview=1" target="_blank" rel="noopener" title="Open the assessment as a candidate sees it — nothing is recorded">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-                <span>Preview<span class="hide-sm"> assessment</span></span>
-              </a>
-              <div class="head-chrome"></div>
+            <div class="head-actions">
+              <a class="btn" id="siq-btn-preview" href="/assessment/?preview=1" target="_blank" rel="noopener" title="Open the assessment as a candidate sees it — nothing is recorded"><span data-icon="eye" data-size="15"></span> Preview assessment</a>
             </div>
-          </div>
+            <div class="head-chrome"></div>
+          </header>
 
           <div class="stats" id="siq-stats">
             <button type="button" class="stat" data-stat="upcoming" aria-label="Upcoming interviews">
@@ -836,11 +832,8 @@
         <div class="head-actions wh-head-actions">
           <div class="wh-seg" role="tablist" aria-label="Onboarding docs sections">
             <button type="button" class="wh-seg-btn" data-tab="pipeline" role="tab" aria-selected="true">Pipeline</button>
-            <button type="button" class="wh-seg-btn" data-tab="hire" role="tab" aria-selected="false">Hire</button>
             <button type="button" class="wh-seg-btn" data-tab="onboarding" role="tab" aria-selected="false">Onboarding</button>
-            <button type="button" class="wh-seg-btn" data-tab="directory" role="tab" aria-selected="false">Directory</button>
           </div>
-          <button type="button" id="wh-head-status" class="badge tint-amber wh-head-status" title="Set up in Settings → Onboarding docs" hidden></button>
         </div>
         <div class="head-chrome"></div>
       </header>
@@ -851,19 +844,10 @@
                 <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
                 <span class="nav-label">Pipeline</span>
               </button>
-              <button class="nav-tab" data-tab="hire" role="tab">
-                <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M17 11l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                <span class="nav-label">Hire</span>
-              </button>
               <button class="nav-tab" data-tab="onboarding" role="tab">
                 <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <span class="nav-label">Onboarding</span>
               </button>
-              <button class="nav-tab" data-tab="directory" role="tab">
-                <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                <span class="nav-label">Directory</span>
-              </button>
-              <span class="wh-nav-status"><button type="button" id="wh-email-badge" class="pill pill-outline hide-sm" title="Set up in Settings → Onboarding docs" hidden>&nbsp;</button></span>
             </div>
           </nav>
         <div class="wh-main wh-shell">
@@ -873,99 +857,14 @@
       <div class="wh-page-head">
         <div>
           <h1>Candidate pipeline</h1>
-          <p class="page-sub">Everyone you are onboarding — press Sync to pull the latest from BambooHR</p>
+          <p class="page-sub">Everyone you are onboarding — add people from the Candidates page with Send onboarding docs</p>
         </div>
-        <div class="page-actions">
-          <button id="wh-add-hire-btn" class="wh-btn wh-btn-primary">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Add hire
-          </button>
-          <button id="wh-upload-resume-btn" class="wh-btn wh-btn-ghost">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Upload resume
-          </button>
-          <button id="wh-sync-btn" class="sync-btn" type="button" title="Sync hires from BambooHR">
-            <svg class="sync-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span class="sync-label">Sync</span>
-          </button>
-        </div>
-      </div>
-
-      <div id="wh-add-hire-panel" class="wh-card upload-panel" hidden>
-        <h2 class="card-heading">New hire details</h2>
-        <form id="wh-add-hire-form">
-          <div class="wh-field-grid">
-            <label class="field">First name<input name="firstName" required autocomplete="off" /></label>
-            <label class="field">Last name<input name="lastName" required autocomplete="off" /></label>
-            <label class="field span-2">Email — the onboarding packet is sent here<input name="email" type="email" required /></label>
-            <label class="field">Phone<input name="phone" type="tel" /></label>
-            <label class="field">Start date<input name="startDate" type="date" /></label>
-            <label class="field span-2">Role<input name="jobTitle" value="Account Executive" /></label>
-          </div>
-          <div class="edit-actions">
-            <button type="submit" class="wh-btn wh-btn-primary">Add to pipeline</button>
-            <button type="button" id="wh-add-hire-cancel" class="wh-btn wh-btn-ghost">Cancel</button>
-          </div>
-        </form>
-      </div>
-
-      <div id="wh-upload-panel" class="wh-card upload-panel" hidden>
-        <input type="file" id="wh-resume-file" accept=".pdf,.docx,.txt" hidden />
-        <div id="wh-dropzone" class="wh-dropzone">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 2v6h6M12 18v-6M9 15l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <p><strong>Drop a resume here</strong> or tap to choose a file</p>
-          <p class="fine-print">PDF, Word (.docx), or text · 4 MB max · name, email, and phone are read automatically</p>
-        </div>
-        <div id="wh-upload-status" class="upload-status" hidden></div>
-        <form id="wh-upload-review" hidden>
-          <p id="wh-upload-note" class="upload-note"></p>
-          <div class="wh-field-grid">
-            <label class="field">First name<input name="firstName" required /></label>
-            <label class="field">Last name<input name="lastName" required /></label>
-            <label class="field">Email<input name="email" type="email" /></label>
-            <label class="field">Phone<input name="phone" type="tel" /></label>
-            <label class="field span-2">Role / job title<input name="jobTitle" value="Account Executive" /></label>
-          </div>
-          <div class="edit-actions">
-            <button type="submit" class="wh-btn wh-btn-primary">Add candidate</button>
-            <button type="button" id="wh-upload-cancel" class="wh-btn wh-btn-ghost">Cancel</button>
-          </div>
-        </form>
       </div>
 
       <div id="wh-pipeline-stats" class="stat-row" hidden></div>
       <div id="wh-pipeline-board" class="stage-list">
         <div class="wh-empty-state" id="wh-pipeline-loading">Loading candidates…</div>
       </div>
-    </section>
-
-    <!-- ── HIRE ─────────────────────────────────────────────────────────── -->
-    <section id="wh-tab-hire" class="panel">
-      <div class="wh-page-head">
-        <div>
-          <h1>Hire a candidate</h1>
-          <p class="page-sub">Creates the employee record in BambooHR and marks the application as hired</p>
-        </div>
-      </div>
-
-      <div id="wh-hire-context" class="context-banner" hidden></div>
-
-      <form id="wh-hire-form" class="wh-card">
-        <div class="wh-field-grid">
-          <label class="field">First name<input name="firstName" required autocomplete="off" /></label>
-          <label class="field">Last name<input name="lastName" required autocomplete="off" /></label>
-          <label class="field">Email<input name="workEmail" type="email" /></label>
-          <label class="field">Mobile phone<input name="mobilePhone" /></label>
-          <label class="field">Job title<input name="jobTitle" /></label>
-          <label class="field">Department<input name="department" /></label>
-          <label class="field">Start date<input name="hireDate" type="date" /></label>
-          <label class="field">Location<input name="location" /></label>
-        </div>
-        <input type="hidden" name="applicationId" />
-        <div class="form-foot">
-          <button type="submit" class="wh-btn wh-btn-primary btn-wide-sm">Create employee in BambooHR</button>
-        </div>
-      </form>
     </section>
 
     <!-- ── ONBOARDING ───────────────────────────────────────────────────── -->
@@ -996,7 +895,6 @@
               </select>
             </label>
             <label class="field">Work location<input name="workLocation" /></label>
-            <label class="field">BambooHR employee #<input name="employeeId" placeholder="Auto-filled after hire" /></label>
           </div>
 
           <h2 class="card-heading">Documents</h2>
@@ -1005,8 +903,6 @@
           <h2 class="card-heading">Delivery</h2>
           <div class="option-list">
             <label class="option"><input type="checkbox" name="sendEmail" checked /><span class="option-box"></span>Email the packet to the new hire</label>
-            <label class="option"><input type="checkbox" name="ccHr" checked /><span class="option-box"></span>CC HR</label>
-            <label class="option"><input type="checkbox" name="uploadToBamboo" checked /><span class="option-box"></span>File copies on their BambooHR record</label>
           </div>
           <div class="email-test-row">
             <button type="button" id="wh-test-email-btn" class="wh-btn wh-btn-ghost wh-btn-sm">Test email settings</button>
@@ -1017,7 +913,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span id="wh-send-packet-label">Send onboarding packet</span>
           </button>
-          <p class="hero-note">Generates every document, emails the packet, and files it in BambooHR</p>
+          <p class="hero-note">Emails the new hire their link to read and sign every document</p>
         </form>
 
         <aside class="onboarding-side">
@@ -1032,9 +928,9 @@
           <div class="wh-card">
             <h2 class="card-heading">How it works</h2>
             <ol class="how-list">
-              <li>Hire a candidate from the Pipeline tab, or fill in the form directly.</li>
-              <li>Each document is generated as a personalized PDF — use Preview to check any of them first.</li>
-              <li>One click emails the complete packet and files copies on the employee's BambooHR record.</li>
+              <li>Send onboarding docs from the Candidates page, or fill in the form directly.</li>
+              <li>Use Preview to read any of the documents first.</li>
+              <li>One click emails the new hire their link; each signed copy comes back here, under Signed paperwork, and to your inbox.</li>
             </ol>
             <p class="fine-print">The documents are the company's own PDFs, published with the paperwork portal. The new hire reads each one in full, signs it there, and every signed copy carries an e-signature certificate.</p>
           </div>
@@ -1042,22 +938,6 @@
       </div>
     </section>
 
-    <!-- ── DIRECTORY ────────────────────────────────────────────────────── -->
-    <section id="wh-tab-directory" class="panel">
-      <div class="wh-page-head">
-        <div>
-          <h1>Directory</h1>
-          <p class="page-sub">Everyone in BambooHR — new hires appear here immediately</p>
-        </div>
-        <button id="wh-refresh-directory" class="wh-btn wh-btn-ghost">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Refresh
-        </button>
-      </div>
-      <div id="wh-directory-list" class="wh-card card-flush">
-        <div class="wh-empty-state">Press Refresh to load the directory from BambooHR.</div>
-      </div>
-    </section>
         </div>
       </div>
     </section>
@@ -1210,38 +1090,6 @@
 
           <!-- Onboarding docs: what WPI Hire took from its environment, set here
                and kept for this team. Saved with the rest by Save settings. -->
-          <div class="card" id="onbSettingsCard">
-            <div class="card-head">
-              <h2><span class="card-ico tone-navy" data-icon="signdoc" data-size="15"></span>Onboarding docs</h2>
-              <span class="badge" id="onbModeBadge">checking…</span>
-            </div>
-            <div class="hint">For the <button type="button" class="btn-link" data-goto="onboarding">Onboarding docs</button> page. Packets are emailed from the account above; everything here is optional.</div>
-            <div class="grid-2">
-              <div><label class="label" for="onbBambooSubdomain">BambooHR subdomain</label><input type="text" id="onbBambooSubdomain" class="input" autocomplete="off" spellcheck="false" placeholder="yourcompany (from yourcompany.bamboohr.com)"></div>
-              <div><label class="label" for="onbBambooApiKey">BambooHR API key</label>
-                <div class="field-row">
-                  <input type="password" id="onbBambooApiKey" class="input" autocomplete="new-password" placeholder="BambooHR → your avatar → API Keys">
-                  <button class="btn" id="onbBambooClear" type="button" hidden>Remove</button>
-                </div>
-              </div>
-            </div>
-            <div class="hint" id="onbBambooHint">Without BambooHR the page runs on sample data, as WPI Hire did — hires and packets still work.</div>
-            <div class="grid-2">
-              <div><label class="label" for="onbCompanyName">Company name</label><input type="text" id="onbCompanyName" class="input"></div>
-              <div><label class="label" for="onbCompanyEin">Employer EIN <span class="muted small">(W-4, Step 5)</span></label><input type="text" id="onbCompanyEin" class="input" placeholder="12-3456789"></div>
-            </div>
-            <label class="label" for="onbCompanyAddress">Company address</label>
-            <input type="text" id="onbCompanyAddress" class="input">
-            <div class="grid-2">
-              <div><label class="label" for="onbHrName">Signed by <span class="muted small">(packet emails)</span></label><input type="text" id="onbHrName" class="input"></div>
-              <div><label class="label" for="onbHrEmail">HR email</label><input type="email" id="onbHrEmail" class="input" placeholder="hr@company.com"></div>
-              <div><label class="label" for="onbPaperworkInbox">Signed paperwork goes to</label><input type="email" id="onbPaperworkInbox" class="input"></div>
-              <div><label class="label" for="onbCcEmail">“CC HR” copies go to</label><input type="email" id="onbCcEmail" class="input"></div>
-            </div>
-            <label class="label" for="onbTimezone">Time zone <span class="muted small">(the date and time on each signature)</span></label>
-            <input type="text" id="onbTimezone" class="input" autocomplete="off" spellcheck="false" placeholder="America/Chicago">
-          </div>
-
           <div class="card">
             <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
             <div class="grid-2">

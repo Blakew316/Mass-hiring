@@ -25,9 +25,6 @@ const shared = {
   // The built-in flyer (assets/attachments), and the onboarding documents,
   // logo and letter templates, travel inside the bundle.
   loader: { '.png': 'binary', '.pdf': 'binary', '.md': 'text' },
-  // unpdf can load a separately installed pdf.js instead of its own bundled
-  // build; this app never asks it to, so that import is left unresolved.
-  external: ['pdfjs-dist'],
   logLevel: 'info',
   // Bundled CommonJS packages still use require()/__dirname/__filename. Netlify's
   // packager prepends its own `let require/__dirname/__filename` shims to the
