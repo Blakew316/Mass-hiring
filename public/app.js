@@ -1400,7 +1400,7 @@
           <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
           <div><div class="cand-name">${esc(displayName)}</div>
           ${(c.role || c.company) ? `<div class="cand-line m-only">${esc([c.role, c.company].filter(Boolean).join(' · '))}</div>` : ''}
-          ${c.pastRoles ? `<div class="cand-sub m-only">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}
+          ${c.pastRoles ? `<div class="cand-past m-only">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}
           ${pri ? `<div class="cand-sub why-text">${esc(pri.reason)}</div>`
             : blockedWhy ? `<div class="cand-sub muted">not texting: ${esc(blockedWhy)}</div>`
             : (c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>

@@ -447,7 +447,8 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     font-size: 13px; line-height: 1.35; color: var(--ink-soft); margin-top: 1px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .name-cell .cand-sub { font-size: 12px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name-cell .cand-sub, .name-cell .cand-past { font-size: 12px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cand-past { color: var(--muted); }
 
   /* The two detail lines each carry a small glyph in the gutter under the tick
      box, so the eye finds the address and the number without reading. */
