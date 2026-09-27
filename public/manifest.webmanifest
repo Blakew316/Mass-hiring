@@ -36,6 +36,12 @@
       "short_name": "Email",
       "url": "/#template",
       "icons": [{ "src": "/icons/app-light-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Onboarding docs",
+      "short_name": "Onboarding",
+      "url": "/#onboarding",
+      "icons": [{ "src": "/icons/app-light-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ]
 }

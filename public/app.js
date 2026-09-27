@@ -155,6 +155,10 @@
     // once there was a team before this one: the first sign-in has nothing
     // to clear away, and a report link it was opened with must survive it.
     if (changed && previous && window.SalesIQ) window.SalesIQ.reset(Boolean(currentTeam));
+    // The Onboarding docs page likewise — and it is told which team it now
+    // belongs to even the first time, since it keeps a copy of its records in
+    // this browser under the team's name.
+    if (changed && window.Onboarding) window.Onboarding.reset(Boolean(currentTeam), currentTeam ? currentTeam.id : '');
     renderTeamChip();
   }
 
@@ -260,6 +264,7 @@
     // The Sales IQ page stops looking, and puts away any sheet it had open:
     // its sheets sit above everything, the sign-in screen included.
     if (window.SalesIQ) window.SalesIQ.deactivate();
+    if (window.Onboarding) window.Onboarding.deactivate();
     $('#loginScreen').hidden = false;
     $('#newTeamForm').hidden = true;
     $('#loginForm').hidden = false;
@@ -436,6 +441,7 @@
     renderAll();
     // Back from a sign-in with Sales IQ on screen: it looks again.
     if (currentView === 'salesiq' && window.SalesIQ) window.SalesIQ.activate();
+    if (currentView === 'onboarding' && window.Onboarding) window.Onboarding.activate();
     stateTag = tag;
     return true;
   }
@@ -535,14 +541,22 @@
     // the window, everything else is capped for reading.
     if (mainEl) mainEl.dataset.view = view;
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+    // A page that lives in More on a phone lights up More.
+    $('#navMore').classList.toggle('active', Boolean($(`.nav-item[data-overflow][data-view="${view}"]`)));
     // Anything that fell behind while you were on another page is drawn now,
     // rather than on every poll for six pages at once.
     if (staleViews.has(view)) renderView(view);
     // Sales IQ keeps its own list (public/salesiq.js), and looks for changes
     // only while it is the page on screen.
     if (window.SalesIQ) { if (view === 'salesiq') window.SalesIQ.activate(); else window.SalesIQ.deactivate(); }
+    // So does Onboarding docs (public/onboarding.js), once there is a team:
+    // before the first answer names one, it would be looking as nobody.
+    if (window.Onboarding) { if (view === 'onboarding' && currentTeam) window.Onboarding.activate(); else window.Onboarding.deactivate(); }
     // The editors moved to Settings; Email and Texting are conversations only.
-    if (view === 'settings') { renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls(); }
+    if (view === 'settings') {
+      renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls();
+      if (window.Onboarding && currentTeam) window.Onboarding.loadSettingsCard();
+    }
     if (view === 'texting') renderTexting();
     // Arriving at a page is arriving at its list, never at whatever thread was
     // open the last time you were here.
@@ -583,12 +597,31 @@
   // Typing a page into the address bar, or following a link to #texting from
   // outside, changes the hash without reloading and without a popstate.
   window.addEventListener('hashchange', () => route(viewInAddressBar(), false));
-  $$('.nav-item').forEach((b) => b.addEventListener('click', () => {
+  $$('.nav-item[data-view]').forEach((b) => b.addEventListener('click', () => {
     // Tapping the tab you are already on is how iOS pops back to the top of
     // it — here, out of an open conversation.
     if (b.dataset.view === currentView && threadIsOpen()) { backFromThread(); return; }
     show(b.dataset.view);
   }));
+  // More: the pages the phone's tab bar has no room for, as a list. Built
+  // from the tab bar itself each time, so the two can never disagree.
+  $('#navMore').addEventListener('click', () => {
+    $('#moreSheetButtons').innerHTML = $$('.nav-item[data-overflow]').map((b) => {
+      const here = b.dataset.view === currentView;
+      return `<button type="button" class="sheet-btn more-row${here ? ' is-current' : ''}" data-more="${esc(b.dataset.view)}"${here ? ' aria-current="page"' : ''}>
+        <span class="more-ico">${icon(b.querySelector('.nav-ico').dataset.icon, 18)}</span>
+        <span class="more-label">${esc(b.querySelector('.nav-label').textContent)}</span>
+        <span class="more-chev">${icon('chevron', 14)}</span>
+      </button>`;
+    }).join('');
+    openModal('#moreSheet');
+  });
+  $('#moreSheetButtons').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-more]');
+    if (!b) return;
+    closeModal($('#moreSheet'));
+    show(b.dataset.more);
+  });
   document.addEventListener('click', (e) => {
     const go = e.target.closest('[data-goto]');
     if (go) show(go.dataset.goto);
@@ -599,6 +632,17 @@
       renderFeed();
     }
   });
+
+  // Onboarding docs (public/onboarding.js) reaches the rest of the site through
+  // these: a lapsed session goes to the sign-in screen, its links go to pages
+  // here, and a packet sent or signed there redraws the badges on Candidates.
+  if (window.Onboarding) {
+    window.Onboarding.connect({
+      signedOut: () => { if ($('#loginScreen').hidden) showLogin(); },
+      show: (view) => show(view),
+      changed: () => { refresh().catch(() => {}); },
+    });
+  }
 
   // ---------------- Dashboard ----------------
   function renderDashboard() {
@@ -726,7 +770,7 @@
     if (s.status === 'invited') return '<span class="badge iq-badge tint-navy" title="Sent the Sales IQ questionnaire — waiting on their answers">Questionnaire sent</span>';
     return '';
   }
-  const iqLine = (c) => { const b = iqBadge(iqOf(c)); return b ? `<div class="cand-iq">${b}</div>` : ''; };
+  const iqLine = (c) => { const b = [iqBadge(iqOf(c)), onbBadge(onbOf(c))].filter(Boolean).join(' '); return b ? `<div class="cand-iq">${b}</div>` : ''; };
   function iqActionLabel(c) {
     const s = iqOf(c);
     if (s && s.status === 'completed') return 'See their Sales IQ result';
@@ -767,6 +811,39 @@
       await refresh();
     } catch (err) {
       if (!iqNeedsResults(err)) oops(err);
+    }
+  }
+
+  // ---------------- Onboarding docs, beside a candidate ----------------
+  // Whether someone has been sent their onboarding packet, and whether it has
+  // come back signed — by address, from the state, as with Sales IQ.
+  function onbOf(c) {
+    const by = (state && state.onboarding && state.onboarding.byEmail) || {};
+    return by[String((c && c.email) || '').trim().toLowerCase()] || null;
+  }
+  function onbBadge(o) {
+    if (!o) return '';
+    if (o.signedAt) return '<span class="badge iq-badge tint-green" title="Signed and returned their onboarding paperwork">Docs signed</span>';
+    if (o.sentAt) return '<span class="badge iq-badge tint-navy" title="Sent their onboarding packet — waiting on their signature">Docs sent</span>';
+    return '';
+  }
+  function onbActionLabel(c) {
+    const o = onbOf(c);
+    if (o && o.signedAt) return 'See their signed paperwork';
+    return 'Send onboarding docs';
+  }
+  // Onto the Onboarding docs pipeline (once), and there, on their card —
+  // where one tap sends the packet.
+  async function sendOnb(c) {
+    const name = c.name || c.email;
+    if (!c.email) { toast(`${name} has no email address to send the onboarding packet to.`, true); return; }
+    const o = onbOf(c);
+    if (o && o.signedAt) { window.Onboarding.openSigned(c.email).catch(oops); return; }
+    try {
+      const r = await window.Onboarding.addFromCrm(c);
+      if (!r.already) toast(`${String(name).split(' ')[0]} is on the Onboarding docs pipeline — send their packet from their card.`);
+    } catch (err) {
+      oops(err);
     }
   }
 
@@ -1018,6 +1095,8 @@
     // A finished Sales IQ questionnaire: the step after a booking, so it too
     // shows whichever channel the feed is filtered to.
     assessed:       { ico: 'clipboard', cls: 'tint-blue', ch: 'both',  tag: '' },
+    // Onboarding paperwork signed and returned: the last step of all.
+    signed:         { ico: 'signdoc',   cls: 'tint-green', ch: 'both', tag: '' },
   };
 
   function readFeedChannel() {
@@ -1056,7 +1135,7 @@
       ? 'No texting updates yet — reads, replies and opt-outs show up here.'
       : feedChannel === 'email'
         ? 'No email updates yet — opens and replies show up here.'
-        : 'No updates yet — opens, replies, texts, bookings, cancellations and finished questionnaires show up here.';
+        : 'No updates yet — opens, replies, texts, bookings, cancellations, finished questionnaires and signed paperwork show up here.';
     $('#activityList').innerHTML = list.length
       ? list.map((ev) => {
           const k = FEED_KIND[ev.type];
@@ -1512,6 +1591,7 @@
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
           ${textPhoneOf(c) ? `<button class="icon-btn act-text" title="Send a text">${icon('bubble', 16)}</button>` : ''}
           ${c.email ? `<button class="icon-btn act-iq" title="${esc(iqActionLabel(c))}">${icon('clipboard', 16)}</button>` : ''}
+          ${c.email ? `<button class="icon-btn act-onb" title="${esc(onbActionLabel(c))}">${icon('signdoc', 16)}</button>` : ''}
           ${c.status === 'emailed' ? `<button class="icon-btn act-followup" title="Follow up (reply in the same conversation)">${icon('reply', 16)}</button>` : ''}
           <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
         </div></td>
@@ -1571,7 +1651,7 @@
     // The Text column is the fastest way in for the thing people actually
     // want: putting a number on someone who has none.
     if (e.target.closest('.add-number')) { openCandidate(cand, { focus: 'phone' }); return; }
-    const act = ['act-edit', 'act-email', 'act-text', 'act-followup', 'act-iq', 'act-delete'].find((a) => e.target.closest(`.${a}`));
+    const act = ['act-edit', 'act-email', 'act-text', 'act-followup', 'act-iq', 'act-onb', 'act-delete'].find((a) => e.target.closest(`.${a}`));
     if (act) candidateAction(act, cand);
   });
 
@@ -1586,6 +1666,7 @@
     else if (act === 'act-text') openTextCompose([id]);
     else if (act === 'act-followup') openCompose([id], null, { followUp: true });
     else if (act === 'act-iq') sendIq(cand);
+    else if (act === 'act-onb') sendOnb(cand);
     else if (act === 'act-delete') {
       if (confirm(`Remove ${cand.name || cand.email} from the pipeline?`)) {
         api(`/api/candidates/${id}`, { method: 'DELETE' })
@@ -1606,6 +1687,7 @@
     ['act-text', 'Send text from the Mac', 'bubble'],
     ['act-followup', 'Follow up', 'reply'],
     ['act-iq', 'Send Sales IQ questionnaire', 'clipboard'],
+    ['act-onb', 'Send onboarding docs', 'signdoc'],
     ['act-edit', 'Edit details', 'doc'],
     ['act-delete', 'Remove from list', 'trash'],
   ];
@@ -1620,7 +1702,7 @@
       .map((t) => `<span class="nowrap">${esc(t)}</span>`).join(' · ');
     $('#actionSheetButtons').innerHTML = SHEET_ACTS
       .filter(([cls]) => tr.querySelector(`.row-actions .${cls}`))
-      .map(([cls, label, ico]) => `<button type="button" class="sheet-btn${cls === 'act-delete' ? ' is-danger' : ''}" data-act="${cls}">${icon(ico, 18)}<span>${cls === 'act-iq' ? esc(iqActionLabel(c)) : label}</span></button>`)
+      .map(([cls, label, ico]) => `<button type="button" class="sheet-btn${cls === 'act-delete' ? ' is-danger' : ''}" data-act="${cls}">${icon(ico, 18)}<span>${cls === 'act-iq' ? esc(iqActionLabel(c)) : cls === 'act-onb' ? esc(onbActionLabel(c)) : label}</span></button>`)
       .join('');
     openModal('#actionSheet');
   }
@@ -4341,6 +4423,9 @@
   }
 
   async function saveSettings(extra = {}) {
+    // The Onboarding docs card first: its fields are checked on the server
+    // (an email address, a time zone), and nothing is saved while one is wrong.
+    if (window.Onboarding) await window.Onboarding.saveSettings();
     const body = {
       calendlyUrl: $('#setCalendlyUrl').value,
       calendlyToken: $('#calendlyToken').value,
@@ -4655,6 +4740,7 @@
     if (state.texting && state.texting.queue && state.texting.queue.active) return true;
     if ($('.modal-backdrop:not([hidden])')) return true;
     if (window.SalesIQ && window.SalesIQ.busy()) return true;
+    if (window.Onboarding && (window.Onboarding.busy() || window.Onboarding.settingsDirty())) return true;
     if (templateDirty || followUpDirty || settingsDirty || textTemplateDirty) return true;
     const el = document.activeElement;
     if (el && /^(INPUT|TEXTAREA)$/.test(el.tagName) && el.value) return true;

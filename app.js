@@ -29,6 +29,8 @@ const priority = require('./lib/priority');
 const backups = require('./lib/backups');
 const presets = require('./lib/presets');
 const salesiq = require('./lib/salesiq');
+const onboarding = require('./lib/onboarding');
+const onboardingRoutes = require('./lib/onboarding-routes');
 const crypto = require('crypto');
 const { renderEmail, renderText, escapeHtml } = require('./lib/template');
 
@@ -371,7 +373,7 @@ app.get('/api/state', asyncRoute(async (req, res) => {
   // Four independent reads. On Netlify Blobs each one is its own round trip, so
   // awaiting them in a line made this route as slow as the sum of them; nothing
   // here depends on anything else here.
-  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList, iq] = await Promise.all([
+  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList, iq, onb] = await Promise.all([
     google.status(db.settings),
     textQueue.loadQ(),
     queue.loadQ(),
@@ -379,6 +381,7 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     storage.backend(),
     backups.list().catch(() => []),
     salesiq.load().catch(() => salesiq.blank()),
+    onboarding.load().catch(() => onboarding.blank()),
   ]);
   // Derived from the status above rather than fetching it a second time.
   const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
@@ -425,6 +428,8 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     // Where each person stands with the Sales IQ questionnaire, by address,
     // so a candidate row or an interview can say so without the whole list.
     salesiq: salesiq.summary(iq),
+    // And with their onboarding paperwork: packet sent, and signed.
+    onboarding: onboarding.summary(onb),
   };
 
   // The browser asks for this every 30 seconds and most of the time nothing
@@ -2858,6 +2863,13 @@ async function notifyIqCompletion(reportId, ctx) {
     r.emailError = emailError;
   }).catch(() => {});
 }
+
+// ---------- Onboarding docs, built in ----------
+// WPI Hire — the onboarding pipeline, hiring into BambooHR, and the new-hire
+// paperwork portal with its e-signatures — as a page of this app. Its routes
+// are in lib/onboarding-routes.js: /api/onboarding/* behind the team sign-in,
+// and the hire's two, /api/paperwork/*, open to a signed link only.
+app.use(onboardingRoutes.router);
 
 // ---------- Phone notification test ----------
 app.post('/api/test-notification', asyncRoute(async (_req, res) => {

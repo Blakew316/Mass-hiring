@@ -27,7 +27,7 @@
  * the app is byte for byte the app it was before.
  */
 
-const BUILD = '9377388c86';
+const BUILD = '408968dcdc';
 const SHELL = `shell-${BUILD}`;
 const ASSETS = 'assets-v1';
 const FONTS = 'fonts-v1';
@@ -45,6 +45,8 @@ const PRECACHE = [
   '/xlsx-lite.js',
   '/salesiq.css',
   '/salesiq.js',
+  '/onboarding.css',
+  '/onboarding.js',
   '/manifest.webmanifest',
   '/assets/logo.png',
   '/assets/logo-dark.png',
@@ -105,6 +107,7 @@ self.addEventListener('message', (event) => {
 // drop the session cookie and every call would come back 401.
 const LIVE = /^\/(api|auth|webhooks)(\/|$)/;
 const ASSESSMENT = /^\/assessment(\/|$)/;
+const PAPERWORK = /^\/paperwork(\/|$)/;
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
@@ -122,6 +125,10 @@ self.addEventListener('fetch', (event) => {
   //      what the navigation rule below would otherwise hand a manager who
   //      opens "Run assessment on this device".
   if (sameOrigin && ASSESSMENT.test(url.pathname)) return;
+
+  // (1c) Likewise the new-hire paperwork portal and its documents: a page for
+  //      someone signing, always fetched fresh, never the dashboard's shell.
+  if (sameOrigin && PAPERWORK.test(url.pathname)) return;
 
   // (2) A page. Paint the shell straight from the cache — no network wait,
   //     which is what makes a cold launch feel instant — then fall back.

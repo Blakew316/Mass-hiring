@@ -9,13 +9,15 @@ import { gzipSync } from 'node:zlib';
 import serverless from 'serverless-http';
 import app from '../../app.js';
 
-const lambda = serverless(app);
+// PDFs (the onboarding documents and signed copies) come back as bytes; every
+// other response is text, exactly as before.
+const lambda = serverless(app, { binary: ['application/pdf'] });
 
-export default async (request) => {
+export default async (request, context) => {
   const started = Date.now();
   const url = new URL(request.url);
   try {
-    return await handle(request, url);
+    return await handle(request, url, context);
   } catch (err) {
     // Never let an unexpected failure surface as Netlify's bare 502 page:
     // log it (visible under Logs → Functions → api) and answer with the message.
@@ -33,9 +35,21 @@ export default async (request) => {
   }
 };
 
-async function handle(request, url) {
+async function handle(request, url, context) {
   const headers = {};
   request.headers.forEach((value, key) => { headers[key] = value; });
+  // Where the connection came from, as Netlify's edge placed it — recorded on
+  // a signed onboarding packet beside the IP address. Only ever this value:
+  // whatever a browser sent under the same name is thrown away first.
+  delete headers['x-wpo-geo'];
+  const geo = context && context.geo;
+  if (geo && (geo.city || (geo.country && geo.country.name))) {
+    headers['x-wpo-geo'] = JSON.stringify({
+      city: geo.city || '',
+      subdivision: geo.subdivision ? { code: geo.subdivision.code || '', name: geo.subdivision.name || '' } : null,
+      country: geo.country ? { code: geo.country.code || '', name: geo.country.name || '' } : null,
+    });
+  }
   const query = {};
   url.searchParams.forEach((value, key) => { query[key] = value; });
   const body = request.method === 'GET' || request.method === 'HEAD' ? '' : await request.text();

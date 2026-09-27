@@ -5,6 +5,10 @@
 
 [functions]
   directory = "netlify/functions"
+  # The API's lazily loaded chunks (see scripts/build-function.mjs). Its entry
+  # imports them, so they are traced anyway; this says so outright, because an
+  # API that deployed without them would fail only when a PDF is first needed.
+  included_files = ["netlify/functions/api/chunks/*.mjs"]
 
 # Routing for /api/*, /auth/* and /webhooks/* is declared by the function
 # itself (see `config.path` in netlify/src/api.mjs); everything else is the
@@ -47,6 +51,16 @@
   for = "/assessment/*"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+# The new-hire paperwork portal, opened from the packet email. Like the
+# questionnaire it must never be served stale, and it is nobody's business in
+# a search index: each visit is one person's signed link.
+[[headers]]
+  for = "/paperwork/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    X-Robots-Tag = "noindex, nofollow"
+    Referrer-Policy = "no-referrer"
 
 # Some browsers refuse a manifest served as text/plain, and then the app is
 # quietly not installable with nothing in the console to say why.
