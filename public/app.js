@@ -5147,6 +5147,12 @@
       } catch (err) {
         if (err.message === 'Please sign in.' || err.message === 'Set APP_PASSWORD first.') return;
         if (first) oops(err);
+        // Opened with no connection on Onboarding docs: what this device kept
+        // for the team it was last signed in to, while the retries go on.
+        if (first && !currentTeam && lastTeam() && viewInAddressBar() === 'onboarding' && window.Onboarding) {
+          show('onboarding', { record: false });
+          window.Onboarding.showCached(lastTeam());
+        }
         mountConnection();
         pollFails += 1;
         renderConnection();

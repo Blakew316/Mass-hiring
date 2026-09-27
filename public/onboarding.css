@@ -1254,6 +1254,28 @@
    way to switch between the parts of one screen — this site's own tab bar
    along the bottom is for switching screens. */
 #view-onboarding .wh-seg { display: none; }
+
+/* WPI Hire's warning badge ("Records not saving", "Email simulated") showed
+   at every window wider than 760px. Where the tab row that carries it is too
+   narrow for it — the page column beside the sidebar under 760px, a window
+   up to 1064px — or hidden, as in the phone layout on a small tablet, it is
+   in the page header instead. On a phone it is hidden, as it was. */
+#view-onboarding .wh-head-status { display: none; }
+@media (min-width: 761px) and (max-width: 1064px) {
+  #view-onboarding .wh-head-status:not([hidden]) {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    border: 0;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+}
 @media (max-width: 800px) {
   #view-onboarding .wph .site-nav { display: none; }
   #view-onboarding .wh-head-actions { width: 100%; }

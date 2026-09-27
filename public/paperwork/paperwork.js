@@ -250,9 +250,15 @@ async function boot() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: state.token }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
+    const data = await res.json().catch(() => ({}));
+    // Refused: the link itself is wrong or has expired. Anything else is the
+    // server having trouble, and the link is fine — saying it isn't would
+    // only have the hire ask for a new one.
+    if (res.status === 400 || res.status === 401) {
       return showGateError('This link isn\'t valid.', data.error || 'Ask your hiring contact to send a fresh link.');
+    }
+    if (!res.ok || !data.ok) {
+      return showGateError('We couldn\'t load your paperwork.', 'Something went wrong on our side. Please refresh the page in a moment.');
     }
     state.hire = data.hire;
     state.company = data.company;

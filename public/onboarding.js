@@ -40,6 +40,11 @@ const state = {
   generation: 0,
   // The completed hire whose record is open in Signed paperwork.
   openSigned: '',
+  // Cards whose packet is on its way (their Send button stays "Sending…"
+  // however often the board is drawn), and a count of changes made here —
+  // an answer asked for before the latest one would undo it on screen.
+  sending: new Set(),
+  localEdits: 0,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -86,6 +91,7 @@ function loadLocalCandidates() {
   return cacheGet(LOCAL_CANDIDATES_KEY, []) || [];
 }
 function saveLocalCandidates() {
+  state.localEdits++;
   cacheSet(LOCAL_CANDIDATES_KEY, state.localCandidates);
 }
 // A record the server refused is taken back off the board and the cache.
@@ -102,9 +108,13 @@ function allCandidates() {
 // Pulls the saved records from the server; the cache covers a failed request.
 async function loadSaved() {
   const gen = state.generation;
+  const edits = state.localEdits;
   try {
     const res = await api('/api/saved');
     if (gen !== state.generation) return;
+    // Something was added, changed or sent here while this was on its way:
+    // the answer predates it. The next look brings both.
+    if (edits !== state.localEdits) return;
     state.localCandidates = Array.isArray(res.candidates) ? res.candidates : [];
     state.overrides = {};
     for (const o of res.overrides || []) {
@@ -119,7 +129,7 @@ async function loadSaved() {
     }
     state.completedHires = Array.isArray(res.hires) ? res.hires : [];
     state.storage = res.storage || null;
-    saveLocalCandidates();
+    cacheSet(LOCAL_CANDIDATES_KEY, state.localCandidates);
     cacheSet(OVERRIDES_KEY, state.overrides);
   } catch (err) {
     if (gen !== state.generation) return;
@@ -151,6 +161,7 @@ function progressOf(c) {
 // Records the send locally the moment it succeeds, so the tiles and cards move
 // without waiting for the next round-trip. The server stores it durably too.
 function noteSend(email) {
+  state.localEdits++;
   const key = emailKey(email);
   if (!key) return;
   state.sends[key] = { ...(state.sends[key] || {}), email, sentAt: new Date().toISOString() };
@@ -165,6 +176,7 @@ function loadOverrides() {
 }
 
 async function saveOverride(id, data) {
+  state.localEdits++;
   if (data) state.overrides[String(id)] = data;
   else delete state.overrides[String(id)];
   cacheSet(OVERRIDES_KEY, state.overrides);
@@ -352,9 +364,15 @@ async function loadStatus() {
   // so the badge can go as well as come.
   badge.textContent = warning || '\u00a0';
   badge.hidden = !warning;
+  // The same, in the page header, for widths where the tab row that carries
+  // it is hidden or too narrow for it (see onboarding.css).
+  const head = $('#wh-head-status');
+  head.textContent = warning;
+  head.hidden = !warning;
 }
 // Each of those is put right in Settings.
 $('#wh-email-badge').addEventListener('click', () => openSettings());
+$('#wh-head-status').addEventListener('click', () => openSettings());
 
 function openSettings() {
   host.show('settings');
@@ -481,10 +499,12 @@ function candidateCard(c) {
            <button class="wh-btn wh-btn-ghost wh-btn-sm remove-local">Remove</button>`
         : `<select class="wh-select wh-status-select" aria-label="Move to stage">${statusOptions}</select>
            <button class="wh-btn wh-btn-primary wh-btn-sm hire-btn">Hire</button>`}
-      <button class="wh-btn wh-btn-ghost wh-btn-sm send-packet-quick" ${a.email ? '' : 'disabled title="No email on file"'}>
+      ${state.sending.has(String(c.id))
+        ? '<button class="wh-btn wh-btn-ghost wh-btn-sm send-packet-quick" disabled>Sending…</button>'
+        : `<button class="wh-btn wh-btn-ghost wh-btn-sm send-packet-quick" ${a.email ? '' : 'disabled title="No email on file"'}>
         <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Send onboarding packet
-      </button>
+      </button>`}
     </div>
   </div>`;
 }
@@ -499,6 +519,7 @@ async function quickSendPacket(c, btn) {
   btn.disabled = true;
   const original = btn.innerHTML;
   btn.textContent = 'Sending…';
+  state.sending.add(String(c.id));
   try {
     const hire = {
       firstName: a.firstName || '',
@@ -528,9 +549,22 @@ async function quickSendPacket(c, btn) {
   } catch (err) {
     toast(err.message, true);
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = original;
+    state.sending.delete(String(c.id));
+    // The board may have been drawn again meanwhile: this card's button as
+    // it is now, not the one that was pressed.
+    const now = document.querySelector(`#wh-pipeline-board .candidate-card[data-id="${CSS.escape(String(c.id))}"] .send-packet-quick`) || btn;
+    now.disabled = false;
+    now.innerHTML = original;
   }
+}
+
+// Is someone in the middle of something on the board? Then a look for news
+// leaves it be: redrawn, an open edit form would close and lose what was
+// typed, and a stage menu would shut mid-choice.
+function boardInUse() {
+  const board = $('#wh-pipeline-board');
+  return [...board.querySelectorAll('.edit-form')].some((f) => !f.hidden)
+    || board.contains(document.activeElement);
 }
 
 function renderBoard() {
@@ -1198,7 +1232,7 @@ async function lookAgain() {
   if (document.hidden || !state.active) return;
   await loadSaved();
   renderStats();
-  renderBoard();
+  if (!boardInUse()) renderBoard();
   renderSigned();
 }
 document.addEventListener('visibilitychange', lookAgain);
@@ -1308,6 +1342,7 @@ $('#wh-signed-list').addEventListener('click', async (e) => {
     if (!confirm(`Remove ${name}'s signed paperwork (${h.reference}) from this list? The stored copies are deleted too. Copies already emailed, or filed in BambooHR, are not affected.`)) return;
     try {
       await api(`/api/hires/${encodeURIComponent(h.reference)}`, { method: 'DELETE' });
+      state.localEdits++;
       state.completedHires = state.completedHires.filter((x) => x.reference !== h.reference);
       state.openSigned = '';
       renderSigned();
@@ -1538,9 +1573,18 @@ function deactivate() {
 // Is something half-done here that a reload would throw away?
 function busy() {
   const open = (sel) => { const el = $(sel); return el && !el.hidden; };
+  const hireForm = $('#wh-hire-form');
   return open('#wh-add-hire-panel') || open('#wh-upload-review')
     || [...document.querySelectorAll('#wph .edit-form')].some((f) => !f.hidden)
-    || Boolean($('#wh-send-packet-btn').disabled);
+    || Boolean($('#wh-send-packet-btn').disabled)
+    // A hire half-entered or on its way to BambooHR (pressed twice, it would
+    // be created twice), a card's packet sending, a Sync, a resume being read.
+    || open('#wh-hire-context')
+    || [...hireForm.querySelectorAll('input, select, textarea')].some((i) => i.type !== 'hidden' && i.type !== 'checkbox' && i.type !== 'radio' && i.value.trim() && i.value !== i.defaultValue)
+    || Boolean(hireForm.querySelector('button[type="submit"]:disabled'))
+    || state.sending.size > 0
+    || Boolean($('#wh-sync-btn').disabled)
+    || open('#wh-upload-status');
 }
 
 // Signed in to another team, or signed out: nothing of the last team's stays
@@ -1562,6 +1606,7 @@ function reset(signedIn, teamId) {
   $('#wh-doc-list').innerHTML = '';
   $('#wh-email-test-result').textContent = '';
   $('#wh-email-badge').hidden = true;
+  $('#wh-head-status').hidden = true;
   $('#wh-directory-list').innerHTML = '<div class="wh-empty-state">Press Refresh to load the directory from BambooHR.</div>';
   $('#wh-pipeline-stats').hidden = true;
   $('#wh-pipeline-board').innerHTML = '<div class="wh-empty-state" id="wh-pipeline-loading">Loading candidates…</div>';
@@ -1569,6 +1614,20 @@ function reset(signedIn, teamId) {
   // The settings card is this team's too.
   clearSettingsCard();
   if (wasActive && signedIn) activate();
+}
+
+// The installed app opened with no connection: what this device last had
+// for the team it was last signed in to, as WPI Hire showed its cached
+// records offline — until the site reaches the server and the page starts
+// properly (reset(), then activate()).
+function showCached(teamId) {
+  if (state.teamId || !teamId) return;
+  state.teamId = teamId;
+  state.localCandidates = loadLocalCandidates();
+  state.overrides = cacheGet(OVERRIDES_KEY, {}) || {};
+  showTab(tabFromAddress() || state.tab, { scroll: false });
+  renderStats();
+  renderBoard();
 }
 
 // From the Candidates page, for someone who has signed: their record.
@@ -1581,7 +1640,7 @@ async function openSigned(email) {
 }
 
 window.Onboarding = {
-  activate, deactivate, reset, busy, addFromCrm, openSigned, address,
+  activate, deactivate, reset, busy, addFromCrm, openSigned, address, showCached,
   loadSettingsCard, saveSettings,
   settingsDirty: () => settingsDirty,
   settingsFor: () => settingsFor,
