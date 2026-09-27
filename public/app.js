@@ -443,6 +443,7 @@
     authRequired = Boolean(state.auth && state.auth.required);
     setTeam(state.team);
     renderAll();
+    refreshProfile();
     // Back from a sign-in with Sales IQ on screen: it looks again.
     if (currentView === 'salesiq' && window.SalesIQ) window.SalesIQ.activate();
     if (currentView === 'onboarding' && window.Onboarding) window.Onboarding.activate();
@@ -1688,7 +1689,7 @@
       // data-col on every cell: on a phone the row is not a row, it is a card,
       // and the stylesheet places the cells by name. Counting nth-child would
       // break the moment the ranking column appears or disappears.
-      return `<tr data-id="${c.id}"${ranking && !pri ? ' class="row-muted"' : ''}>
+      return `<tr data-id="${c.id}" class="cand-row${ranking && !pri ? ' row-muted' : ''}" tabindex="0" aria-label="Open ${esc(displayName)}’s profile">
         ${ranking ? `<td class="col-rank" data-col="rank">${pri ? pri.rank : '<span class="muted">—</span>'}</td>` : ''}
         <td class="col-check" data-col="check"><input type="checkbox" class="row-check" ${selected.has(c.id) ? 'checked' : ''}></td>
         <td data-col="name"><div class="name-cell">
@@ -1706,15 +1707,7 @@
         <td data-col="company">${esc(c.company) || '<span class="muted">—</span>'}</td>
         <td data-col="status">${statusControl(c)}</td>
         <td data-col="last"><span class="d-only">${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</span><span class="m-only">${c.lastEmailedAt ? `Emailed ${timeAgo(c.lastEmailedAt)}` : 'Not emailed yet'}</span></td>
-        <td data-col="act">${nativeActs({ phone: c.phone, email: c.email, name: displayName }, { addNumber: true, cls: 'm-only' })}<button type="button" class="icon-btn act-more m-only" aria-label="More for ${esc(displayName)}" title="More">${icon('more', 20)}</button><div class="row-actions">
-          <button class="icon-btn act-edit" title="Edit details (name, phone, role…)">${icon('doc', 16)}</button>
-          <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
-          ${textPhoneOf(c) ? `<button class="icon-btn act-text" title="Send a text">${icon('bubble', 16)}</button>` : ''}
-          ${canPipe(c) ? `<button class="icon-btn act-iq" title="${esc(iqActionLabel(c))}">${icon('clipboard', 16)}</button>` : ''}
-          ${canPipe(c) ? `<button class="icon-btn act-onb" title="${esc(onbActionLabel(c))}">${icon('signdoc', 16)}</button>` : ''}
-          ${c.status === 'emailed' ? `<button class="icon-btn act-followup" title="Follow up (reply in the same conversation)">${icon('reply', 16)}</button>` : ''}
-          <button class="icon-btn act-delete" title="Remove">${icon('trash', 16)}</button>
-        </div></td>
+        <td data-col="act">${nativeActs({ phone: c.phone, email: c.email, name: displayName }, { addNumber: true, cls: 'm-only' })}<span class="row-open" aria-hidden="true">${icon('chevron', 16)}</span></td>
       </tr>`;
     }).join('');
     updateSendButton();
@@ -1783,7 +1776,7 @@
   }
 
   // ---------------- A candidate's profile: Sales IQ and Onboarding docs ----------------
-  // In their Edit window: where they are with each, and the next step — onto
+  // In their profile: where they are with each, and the next step — onto
   // the list, or straight to sending them the next thing.
   let linksFor = null;
   function linkBtn(act, label, primary = false) {
@@ -1834,7 +1827,7 @@
     if (!c) return;
     const act = b.dataset.link;
     const goes = ['iq-open', 'onb-open', 'onb-signed'].includes(act);
-    if (goes) closeModal($('#addModal'));
+    if (goes) closeModal($('#profileModal'));
     b.disabled = true;
     try {
       if (act === 'iq-add') {
@@ -1857,7 +1850,7 @@
       }
     } catch (err) { oops(err); } finally {
       b.disabled = false;
-      if (!goes && !$('#addModal').hidden) renderCandLinks(state.candidates.find((x) => x.id === c.id) || c);
+      if (!goes && !$('#profileModal').hidden) refreshProfile();
     }
   });
 
@@ -1871,14 +1864,25 @@
       updateSendButton();
       return;
     }
-    if (e.target.closest('.act-more')) { openActionSheet(tr); return; }
-    // Their name opens their profile: details, Sales IQ, Onboarding docs.
-    if (e.target.closest('.cand-name')) { openCandidate(cand); return; }
     // The Text column is the fastest way in for the thing people actually
     // want: putting a number on someone who has none.
     if (e.target.closest('.add-number')) { openCandidate(cand, { focus: 'phone' }); return; }
-    const act = ['act-edit', 'act-email', 'act-text', 'act-followup', 'act-iq', 'act-onb', 'act-delete'].find((a) => e.target.closest(`.${a}`));
-    if (act) candidateAction(act, cand);
+    // The row's own controls do their own thing: the tick box, the status
+    // menu, and the phone's Call, Message and Mail.
+    if (e.target.closest('.status-ctl, .native-act, a, input, select, button, .col-check')) return;
+    // Dragging across a row to copy an address is not a request to open it.
+    const sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed && tr.contains(sel.anchorNode)) return;
+    // Anywhere else opens their profile, where everything for them is.
+    if (cand) openProfile(cand);
+  });
+  $('#candidateRows').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const tr = e.target.closest('tr.cand-row');
+    if (!tr || e.target !== tr) return;
+    e.preventDefault();
+    const cand = state.candidates.find((c) => c.id === tr.dataset.id);
+    if (cand) openProfile(cand);
   });
 
   // What a row's buttons do — and the phone's More sheet, which acts on the
@@ -1902,43 +1906,113 @@
     }
   }
 
-  // ---------------- "More" on a candidate card (phone) ----------------
-  // An iOS action sheet. On a phone the card's own row is Call, Message and
-  // Mail through the phone's apps; this app's actions for the person — the
-  // tracked email, the text from the Mac, a follow-up, editing, removing —
-  // are one tap further, here. Each entry runs the same candidateAction() as
-  // the card's own buttons, so the two can never disagree.
-  const SHEET_ACTS = [
-    ['act-email', 'Send outreach email', 'mail'],
-    ['act-text', 'Send text from the Mac', 'bubble'],
-    ['act-followup', 'Follow up', 'reply'],
-    ['act-iq', 'Send Sales IQ questionnaire', 'clipboard'],
-    ['act-onb', 'Send onboarding docs', 'signdoc'],
-    ['act-edit', 'Edit details', 'doc'],
-    ['act-delete', 'Remove from list', 'trash'],
-  ];
-  let sheetFor = '';
-  function openActionSheet(tr) {
-    const c = state.candidates.find((x) => x.id === tr.dataset.id);
-    if (!c) return;
-    sheetFor = c.id;
-    $('#actionSheetTitle').textContent = c.name || c.email;
-    const dial = dialOf(c.phone);
-    $('#actionSheetSub').innerHTML = [c.email, dial ? prettyPhone(dial) : ''].filter(Boolean)
-      .map((t) => `<span class="nowrap">${esc(t)}</span>`).join(' · ');
-    $('#actionSheetButtons').innerHTML = SHEET_ACTS
-      .filter(([cls]) => tr.querySelector(`.row-actions .${cls}`))
-      .map(([cls, label, ico]) => `<button type="button" class="sheet-btn${cls === 'act-delete' ? ' is-danger' : ''}" data-act="${cls}">${icon(ico, 18)}<span>${cls === 'act-iq' ? esc(iqActionLabel(c)) : cls === 'act-onb' ? esc(onbActionLabel(c)) : label}</span></button>`)
-      .join('');
-    openModal('#actionSheet');
+  // ---------------- A candidate's profile ----------------
+  // Who they are, where they stand, and everything you can do for them, in
+  // one place — a card on a wide screen, a sheet on a phone. The list stays
+  // just the list.
+  let profileId = null;
+  const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  function profileRow(label, value) {
+    return value ? `<div class="profile-row"><dt>${esc(label)}</dt><dd>${value}</dd></div>` : '';
   }
-  $('#actionSheetButtons').addEventListener('click', (e) => {
+  function profTile(act, ico, label, { primary = false, title = '', short = '' } = {}) {
+    const text = short ? `<span class="d-only">${esc(label)}</span><span class="m-only">${esc(short)}</span>` : esc(label);
+    return `<button type="button" class="profile-act${primary ? ' is-primary' : ''}" data-act="${act}"${title ? ` title="${esc(title)}"` : ''} aria-label="${esc(title || label)}">${icon(ico, 18)}<span>${text}</span></button>`;
+  }
+  function openProfile(c) {
+    renderProfile(c);
+    openModal('#profileModal');
+  }
+  function renderProfile(c) {
+    profileId = c.id;
+    const name = c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email || '—';
+    const i = Math.max(0, state.candidates.findIndex((x) => x.id === c.id));
+    const av = $('#profAvatar');
+    av.className = `avatar profile-avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}`;
+    av.textContent = initials(c);
+    $('#profName').textContent = name;
+    $('#profSub').textContent = [c.role, c.company, c.location].filter(Boolean).join(' · ');
+    $('#profTags').innerHTML = statusControl(c, 'prof-status') + [iqBadge(iqOf(c)), onbBadge(onbOf(c))].filter(Boolean).join('');
+
+    // The app's own actions for them, the way a contact card lays them out.
+    const phone = textPhoneOf(c);
+    $('#profActs').innerHTML = [
+      profTile('act-email', 'mail', 'Email', { primary: true, title: 'Send a tracked personal email' }),
+      phone ? profTile('act-text', 'bubble', 'Text', { title: 'Send a text from the Mac' })
+        : profTile('act-addnumber', 'bubble', c.phone ? 'Fix number' : 'Add number', { short: c.phone ? 'Fix #' : 'Add #', title: c.phone ? 'This number cannot be texted — correct it' : 'Add a mobile number to text them' }),
+      c.status === 'emailed' ? profTile('act-followup', 'reply', 'Follow up', { title: 'Reply in the same email conversation' }) : '',
+      canPipe(c) ? profTile('act-iq', 'clipboard', 'Sales IQ', { title: iqActionLabel(c) }) : '',
+      canPipe(c) ? profTile('act-onb', 'signdoc', 'Onboarding', { short: 'Docs', title: onbActionLabel(c) }) : '',
+    ].join('');
+    // And the phone's own apps, on a phone.
+    $('#profNative').innerHTML = nativeActs({ phone: c.phone, email: c.email, name }, { size: 40 });
+
+    const dial = dialOf(c.phone);
+    $('#profContact').innerHTML = [
+      profileRow('Email', c.email ? `<a href="${esc(mailtoOf(c.email) || '#')}">${esc(c.email)}</a>` : ''),
+      profileRow('Phone', c.phone
+        ? `${dial ? `<a href="tel:${esc(dial)}">${esc(textPhoneOf(c) ? prettyPhone(textPhoneOf(c)) : c.phone)}</a>` : esc(c.phone)}${textPhoneOf(c) ? '' : ' <span class="muted">· can’t be texted</span>'}`
+        : '<button type="button" class="btn-link" data-act="act-addnumber">Add a number</button>'),
+      profileRow('Role', esc(c.role || '')),
+      profileRow('Company', esc(c.company || '')),
+      profileRow('Location', esc(c.location || '')),
+      profileRow('Before', c.pastRoles ? esc(String(c.pastRoles).split('|').map((x) => x.trim()).filter(Boolean).join(' · ')) : ''),
+    ].join('');
+
+    const texting = TEXT_STATUS[c.textStatus];
+    $('#profActivity').innerHTML = [
+      profileRow('Added', c.addedAt ? fmtDate(c.addedAt) : ''),
+      profileRow('Emailed', c.lastEmailedAt ? `${timeAgo(c.lastEmailedAt)}${c.lastSubject ? ` — <span class="muted">${esc(c.lastSubject)}</span>` : ''}${c.followUpCount ? ` · ${c.followUpCount} follow-up${c.followUpCount === 1 ? '' : 's'}` : ''}` : '<span class="muted">not yet</span>'),
+      profileRow('Opened', c.openedAt ? timeAgo(c.openedAt) : ''),
+      profileRow('Replied', c.emailReplies > 0 || c.lastReplyAt ? `${c.lastReplyAt ? timeAgo(c.lastReplyAt) : 'yes'}${c.emailReplies > 1 ? ` · ${c.emailReplies} replies` : ''} <button type="button" class="btn-link" data-act="act-openmail">Open conversation</button>` : ''),
+      profileRow('Texted', c.lastTextedAt ? `${timeAgo(c.lastTextedAt)}${texting ? ` · ${esc(texting.label)}` : ''}${c.textCount ? ` <button type="button" class="btn-link" data-act="act-openthread">Open texts</button>` : ''}` : ''),
+      profileRow('Interview', c.bookedAt ? `${esc(c.bookedEvent || 'Booked')} · ${fmtWhen(c.bookedAt)}${c.bookedJoinUrl ? ` · <a href="${esc(c.bookedJoinUrl)}" target="_blank" rel="noopener">Join link</a>` : ''}` : ''),
+      profileRow('Source', esc(c.source || '')),
+    ].join('');
+    $('#profNotesSec').hidden = !c.notes;
+    $('#profNotes').textContent = c.notes || '';
+    renderCandLinks(c);
+    $('#profLinksSec').hidden = $('#candLinks').hidden;
+  }
+  // The list and the numbers move on every look for news; an open profile
+  // moves with them, and closes if the person has gone.
+  function refreshProfile() {
+    if (!profileId || $('#profileModal').hidden) return;
+    const c = state.candidates.find((x) => x.id === profileId);
+    if (!c) { closeModal($('#profileModal')); return; }
+    // Never under someone choosing a status.
+    if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#profileModal .status-ctl')) return;
+    renderProfile(c);
+  }
+  $('#profileModal').addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
-    if (!b) return;
-    closeModal($('#actionSheet'));
-    // By id, from the current state: a refresh may have redrawn the list, or
-    // moved the person out of the filter, while the sheet was open.
-    candidateAction(b.dataset.act, state.candidates.find((c) => c.id === sheetFor));
+    if (!b || !b.closest('#profActs, #profContact, #profActivity')) return;
+    const c = state.candidates.find((x) => x.id === profileId);
+    if (!c) return;
+    const act = b.dataset.act;
+    closeModal($('#profileModal'));
+    if (act === 'act-addnumber') openCandidate(c, { focus: 'phone' });
+    else if (act === 'act-openmail') { show('template'); openMail(c.id).catch(oops); }
+    else if (act === 'act-openthread') { show('texting'); openThread(c.id).catch(oops); }
+    else candidateAction(act, c);
+  });
+  $('#profileModal').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('status-select')) return;
+    api(`/api/candidates/${profileId}`, { method: 'PATCH', body: { status: e.target.value } }).then(refresh).catch(oops);
+  });
+  $('#profEdit').addEventListener('click', () => {
+    const c = state.candidates.find((x) => x.id === profileId);
+    closeModal($('#profileModal'));
+    if (c) openCandidate(c);
+  });
+  $('#profRemove').addEventListener('click', () => {
+    const c = state.candidates.find((x) => x.id === profileId);
+    if (!c) return;
+    if (!confirm(`Remove ${c.name || c.email} from the list?`)) return;
+    closeModal($('#profileModal'));
+    api(`/api/candidates/${c.id}`, { method: 'DELETE' })
+      .then(() => { selected.delete(c.id); return refresh(); })
+      .catch(oops);
   });
 
   $('#candidateRows').addEventListener('change', (e) => {
@@ -2017,7 +2091,6 @@
     $('#addNotes').value = c ? (c.notes || '') : '';
     $('#addModalTitle').textContent = c ? `Edit ${c.name || c.email}` : 'Add candidate';
     $('#addSaveBtn').textContent = c ? 'Save changes' : 'Add candidate';
-    renderCandLinks(c);
     openModal('#addModal');
     checkPhoneField();
     const el = focus === 'phone' ? $('#addPhone') : $('#addFirst');

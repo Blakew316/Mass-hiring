@@ -396,7 +396,7 @@
             <tr>
               <th class="col-check"><input type="checkbox" id="checkAll"></th>
               <th class="col-rank" id="rankHead" hidden>#</th>
-              <th data-col="name">Name</th><th data-col="email">Email</th><th data-col="text">Text</th><th data-col="role">Role &amp; history</th><th data-col="company">Company</th><th data-col="status">Status</th><th data-col="last">Last emailed</th><th data-col="act"></th>
+              <th data-col="name">Name</th><th data-col="email">Email</th><th data-col="text">Text</th><th data-col="role">Role &amp; history</th><th data-col="company">Company</th><th data-col="status">Status</th><th data-col="last">Last emailed</th><th data-col="act" aria-label="Open"></th>
             </tr>
           </thead>
           <tbody id="candidateRows"></tbody>
@@ -1404,20 +1404,6 @@
   </div>
 </div>
 
-<!-- ===== More, for one candidate card (phone) ===== -->
-<div class="modal-backdrop" id="actionSheet" hidden>
-  <div class="modal action-sheet" role="dialog" aria-modal="true" aria-labelledby="actionSheetTitle">
-    <div class="sheet-group">
-      <div class="sheet-head">
-        <div class="sheet-title" id="actionSheetTitle"></div>
-        <div class="sheet-sub" id="actionSheetSub"></div>
-      </div>
-      <div class="sheet-buttons" id="actionSheetButtons"></div>
-    </div>
-    <button type="button" class="sheet-cancel" data-close>Cancel</button>
-  </div>
-</div>
-
 <!-- ===== More (the phone's tab bar) =====
      The pages that are not in the tab bar on a narrow phone, as a list —
      the same pages, the same routes, one tap further. -->
@@ -1446,12 +1432,29 @@
 </div>
 
 <!-- ===== Add candidate modal ===== -->
-<div class="modal-backdrop" id="addModal" hidden>
-  <div class="modal modal-sm" role="dialog" aria-modal="true">
-    <div class="modal-head"><h2 id="addModalTitle">Add candidate</h2><button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button></div>
-    <div class="modal-body">
-      <!-- Where they are with Sales IQ and Onboarding docs, and one tap to
-           put them on either list or send them the next thing. -->
+<!-- A candidate's profile: who they are, where they stand, and everything
+     you can do for them — the list itself stays just the list. On a phone,
+     a sheet. -->
+<div class="modal-backdrop" id="profileModal" hidden>
+  <div class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profName">
+    <div class="profile-top">
+      <span class="avatar profile-avatar" id="profAvatar"></span>
+      <div class="profile-id">
+        <h2 id="profName"></h2>
+        <div class="profile-sub" id="profSub"></div>
+        <div class="profile-tags" id="profTags"></div>
+      </div>
+      <button type="button" class="icon-btn profile-close" data-close aria-label="Close"><span data-icon="x" data-size="16"></span></button>
+    </div>
+    <div class="modal-body profile-body">
+      <div class="profile-acts" id="profActs"></div>
+      <div class="profile-native m-only" id="profNative"></div>
+      <section class="profile-sec">
+        <h3 class="profile-h">Contact</h3>
+        <dl class="profile-dl" id="profContact"></dl>
+      </section>
+      <section class="profile-sec" id="profLinksSec">
+        <h3 class="profile-h">Sales IQ &amp; Onboarding docs</h3>
       <div class="cand-links" id="candLinks" hidden>
         <div class="cand-link">
           <span class="card-ico tone-blue" data-icon="clipboard" data-size="15"></span>
@@ -1464,6 +1467,27 @@
           <div class="cand-link-acts" id="candOnbActs"></div>
         </div>
       </div>
+      </section>
+      <section class="profile-sec">
+        <h3 class="profile-h">Activity</h3>
+        <dl class="profile-dl" id="profActivity"></dl>
+      </section>
+      <section class="profile-sec" id="profNotesSec" hidden>
+        <h3 class="profile-h">Notes</h3>
+        <p class="profile-notes" id="profNotes"></p>
+      </section>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-danger-ghost foot-left" id="profRemove"><span data-icon="trash" data-size="15"></span> Remove</button>
+      <button type="button" class="btn btn-primary" id="profEdit"><span data-icon="doc" data-size="15"></span> Edit details</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="addModal" hidden>
+  <div class="modal modal-sm" role="dialog" aria-modal="true">
+    <div class="modal-head"><h2 id="addModalTitle">Add candidate</h2><button class="icon-btn" data-close><span data-icon="x" data-size="16"></span></button></div>
+    <div class="modal-body">
       <div class="grid-2">
         <div><label class="label">First name</label><input class="input" id="addFirst"></div>
         <div><label class="label">Last name</label><input class="input" id="addLast"></div>

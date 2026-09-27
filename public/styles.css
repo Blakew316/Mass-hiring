@@ -510,8 +510,54 @@ button.tile-link { border: 0; background: none; padding: 0; font-family: var(--f
   background-repeat: no-repeat; background-position: right 8px center;
 }
 .status-select:focus { box-shadow: 0 0 0 3px var(--blue-tint); }
-.row-actions { display: flex; gap: 4px; justify-content: flex-end; opacity: 0; transition: opacity 0.12s; }
-tr:hover .row-actions { opacity: 1; }
+/* A row opens its person's profile — the whole row is the target, and the
+   arrow at its end says so. Everything you can do for them is in there. */
+.table tbody tr.cand-row { cursor: pointer; }
+.table tbody tr.cand-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.table td[data-col="act"] { width: 32px; text-align: right; }
+.row-open { display: inline-flex; color: var(--ink-soft); opacity: .45; transition: opacity .12s, transform .12s, color .12s; }
+tr.cand-row:hover .row-open { opacity: 1; color: var(--blue); transform: translateX(2px); }
+
+/* ---------------- A candidate's profile ---------------- */
+.profile-modal { width: 580px; }
+.profile-top { display: flex; align-items: flex-start; gap: 14px; padding: 20px 22px 16px; border-bottom: 1px solid var(--line); }
+.profile-avatar { width: 52px; height: 52px; font-size: 18px; flex: none; }
+.profile-id { flex: 1; min-width: 0; }
+.profile-id h2 { margin: 0; font-size: 20px; line-height: 1.2; color: var(--navy); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.profile-sub { font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
+.profile-sub:empty { display: none; }
+.profile-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.profile-tags .iq-badge { margin: 0; }
+.profile-close { flex: none; margin: -4px -8px 0 0; }
+.profile-body { padding: 16px 22px 6px; }
+.profile-acts { display: flex; gap: 8px; }
+.profile-act { flex: 1 1 0; min-width: 0; }
+.profile-act {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  min-height: 66px; padding: 10px 6px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--card); color: var(--navy);
+  font: inherit; font-size: 12.5px; font-weight: 600; text-align: center; cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.profile-act:hover { background: var(--navy-tint); border-color: var(--line-strong); }
+.profile-act.is-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.profile-act.is-primary:hover { background: var(--blue-deep); border-color: var(--blue-deep); }
+.profile-act:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.profile-native .native-acts { justify-content: space-around; margin-top: 12px; }
+.profile-sec { margin-top: 18px; }
+.profile-sec[hidden] { display: none; }
+.profile-h { margin: 0 0 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+.profile-dl { margin: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.profile-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 12px; padding: 9px 14px; border-top: 1px solid var(--line); font-size: 13.5px; line-height: 1.45; }
+.profile-row:first-child { border-top: 0; }
+.profile-row dt { color: var(--ink-soft); }
+.profile-row dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.profile-row .btn-link { font-size: 13px; }
+.profile-row a { color: var(--blue); text-decoration: none; font-weight: 500; }
+.profile-row a:hover { text-decoration: underline; }
+.profile-notes { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--surface-sunk); font-size: 13.5px; white-space: pre-wrap; }
+.profile-sec .cand-links { margin: 0; }
 
 .empty-state { text-align: center; padding: 56px 20px 60px; display: none; }
 .empty-state h3 { margin: 14px 0 4px; color: var(--navy); font-size: 16px; }

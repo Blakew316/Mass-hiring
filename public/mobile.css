@@ -519,7 +519,8 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .status-ctl:focus-within .status-face { box-shadow: 0 0 0 3px var(--blue-tint); }
 
   /* The foot of the card: the phone's own Call, Message and Mail on the
-     left, this app's actions for the person behind More on the right. */
+     left; the arrow on the right says the card opens their profile, where
+     everything else for them is. */
   #candTableWrap td[data-col="act"] {
     display: flex;
     align-items: center;
@@ -528,16 +529,16 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     padding-top: 6px;
     border-top: 1px solid var(--line);
   }
-  #candTableWrap .row-actions { display: none; }
-  /* More: a round button, the way iOS draws the ellipsis beside a row. The
-     paint is 34px; the target is the 44px the button already has. */
-  .act-more { color: var(--blue); border-radius: 50%; position: relative; background: none; }
-  .act-more::before {
-    content: ''; position: absolute; inset: 5px; border-radius: 50%;
-    background: var(--blue-tint); z-index: -1;
-  }
-  .act-more { isolation: isolate; }
-  .act-more:active::before { background: var(--tint-hover-blue); }
+  #candTableWrap .table td[data-col="act"] { width: auto; }
+  #candTableWrap .row-open { opacity: .6; padding: 10px 4px; }
+  #candTableWrap tr.cand-row:active { background: var(--row-hover); }
+
+  /* The profile, as a sheet: the actions four across, the details narrower. */
+  .profile-top { padding: 4px 18px 14px; }
+  .profile-body { padding: 14px 18px 4px; }
+  .profile-acts { gap: 6px; }
+  .profile-act { min-height: 62px; padding: 8px 2px; font-size: 11.5px; border-radius: 11px; }
+  .profile-row { grid-template-columns: 84px minmax(0, 1fr); }
 
   /* ---- Call, Message and Mail, through the phone's own apps ----
      The Contacts-card pattern: the app's icon, its name under it, a 44pt
@@ -931,7 +932,6 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     .conv:hover, .link-results li:hover, tr:hover,
     .btn:hover, .icon-btn:hover, .bell:hover { background: inherit; }
     .tile-link:hover { text-decoration: none; }
-    tr:hover .row-actions { opacity: 1; }
   }
 }
 
