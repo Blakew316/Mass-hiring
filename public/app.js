@@ -38,6 +38,25 @@
     bounced:  { label: 'Bounced',       cls: 'tint-amber' },
   };
   const AVATAR_TINTS = ['tint-blue', 'tint-green', 'tint-mint', 'tint-navy'];
+  // A candidate's status: a real <select>, so the phone shows its own picker.
+  // On a phone the select is laid invisibly over a compact pill (.status-face)
+  // — a select has to be 16px there or iOS zooms the page, and at 16px it was
+  // the widest thing on the card, squeezing the name down to one letter.
+  function statusControl(c, extra = '') {
+    const st = STATUS[c.status] || STATUS.new;
+    return `<span class="status-ctl"><span class="status-face m-only ${st.cls}" aria-hidden="true">${st.label}</span>`
+      + `<select class="status-select ${st.cls}${extra ? ` ${extra}` : ''}" data-id="${c.id}" title="Change status" aria-label="Status of ${esc(c.name || c.email || 'this candidate')}">`
+      + Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${v.label}</option>`).join('')
+      + '</select></span>';
+  }
+  // The pill says what was picked straight away, before the save comes back.
+  document.addEventListener('change', (e) => {
+    const sel = e.target;
+    if (!sel.classList || !sel.classList.contains('status-select')) return;
+    const face = sel.parentElement && sel.parentElement.querySelector('.status-face');
+    const st = STATUS[sel.value];
+    if (face && st) { face.textContent = st.label; face.className = `status-face m-only ${st.cls}`; }
+  }, true);
   // Where someone stands in the TEXT funnel, which runs alongside the email one.
   // "Delivered" and "Read" are receipts from iMessage itself — email has no
   // equivalent, so these are the one place texting tells you more than email.
@@ -690,10 +709,19 @@
         <div class="tile-meta">${metaHtml}</div>
         ${extraHtml}
       </div>
+      ${nativeActs({ phone: c.phone, email: c.email, name }, { size: 32, cls: 'tile-native m-only' })}
       <div class="tile-side">${sideHtml}</div>
     </li>`;
   }
-  const statusSelect = (c) => `<select class="status-select ${(STATUS[c.status] || STATUS.new).cls} tile-status" data-id="${c.id}">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${v.label}</option>`).join('')}</select>`;
+  // An interview about to start, or one that started a few minutes ago, is
+  // the moment somebody is not there yet — say so, beside Call and Message.
+  function startsSoon(startIso) {
+    const mins = Math.round((new Date(startIso).getTime() - Date.now()) / 60000);
+    if (mins > 60 || mins < -45) return '';
+    const text = mins > 0 ? `Starts in ${mins} min` : mins === 0 ? 'Starting now' : `Started ${-mins} min ago`;
+    return `<span class="soon-tag${mins <= 0 ? ' is-now' : ''}">${text}</span>`;
+  }
+  const statusSelect = (c) => statusControl(c, 'tile-status');
   const gmailLink = (c) => c.gmailThreadId ? `<a class="tile-link" target="_blank" rel="noopener" href="https://mail.google.com/mail/u/0/#all/${encodeURIComponent(c.gmailThreadId)}">${icon('mail', 13)} Open in Gmail</a>` : '';
 
   function openTile(kind) {
@@ -748,10 +776,11 @@
           return `<li class="tile-row">
             <span class="avatar tint-green">${esc(initials(c || { name: who, email: i.inviteeEmail }))}</span>
             <div class="tile-main">
-              <div class="tile-when">${esc(fmtWhen(i.start))}${i.end ? ` – ${new Date(i.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}</div>
+              <div class="tile-when">${esc(fmtWhen(i.start))}${i.end ? ` – ${new Date(i.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}${startsSoon(i.start)}</div>
               <div class="tile-name">${esc(who)} <span class="muted small">· ${esc(i.name)}</span></div>
               <div class="tile-email">${esc(i.inviteeEmail || (c && c.email) || '')}${detail ? ` · ${esc(detail)}` : ''}</div>
             </div>
+            ${nativeActs({ phone: (c && c.phone) || i.inviteePhone, email: i.inviteeEmail || (c && c.email), name: who }, { size: 32, cls: 'tile-native m-only' })}
             <div class="tile-side">
               ${i.joinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.joinUrl)}">Join call</a>` : ''}
               ${i.rescheduleUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(i.rescheduleUrl)}">Reschedule</a>` : ''}
@@ -760,7 +789,7 @@
           </li>`;
         });
       } else {
-        rows = bookedCands.map((c) => candRow(c, `Interview ${c.bookedAt ? fmtWhen(c.bookedAt) : 'time not recorded'}${c.bookedEvent ? ` · ${esc(c.bookedEvent)}` : ''}`,
+        rows = bookedCands.map((c) => candRow(c, `Interview ${c.bookedAt ? fmtWhen(c.bookedAt) : 'time not recorded'}${c.bookedEvent ? ` · ${esc(c.bookedEvent)}` : ''}${c.bookedAt ? startsSoon(c.bookedAt) : ''}`,
           `${c.bookedJoinUrl ? `<a class="tile-link" target="_blank" rel="noopener" href="${esc(c.bookedJoinUrl)}">Join call</a>` : ''}${statusSelect(c)}`));
       }
     }
@@ -1370,19 +1399,18 @@
         <td data-col="name"><div class="name-cell">
           <span class="avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}">${esc(initials(c))}</span>
           <div><div class="cand-name">${esc(displayName)}</div>
+          ${(c.role || c.company) ? `<div class="cand-line m-only">${esc([c.role, c.company].filter(Boolean).join(' · '))}</div>` : ''}
           ${pri ? `<div class="cand-sub why-text">${esc(pri.reason)}</div>`
             : blockedWhy ? `<div class="cand-sub muted">not texting: ${esc(blockedWhy)}</div>`
             : (c.location || c.notes) ? `<div class="cand-sub">${esc([c.location, c.notes].filter(Boolean).join(' · '))}</div>` : ''}</div>
         </div></td>
         <td data-col="email">${esc(c.email)}</td>
-        <td data-col="text">${textCell(c)}</td>
+        <td data-col="text">${textPhoneOf(c) && TEXT_STATUS[c.textStatus] ? `<span class="m-only m-phone">${esc(prettyPhone(textPhoneOf(c)))}</span>` : ''}${textCell(c)}</td>
         <td data-col="role">${esc(c.role) || '<span class="muted">—</span>'}${c.pastRoles ? `<div class="cand-sub" title="${esc(c.pastRoles)}">was ${esc(String(c.pastRoles).split('|')[0].trim())}${String(c.pastRoles).split('|').length > 1 ? ` +${String(c.pastRoles).split('|').length - 1} more` : ''}</div>` : ''}</td>
         <td data-col="company">${esc(c.company) || '<span class="muted">—</span>'}</td>
-        <td data-col="status"><select class="status-select ${st.cls}" title="Change status">
-          ${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === c.status ? 'selected' : ''}>${v.label}</option>`).join('')}
-        </select></td>
-        <td data-col="last">${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</td>
-        <td data-col="act"><div class="row-actions">
+        <td data-col="status">${statusControl(c)}</td>
+        <td data-col="last"><span class="d-only">${c.lastEmailedAt ? timeAgo(c.lastEmailedAt) : '<span class="muted">never</span>'}</span><span class="m-only">${c.lastEmailedAt ? `Emailed ${timeAgo(c.lastEmailedAt)}` : 'Not emailed yet'}</span></td>
+        <td data-col="act">${nativeActs({ phone: c.phone, email: c.email, name: displayName }, { addNumber: true, cls: 'm-only' })}<button type="button" class="icon-btn act-more m-only" aria-label="More for ${esc(displayName)}" title="More">${icon('more', 20)}</button><div class="row-actions">
           <button class="icon-btn act-edit" title="Edit details (name, phone, role…)">${icon('doc', 16)}</button>
           <button class="icon-btn act-email" title="Send personal email">${icon('mail', 16)}</button>
           ${textPhoneOf(c) ? `<button class="icon-btn act-text" title="Send a text">${icon('bubble', 16)}</button>` : ''}
@@ -1441,6 +1469,7 @@
       updateSendButton();
       return;
     }
+    if (e.target.closest('.act-more')) { openActionSheet(tr); return; }
     if (e.target.closest('.act-edit')) { openCandidate(cand); return; }
     // The Text column is the fastest way in for the thing people actually
     // want: putting a number on someone who has none.
@@ -1456,6 +1485,44 @@
       }
       return;
     }
+  });
+
+  // ---------------- "More" on a candidate card (phone) ----------------
+  // An iOS action sheet. On a phone the card's own row is Call, Message and
+  // Mail through the phone's apps; this app's actions for the person — the
+  // tracked email, the text from the Mac, a follow-up, editing, removing —
+  // are one tap further, here. Each entry presses the card's real button, so
+  // there is one set of handlers and the two can never disagree.
+  const SHEET_ACTS = [
+    ['act-email', 'Send outreach email', 'mail'],
+    ['act-text', 'Send text from the Mac', 'bubble'],
+    ['act-followup', 'Follow up', 'reply'],
+    ['act-edit', 'Edit details', 'doc'],
+    ['act-delete', 'Remove from list', 'trash'],
+  ];
+  let sheetFor = '';
+  function openActionSheet(tr) {
+    const c = state.candidates.find((x) => x.id === tr.dataset.id);
+    if (!c) return;
+    sheetFor = c.id;
+    $('#actionSheetTitle').textContent = c.name || c.email;
+    const dial = dialOf(c.phone);
+    $('#actionSheetSub').innerHTML = [c.email, dial ? prettyPhone(dial) : ''].filter(Boolean)
+      .map((t) => `<span class="nowrap">${esc(t)}</span>`).join(' · ');
+    $('#actionSheetButtons').innerHTML = SHEET_ACTS
+      .filter(([cls]) => tr.querySelector(`.row-actions .${cls}`))
+      .map(([cls, label, ico]) => `<button type="button" class="sheet-btn${cls === 'act-delete' ? ' is-danger' : ''}" data-act="${cls}">${icon(ico, 18)}<span>${label}</span></button>`)
+      .join('');
+    openModal('#actionSheet');
+  }
+  $('#actionSheetButtons').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    closeModal($('#actionSheet'));
+    // Looked up again: a refresh may have redrawn the list while the sheet was open.
+    const tr = [...document.querySelectorAll('#candidateRows tr[data-id]')].find((r) => r.dataset.id === sheetFor);
+    const target = tr && tr.querySelector(`.row-actions .${b.dataset.act}`);
+    if (target) target.click();
   });
 
   $('#candidateRows').addEventListener('change', (e) => {
@@ -3165,6 +3232,49 @@
   const prettyPhone = (e164) => (/^\+1\d{10}$/.test(e164)
     ? `(${e164.slice(2, 5)}) ${e164.slice(5, 8)}-${e164.slice(8)}`
     : e164);
+
+  // ---------------- Call, Message and Mail, through the phone's own apps ----------------
+  // For the moment the candidate is five minutes late for the interview: one
+  // tap rings them, texts them or opens a fresh email, from the phone itself
+  // rather than through Gmail or the Mac. Shown on a phone only (mobile.css);
+  // the desktop keeps the app's own actions.
+  //
+  // A number can be rung even when it cannot be texted by the relay — a
+  // landline, an extension — so calling falls back to whatever digits there are.
+  function dialOf(raw) {
+    const e164 = textPhoneOf({ phone: raw });
+    if (e164) return e164;
+    const s = String(raw || '').replace(/\b(?:ext|x|extension)\.?\s*\d+\s*$/i, '').trim();
+    const digits = s.replace(/\D/g, '');
+    if (digits.length < 7 || digits.length > 15) return '';
+    return (s.startsWith('+') ? '+' : '') + digits;
+  }
+  const mailtoOf = (email) => {
+    const e = String(email || '').trim();
+    return /^[^\s@]+@[^\s@]+$/.test(e) ? `mailto:${e.split('@').map(encodeURIComponent).join('@')}` : '';
+  };
+  // who: { phone, email, name }. With addNumber, a missing number is a button
+  // that opens the candidate to add one, rather than a dead icon.
+  function nativeActs(who, { size = 34, labels = true, addNumber = false, cls = '' } = {}) {
+    const name = who.name || 'them';
+    const dial = dialOf(who.phone);
+    const mail = mailtoOf(who.email);
+    const shown = dial ? prettyPhone(dial) : '';
+    const noNumber = addNumber ? 'No phone number yet — tap to add one' : 'No phone number on file';
+    const one = (kind, href, label, app, title, offTitle) => {
+      const inner = `${appIcon(app, size)}${labels ? `<span class="native-label">${label}</span>` : ''}`;
+      if (href) return `<a class="native-act native-${kind}" href="${esc(href)}" aria-label="${esc(title)}" title="${esc(title)}">${inner}</a>`;
+      if (addNumber && kind !== 'mail') {
+        return `<button type="button" class="native-act native-${kind} is-off add-number" aria-label="${esc(offTitle)}" title="${esc(offTitle)}">${inner}</button>`;
+      }
+      return `<span class="native-act native-${kind} is-off" role="img" aria-label="${esc(offTitle)}" title="${esc(offTitle)}">${inner}</span>`;
+    };
+    return `<div class="native-acts${cls ? ` ${cls}` : ''}">`
+      + one('call', dial && `tel:${dial}`, 'Call', 'phone', `Call ${name}${shown ? ` on ${shown}` : ''}`, noNumber)
+      + one('sms', dial && `sms:${dial}`, 'Message', 'messages', `Text ${name} from your phone${shown ? ` (${shown})` : ''}`, noNumber)
+      + one('mail', mail, 'Mail', 'mail', `Email ${name} from your phone’s Mail app`, 'No email address on file')
+      + '</div>';
+  }
   const textableIds = () => state.candidates
     .filter((c) => textPhoneOf(c) && !c.lastTextedAt && c.status !== 'declined' && c.status !== 'booked')
     .map((c) => c.id);
@@ -3320,6 +3430,8 @@
     $('#threadName').textContent = thread.name || thread.phone || 'Unknown';
     const bits = [thread.phone, thread.role, thread.company].filter(Boolean);
     $('#threadSub').textContent = bits.join(' · ');
+    const tc = (state.candidates || []).find((x) => x.id === openThreadId) || {};
+    $('#threadNative').innerHTML = nativeActs({ phone: thread.phone || tc.phone, email: tc.email, name: thread.name || tc.name }, { size: 30, labels: false });
 
     // Anything still queued for the Mac is shown as a pending bubble, so a
     // reply does not disappear between pressing send and the relay picking
@@ -3466,6 +3578,8 @@
     $('#mailAvatar').textContent = convInitials(mail.name, mail.email);
     $('#mailName').textContent = mail.name || mail.email || 'Unknown';
     $('#mailSub').textContent = [mail.email, mail.role, mail.company].filter(Boolean).join(' · ');
+    const mc = (state.candidates || []).find((x) => x.id === openMailId) || {};
+    $('#mailNative').innerHTML = nativeActs({ phone: mc.phone, email: mail.email || mc.email, name: mail.name || mc.name }, { size: 30, labels: false });
     const gm = $('#mailGmail');
     gm.hidden = !mail.gmailUrl;
     if (mail.gmailUrl) gm.href = mail.gmailUrl;

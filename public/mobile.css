@@ -366,10 +366,23 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .theme-switch::before { content: ''; position: absolute; inset: -4px; }
 
   /* ---- the candidates table is not a table on a phone ----
-     Ten columns clipped by an overflow:hidden card meant Status, Last
-     emailed and all five row actions simply did not exist here. Each row
-     becomes a card and every cell keeps its place by name — counting
-     nth-child would break the moment the ranking column appears. */
+     Each row is a card, laid out on a fixed grid so that every card has the
+     same shape whatever is in it — the way a Contacts entry does — rather
+     than a row of facts left to wrap wherever they happened to run out of
+     room. Every cell keeps its place by name; counting nth-child would break
+     the moment the ranking column appears.
+
+       [ ] (MP) Michael Pacheco
+                Account Executive · PayCompass
+            [Emailed v]                    Emailed 20h ago
+        @  michael.pacheco2010@gmail.com
+        #  (805) 907-2604 · Delivered
+       -------------------------------------------------
+        [Call] [Message] [Mail]                      (...)
+
+     The status has a line of its own, with when they were last emailed:
+     beside the name it was the widest thing on the card and left the name
+     a few letters. */
   #candTableWrap .table,
   #candTableWrap thead,
   #candTableWrap tbody,
@@ -377,49 +390,268 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   #candTableWrap td { display: block; }
   #candTableWrap thead { display: none; }
   #candTableWrap tbody tr {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check name   name"
+      ".     status last"
+      "email email  email"
+      "text  text   text"
+      "act   act    act";
+    column-gap: 12px;
+    row-gap: 4px;
     align-items: center;
-    gap: 2px 10px;
-    padding: 12px 14px;
+    padding: 14px 16px 6px;
     border-bottom: 1px solid var(--line);
   }
-  #candTableWrap td { padding: 0; border: 0; }
-  td[data-col="rank"]  { order: 0; flex: 0 0 auto; font-weight: 700; color: var(--blue); }
-  td[data-col="check"] { order: 1; flex: 0 0 auto; }
-  td[data-col="name"]  { order: 2; flex: 1 1 auto; min-width: 0; }
-  td[data-col="email"] { order: 3; flex: 1 0 100%; font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; }
-  td[data-col="role"]    { order: 4; }
-  td[data-col="company"] { order: 5; }
-  td[data-col="status"]  { order: 6; }
-  td[data-col="text"]    { order: 7; }
-  td[data-col="last"]    { order: 8; font-size: 12.5px; color: var(--muted); }
-  td[data-col="role"], td[data-col="company"], td[data-col="status"],
-  td[data-col="text"], td[data-col="last"] {
-    flex: 0 0 auto;
+  /* Written as specifically as the desktop's 11px cell padding, or that rule
+     wins and every line of the card starts 11px in from its column. */
+  #candTableWrap td, #candTableWrap .table td { padding: 0; border: 0; min-width: 0; position: relative; }
+  /* width: auto — the desktop's 36px column width would push the tick box
+     past its 26px track, under the name, which then took its taps. */
+  #candTableWrap td[data-col="check"] { grid-area: check; width: auto; }
+  td[data-col="name"]   { grid-area: name; }
+  td[data-col="status"] { grid-area: status; justify-self: start; margin: 6px 0 4px; }
+  td[data-col="email"]  { grid-area: email; }
+  td[data-col="text"]   { grid-area: text; }
+  td[data-col="last"]   { grid-area: last; justify-self: end; }
+  td[data-col="act"]    { grid-area: act; }
+  /* Role and company are the line under the name on a card. */
+  #candTableWrap td[data-col="role"], #candTableWrap td[data-col="company"] { display: none; }
+  /* The rank, in the Best to text next list, is a badge on the avatar. */
+  td[data-col="rank"] {
+    grid-area: name;
+    justify-self: start; align-self: start;
+    z-index: 1;
+    margin: -6px 0 0 -8px;
+    min-width: 20px; height: 20px; padding: 0 6px;
+    border-radius: 99px;
+    background: var(--blue); color: #fff;
+    font-size: 11px; font-weight: 700; line-height: 20px; text-align: center;
+    box-shadow: 0 0 0 2px var(--card);
+  }
+  td[data-col="rank"] .muted { color: #fff; }
+
+  .name-cell { min-width: 0; }
+  .name-cell .avatar { width: 40px; height: 40px; font-size: 14px; margin-right: 12px; flex: none; }
+  /* A long name takes a second line rather than losing its end. */
+  .name-cell .cand-name {
+    font-size: 16px; font-weight: 650; line-height: 1.25;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden; overflow-wrap: anywhere;
+  }
+  .cand-line {
+    font-size: 13px; line-height: 1.35; color: var(--ink-soft); margin-top: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .name-cell .cand-sub { font-size: 12px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* The two detail lines each carry a small glyph in the gutter under the tick
+     box, so the eye finds the address and the number without reading. */
+  #candTableWrap td[data-col="email"], #candTableWrap td[data-col="text"], #candTableWrap td[data-col="last"] {
+    font-size: 13.5px; line-height: 20px; min-height: 22px; display: flex; align-items: center;
+  }
+  td[data-col="email"] {
+    color: var(--ink); overflow: hidden;
+  }
+  td[data-col="email"], td[data-col="text"] { white-space: nowrap; }
+  /* The glyph sits centred under the tick box (26px column, 12px gap), and
+     the text starts where the name's column does. */
+  #candTableWrap td[data-col="email"]::before, #candTableWrap td[data-col="text"]::before {
+    content: '';
+    flex: none;
+    display: inline-block;
+    width: 15px; height: 15px;
+    margin: 0 17.5px 0 5.5px;
+    vertical-align: -2.5px;
+    background: var(--muted);
+    -webkit-mask: var(--glyph) center / contain no-repeat;
+    mask: var(--glyph) center / contain no-repeat;
+  }
+  #candTableWrap td[data-col="text"]::before { margin-right: 9.5px; }
+  td[data-col="email"] {
+    --glyph: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill-rule='evenodd' d='M5.4 4.6h13.2a3.7 3.7 0 0 1 3.7 3.7v7.4a3.7 3.7 0 0 1-3.7 3.7H5.4a3.7 3.7 0 0 1-3.7-3.7V8.3a3.7 3.7 0 0 1 3.7-3.7zM3.4 8.9l7.5 5c.7.5 1.5.5 2.2 0l7.5-5-1-1.6-7.6 5.1-7.6-5.1z'/></svg>");
+    text-overflow: ellipsis;
+  }
+  #candTableWrap td[data-col="email"] { display: block; max-width: none; }
+  td[data-col="text"] {
+    --glyph: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M7.1 2.6c.6-.2 1.3 0 1.6.6l1.9 3.4c.3.6.2 1.2-.2 1.7L8.9 9.8c1.1 2.5 3 4.4 5.4 5.4l1.5-1.5c.5-.4 1.1-.5 1.7-.2l3.4 1.9c.6.3.8 1 .6 1.6l-.8 2.2c-.4 1.1-1.5 1.8-2.7 1.6C10.6 19.8 4.3 13.5 3.3 6.1c-.2-1.2.5-2.3 1.6-2.7z'/></svg>");
+    gap: 8px; overflow: hidden;
+  }
+  .m-phone { color: var(--ink); font-variant-numeric: tabular-nums; }
+  td[data-col="text"] .text-pip { font-size: 12.5px; }
+  #candTableWrap td[data-col="last"] { font-size: 12.5px; color: var(--muted); white-space: nowrap; padding-left: 8px; }
+
+  /* The status is a compact pill with the real select laid over it,
+     invisible: tapping the pill opens the phone's own picker. The select
+     stays 16px (iOS zooms the page for anything smaller); the pill is free to
+     be the size of a label. */
+  .status-ctl { position: relative; display: inline-flex; align-items: center; }
+  .status-face {
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 27px 0 12px;
+    border-radius: 99px;
     font-size: 13px;
-    margin-top: 4px;
+    font-weight: 650;
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%237a8194' stroke-width='1.6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
   }
-  /* A middle dot between the facts, so the line reads as one sentence — but
-     only between two that ended up on the same line. `last` wraps often and a
-     leading dot on a new line reads as a bullet. */
-  td[data-col="company"]::before {
-    content: '·';
-    margin-right: 8px;
-    color: var(--muted);
+  .status-ctl .status-select {
+    position: absolute;
+    inset: -7px -4px;
+    width: calc(100% + 8px);
+    height: calc(100% + 14px);
+    min-height: 0;
+    padding: 0;
+    opacity: 0;
+    font-size: 16px;
+    cursor: pointer;
   }
-  td[data-col="act"] { order: 9; flex: 1 0 100%; margin-top: 10px; }
-  /* This is the one that mattered most: five actions behind :hover, on a
-     device with no hover, that were also painted past the clip edge. They
-     are a real row of buttons here. */
-  #candTableWrap .row-actions {
-    opacity: 1;
+  .status-ctl:focus-within .status-face { box-shadow: 0 0 0 3px var(--blue-tint); }
+
+  /* The foot of the card: the phone's own Call, Message and Mail on the
+     left, this app's actions for the person behind More on the right. */
+  #candTableWrap td[data-col="act"] {
     display: flex;
-    gap: 6px;
-    justify-content: flex-start;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
   }
-  #candTableWrap .row-actions .icon-btn { flex: 0 0 auto; }
-  .name-cell .cand-name { font-size: 15px; }
+  #candTableWrap .row-actions { display: none; }
+  /* More: a round button, the way iOS draws the ellipsis beside a row. The
+     paint is 34px; the target is the 44px the button already has. */
+  .act-more { color: var(--blue); border-radius: 50%; position: relative; background: none; }
+  .act-more::before {
+    content: ''; position: absolute; inset: 5px; border-radius: 50%;
+    background: var(--blue-tint); z-index: -1;
+  }
+  .act-more { isolation: isolate; }
+  .act-more:active::before { background: var(--tint-hover-blue); }
+
+  /* ---- Call, Message and Mail, through the phone's own apps ----
+     The Contacts-card pattern: the app's icon, its name under it, a 44pt
+     target. A missing number greys the two that need one; on a card, tapping
+     one of those opens the person to add the number. */
+  .native-acts { display: flex; align-items: flex-start; gap: 4px; }
+  .native-act {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 56px;
+    min-height: 44px;
+    padding: 4px 2px;
+    border: 0;
+    background: none;
+    color: var(--ink-soft);
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .native-act:active .app-ico { transform: scale(0.9); filter: brightness(0.9); }
+  .native-act.is-off .app-ico { filter: grayscale(1); opacity: 0.35; }
+  .native-act.is-off .native-label { opacity: 0.6; }
+  span.native-act.is-off { cursor: default; }
+
+  /* In a conversation's header: the icons alone, beside the name. The name
+     and its line give way (ellipsis) rather than pushing them off the edge. */
+  .thread-who > div:not(.thread-native) { flex: 1 1 auto; min-width: 0; }
+  .thread-native { margin-left: auto; flex: none; }
+  .thread-native .native-acts { gap: 2px; }
+  .thread-native .native-act { min-width: 40px; padding: 0; }
+
+  /* ---- the tiles' lists (Interviews booked, Emailed, Replied) ----
+     One column: who and when across the full width, then Call / Message /
+     Mail, then the status and the links. Side by side, the name was being
+     squeezed into a third of the sheet, one word a line. */
+  .tile-row {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-areas:
+      "av     main"
+      "native native"
+      "side   side";
+    column-gap: 12px;
+    row-gap: 10px;
+    padding: 14px 0;
+  }
+  .tile-row > .avatar { grid-area: av; width: 40px; height: 40px; font-size: 14px; margin: 0; }
+  .tile-main { grid-area: main; }
+  .tile-when { font-size: 14px; }
+  .tile-name { font-size: 15px; margin-top: 1px; }
+  .tile-email, .tile-meta { font-size: 12.5px; overflow-wrap: anywhere; }
+  .tile-native { grid-area: native; padding-left: 50px; }
+  .tile-side {
+    grid-area: side;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px 16px;
+    padding-left: 52px;
+  }
+  .tile-side .status-ctl { order: -1; }
+  .tile-link { min-height: 34px; font-size: 13.5px; }
+  .tile-side:empty { display: none; }
+  .soon-tag { font-size: 11.5px; }
+
+  /* ---- More: an iOS action sheet ----
+     Two floating groups over the dimmed page — the actions, and Cancel on its
+     own — rather than a sheet with a header and a footer. */
+  .modal.action-sheet {
+    background: none;
+    border: 0;
+    box-shadow: none;
+    padding: 0 10px calc(10px + var(--safe-b));
+    max-height: none;
+    overflow: visible;
+  }
+  .modal.action-sheet::before { display: none; }
+  .sheet-group, .sheet-cancel {
+    background: var(--card);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .sheet-head { padding: 14px 16px 12px; text-align: center; border-bottom: 1px solid var(--line); }
+  .sheet-title { font-size: 13px; font-weight: 650; color: var(--navy); }
+  .sheet-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+  .sheet-sub .nowrap { white-space: nowrap; }
+  .sheet-btn, .sheet-cancel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 56px;
+    padding: 0 16px;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font-family: var(--font);
+    font-size: 17px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .sheet-btn + .sheet-btn { border-top: 1px solid var(--line); }
+  .sheet-btn .ico { flex: none; }
+  .sheet-btn.is-danger { color: var(--red); }
+  .sheet-btn:active, .sheet-cancel:active { background: var(--surface-sunk); }
+  .sheet-cancel { margin-top: 8px; font-weight: 650; background: var(--card); }
   .list-card { overflow: visible; }
   #candTableWrap { overflow: visible; }
   .list-top, .filter-row { padding-left: 14px; padding-right: 14px; }
@@ -649,25 +881,66 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .field-row { display: flex; flex-wrap: wrap; }
   .field-row > * { flex: 1 1 100%; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-  .funnel-row { grid-template-columns: 74px 1fr 40px 38px; }
-  .pipe-row { grid-template-columns: 96px 1fr 38px; }
   .login-screen, .setup-screen {
     padding: max(20px, var(--safe-t)) 16px calc(20px + var(--safe-b));
   }
+  /* ---- one way to lay out buttons, everywhere ----
+     A page's main action is the full width of the page, first; the others
+     share the row under it. A card's buttons stack the full width of the
+     card, the main one on top, the way an iOS form ends. Before this each page
+     wrapped its own way, and labels broke over two lines ("Import /
+     candidates", "No follow-ups / due", "Restore starter / text"). */
+  .head-actions .btn {
+    flex: 1 1 0;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .head-actions .btn-primary { order: -1; flex-basis: 100%; }
+  .head-actions .follow-up-btn { margin-right: 0; }
+  .card-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .card-actions .btn { width: 100%; justify-content: center; white-space: nowrap; }
+  .view .card > .btn:not(.filters-toggle), .view .card > a.btn,
+  .backup-actions .btn { width: 100%; justify-content: center; }
+  .backup-actions { display: flex; flex-direction: column; gap: 8px; }
+  /* A field and the buttons that go with it: the field across the card, the
+     buttons sharing one row under it — not each a row of its own. */
+  .field-row > .input, .field-row > input, .field-row > select, .field-row > .select { flex: 1 1 100%; }
+  .field-row > .btn { flex: 1 1 0; justify-content: center; white-space: nowrap; }
+
+  /* ---- the dashboard's charts: labels on one line ---- */
+  .pipe-row { grid-template-columns: 112px minmax(0, 1fr) 34px; gap: 10px; }
+  .pipe-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .funnel-row { grid-template-columns: 86px minmax(0, 1fr) 30px 38px; gap: 8px; }
+  .funnel-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .setup-list li { min-height: 44px; }
+  .setup-list .link { flex: none; white-space: nowrap; }
+
   /* Hover states are sticky on iOS: the first tap paints them and they stay
      until you touch something else, which reads as a stuck selection. */
   @media (hover: none) {
     .conv:hover, .link-results li:hover, tr:hover,
     .btn:hover, .icon-btn:hover, .bell:hover { background: inherit; }
+    .tile-link:hover { text-decoration: none; }
     tr:hover .row-actions { opacity: 1; }
   }
 }
 
 /* Narrower still — the small iPhones and anything in a split view. */
 @media (max-width: 380px) {
+  /* Two secondary buttons side by side no longer fit their labels: a row each. */
+  .head-actions .btn { flex-basis: 100%; }
   .nav-item { font-size: 9px; }
   .filter-row { grid-template-columns: 1fr; }
-  .stat-grid { grid-template-columns: 1fr; }
+  /* Still two across: one tile a row made the dashboard four screens of
+     numbers. The tiles give up some padding instead. */
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat-card { padding: 12px 12px; }
 }
 
 /* =====================================================================

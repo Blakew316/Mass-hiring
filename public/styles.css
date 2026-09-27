@@ -308,6 +308,9 @@ button, input, select, textarea { font-family: var(--font); }
 .tile-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
 .tile-link { font-size: 12px; font-weight: 600; color: var(--blue-deep); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
 .tile-link:hover { text-decoration: underline; }
+/* Some of these are buttons (Follow up, Link to candidate): drawn as the links
+   beside them, not with the browser's own button border. */
+button.tile-link { border: 0; background: none; padding: 0; font-family: var(--font); cursor: pointer; }
 .reply-quote { margin: 8px 0 0; padding: 10px 12px; background: var(--mint-tint); border-left: 3px solid var(--green); border-radius: 8px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; color: var(--ink); }
 .reply-quote.muted-quote { background: var(--navy-tint); border-left-color: var(--dot); color: var(--muted); font-style: italic; }
 .tile-when { font-size: 13px; font-weight: 600; color: var(--navy); }
@@ -1366,3 +1369,38 @@ tr.row-muted { opacity: .55; }
 .backup-list li .when { font-weight: 600; min-width: 0; }
 .backup-list li .muted { flex: 1; }
 .backup-list li:empty { display: none; }
+
+/* ---------------- Phone-only and desktop-only parts ----------------
+   A few things are drawn once and shown in one layout only — the card's
+   Call / Message / Mail row, the line under a name that the desktop gives
+   its own columns. !important because each of them also has a display of
+   its own (flex, grid) that must lose to this at the other width. */
+@media (min-width: 801px) { .m-only { display: none !important; } }
+@media (max-width: 800px) { .d-only { display: none !important; } }
+
+/* ---------------- The Phone, Messages and Mail app icons ----------------
+   A white glyph (icons.js → appIcon) on a rounded tile in each app's own
+   gradient, with the same corner Apple uses (22.37% of the side). The same
+   in light and dark, as the apps' own icons are. */
+.app-ico {
+  --s: 34px;
+  width: var(--s); height: var(--s);
+  border-radius: calc(var(--s) * 0.2237);
+  display: inline-grid; place-items: center; flex: none;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.16);
+  transition: transform 0.12s, filter 0.12s, opacity 0.12s;
+}
+.app-ico svg { width: 60%; height: 60%; display: block; }
+.app-ico-phone { background: linear-gradient(180deg, #5df777 0%, #1bc43b 100%); }
+.app-ico-messages { background: linear-gradient(180deg, #68fc81 0%, #0bbd33 100%); }
+.app-ico-messages svg { width: 68%; height: 68%; }
+.app-ico-mail { background: linear-gradient(180deg, #1fcafb 0%, #1a6fef 100%); }
+.app-ico-mail svg { width: 70%; height: 70%; }
+
+/* An interview about to start, or just started without the candidate. */
+.soon-tag {
+  display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 8px;
+  border-radius: 99px; font-size: 11px; font-weight: 700; vertical-align: 1px;
+  background: var(--amber-tint); color: var(--warn-ink); border: 1px solid var(--warn-line);
+}
+.soon-tag.is-now { background: var(--red-tint); color: var(--bad-ink); border-color: var(--bad-line); }

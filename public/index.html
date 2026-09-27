@@ -515,6 +515,7 @@
                     <div class="thread-name" id="mailName"></div>
                     <div class="thread-sub" id="mailSub"></div>
                   </div>
+                  <div class="thread-native m-only" id="mailNative"></div>
                 </div>
                 <div class="thread-head-actions">
                   <a class="btn btn-sm" id="mailGmail" target="_blank" rel="noopener" hidden>Open in Gmail</a>
@@ -579,6 +580,7 @@
                     <div class="thread-name" id="threadName"></div>
                     <div class="thread-sub" id="threadSub"></div>
                   </div>
+                  <div class="thread-native m-only" id="threadNative"></div>
                 </div>
                 <button class="btn btn-sm" id="threadOpenCandidate">Open candidate</button>
               </header>
@@ -1024,6 +1026,20 @@
       <button class="btn" id="composeCancelBtn" data-close>Cancel</button>
       <button class="btn btn-primary" id="composeSendBtn">Send</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== More, for one candidate card (phone) ===== -->
+<div class="modal-backdrop" id="actionSheet" hidden>
+  <div class="modal action-sheet" role="dialog" aria-modal="true" aria-labelledby="actionSheetTitle">
+    <div class="sheet-group">
+      <div class="sheet-head">
+        <div class="sheet-title" id="actionSheetTitle"></div>
+        <div class="sheet-sub" id="actionSheetSub"></div>
+      </div>
+      <div class="sheet-buttons" id="actionSheetButtons"></div>
+    </div>
+    <button type="button" class="sheet-cancel" data-close>Cancel</button>
   </div>
 </div>
 

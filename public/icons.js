@@ -32,6 +32,9 @@
     // clapper as its own shape, the way bell.fill is drawn.
     bell: '<path d="M12 1.6a1.5 1.5 0 0 1 1.5 1.5v.8a7 7 0 0 1 5.4 6.8v2.5c0 1.4.5 2.8 1.4 3.9a1.3 1.3 0 0 1-1 2.2H4.7a1.3 1.3 0 0 1-1-2.2 6.2 6.2 0 0 0 1.4-3.9v-2.5a7 7 0 0 1 5.4-6.8v-.8A1.5 1.5 0 0 1 12 1.6z"/><path d="M9.3 18.9a.6.6 0 0 0-.6.7 3.4 3.4 0 0 0 6.6 0 .6.6 0 0 0-.6-.7z"/>',
 
+    // Three dots: "more of what you can do with this one" — ellipsis in SF.
+    more: '<circle cx="5.2" cy="12" r="2.1"/><circle cx="12" cy="12" r="2.1"/><circle cx="18.8" cy="12" r="2.1"/>',
+
     // ---- people ----
     users: '<circle cx="9" cy="7.6" r="3.9"/><path d="M9 12.8c-3.9 0-6.9 2.5-6.9 5.9 0 1.4 1 2.2 2.4 2.2h9c1.4 0 2.4-.8 2.4-2.2 0-3.4-3-5.9-6.9-5.9z"/><circle cx="17.8" cy="8.4" r="3"/><path d="M17.8 13.2c-.6 0-1.2 0-1.7.2a8.5 8.5 0 0 1 2.6 5.5h2.6c1.2 0 1.9-.7 1.9-1.8 0-2.3-2.2-3.9-5.4-3.9z"/>',
 
@@ -69,6 +72,19 @@
     return `<svg class="ico ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" stroke="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
   }
   window.icon = icon;
+
+  // The Phone, Messages and Mail app icons, for the buttons that hand a call,
+  // a text or an email to the phone's own apps. Drawn as the apps are drawn —
+  // a white glyph on a rounded tile with the app's own gradient — so they read
+  // at a glance as "this opens Phone", not as another button of this app's.
+  // The tile is CSS (.app-ico-*), so it follows the size it is given.
+  const APP = {
+    phone: '<path d="M7.1 2.6c.6-.2 1.3 0 1.6.6l1.9 3.4c.3.6.2 1.2-.2 1.7L8.9 9.8c1.1 2.5 3 4.4 5.4 5.4l1.5-1.5c.5-.4 1.1-.5 1.7-.2l3.4 1.9c.6.3.8 1 .6 1.6l-.8 2.2c-.4 1.1-1.5 1.8-2.7 1.6C10.6 19.8 4.3 13.5 3.3 6.1c-.2-1.2.5-2.3 1.6-2.7z"/>',
+    messages: '<path d="M12 3.2c-5.6 0-10.1 3.8-10.1 8.4 0 2.6 1.4 4.9 3.7 6.4-.2 1.1-.8 2.2-1.7 3-.3.3-.1.8.3.8 1.9 0 3.6-.7 4.8-1.6 1 .3 2 .4 3 .4 5.6 0 10.1-3.8 10.1-8.5S17.6 3.2 12 3.2z"/>',
+    mail: '<path d="M4.4 5.4h15.2c1 0 1.8.8 1.8 1.8v9.6c0 1-.8 1.8-1.8 1.8H4.4c-1 0-1.8-.8-1.8-1.8V7.2c0-1 .8-1.8 1.8-1.8z"/><path fill="none" stroke="#1a73ef" stroke-opacity=".55" stroke-width="1.25" stroke-linejoin="round" d="M3.3 6.6l8.7 6.6 8.7-6.6"/>',
+  };
+  window.appIcon = (name, size = 36) =>
+    `<span class="app-ico app-ico-${name}" style="--s:${size}px" aria-hidden="true"><svg viewBox="0 0 24 24" fill="#fff">${APP[name] || ''}</svg></span>`;
   window.mountIcons = (root = document) => {
     root.querySelectorAll('[data-icon]').forEach((el) => {
       el.innerHTML = icon(el.dataset.icon, el.dataset.size ? Number(el.dataset.size) : 16);

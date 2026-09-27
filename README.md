@@ -111,6 +111,19 @@ Keep as many named emails and texts as you like and pick one each time you send.
 
 The feed shows only candidate signals (opened, replied, booked, cancelled) — no connection or import history.
 
+## On your phone
+
+Installed to the Home Screen (or opened in Safari on an iPhone), the dashboard is laid out for a phone:
+
+- **Every candidate is a card** with the same shape: name, role and company, status, when they were last emailed, email address and phone number, in the same place on every card.
+- **Call, Message and Mail** sit at the foot of each card, as the iPhone's own Phone, Messages and Mail icons. They open the phone's apps — a call, a text or a new email from your phone itself, not through the Mac relay or Gmail. With no number on file, Call and Message are greyed out and tapping one opens the person so you can add it.
+- **Running late?** The *Interviews booked* list has the same three buttons under every interview, and an interview starting within the hour (or started without the candidate) says so — *Starts in 12 min*, *Started 5 min ago*. The buttons use the candidate's number, or the one they booked with on Calendly.
+- The same buttons are in the header of an open email or text conversation.
+- **More (···)** on a card holds this app's own actions for the person: the tracked outreach email, a text from the Mac, a follow-up, editing and removing.
+- The status is a small pill; tap it for the iPhone's own picker.
+
+On a computer, the dashboard is unchanged.
+
 ## Interviews synced from Calendly
 
 With a Calendly personal access token saved in Settings, the app pulls your scheduled interviews every few minutes (and on demand with **Sync now** in the Interviews booked tile), matches invitees to candidates, flips them to **Booked**, reverts cancellations, and lists every upcoming interview — including bookings made before the webhook existed. The webhook still delivers instant booking alerts.
