@@ -128,28 +128,38 @@
       <button class="nav-item" data-view="candidates" data-short="People">
         <span class="nav-ico" data-icon="users" data-size="17"></span> <span class="nav-label">Candidates</span>
       </button>
+      <!-- The phone's grouped tabs. A tab bar holds five things before it
+           turns into a row of icons nobody can hit, so on a phone Email and
+           Texting share Inbox, Sales IQ and Onboarding docs share Hiring, and
+           each pair is switched from the top of its own page. The four pages
+           keep their own buttons (data-in) for the sidebar, which has room. -->
+      <button class="nav-item nav-group" type="button" data-group="inbox" data-short="Inbox" aria-label="Inbox — Email and Texts">
+        <span class="nav-ico" data-icon="tray" data-size="17"></span> <span class="nav-label">Inbox</span> <span class="nav-count" id="navInboxCount"></span>
+      </button>
+      <button class="nav-item nav-group" type="button" data-group="hiring" data-short="Hiring" aria-label="Hiring — Sales IQ and Onboarding docs">
+        <span class="nav-ico" data-icon="briefcase" data-size="17"></span> <span class="nav-label">Hiring</span>
+      </button>
       <button class="nav-item" data-view="import" data-short="Import" data-overflow>
         <span class="nav-ico" data-icon="download" data-size="17"></span> <span class="nav-label">Import</span>
       </button>
-      <button class="nav-item" data-view="template" data-short="Email">
+      <button class="nav-item" data-view="template" data-short="Email" data-in="inbox">
         <span class="nav-ico" data-icon="mail" data-size="17"></span> <span class="nav-label">Email</span> <span class="nav-count" id="navEmailCount"></span>
       </button>
-      <button class="nav-item" data-view="texting" data-short="Texts">
+      <button class="nav-item" data-view="texting" data-short="Texts" data-in="inbox">
         <span class="nav-ico" data-icon="bubble" data-size="17"></span> <span class="nav-label">Texting</span>
       </button>
-      <button class="nav-item" data-view="salesiq" data-short="Sales IQ">
+      <button class="nav-item" data-view="salesiq" data-short="Sales IQ" data-in="hiring">
         <span class="nav-ico" data-icon="clipboard" data-size="17"></span> <span class="nav-label">Sales IQ</span>
       </button>
-      <button class="nav-item" data-view="onboarding" data-short="Docs">
+      <button class="nav-item" data-view="onboarding" data-short="Docs" data-in="hiring">
         <span class="nav-ico" data-icon="signdoc" data-size="17"></span> <span class="nav-label">Onboarding docs</span>
       </button>
       <button class="nav-item" data-view="settings" data-short="Settings" data-overflow>
         <span class="nav-ico" data-icon="gear" data-size="17"></span> <span class="nav-label">Settings</span>
       </button>
-      <!-- The phone's More tab. Eight pages do not fit a phone's tab bar at a
-           size a thumb or an eye can use, so on the narrowest screens the two
-           visited least (marked data-overflow) move into More, as iOS does
-           with its own tab bars. Never shown in the sidebar. -->
+      <!-- The phone's More tab: the two pages visited least (marked
+           data-overflow), as a list, the way iOS does it once a tab bar runs
+           out of room. Never shown in the sidebar. -->
       <button class="nav-item nav-more" id="navMore" type="button" data-short="More" aria-haspopup="dialog">
         <span class="nav-ico" data-icon="more" data-size="17"></span> <span class="nav-label">More</span>
       </button>

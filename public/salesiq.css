@@ -1892,9 +1892,9 @@
 .siq-layer .sheet-backdrop { z-index: 70; }
 .siq-layer .q-toast { z-index: 75; }
 @media (max-width: 800px) {
-  .siq-layer .q-toast { bottom: calc(var(--tabbar-h, 50px) + var(--safe-b, 0px) + 12px); }
+  .siq-layer .q-toast { bottom: calc(var(--tabbar-space, 50px) + 6px); }
   .main[data-view="salesiq"] {
-    padding: 0 0 calc(var(--tabbar-h) + var(--safe-b));
+    padding: 0 0 var(--tabbar-space);
   }
   .main[data-view="salesiq"] > .siq-wash { left: 0; }
 }

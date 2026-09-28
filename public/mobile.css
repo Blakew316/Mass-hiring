@@ -21,8 +21,14 @@
    ===================================================================== */
 
 :root {
-  --tabbar-h: 50px;
+  --tabbar-h: 58px;
   --safe-b: env(safe-area-inset-bottom, 0px);
+  /* The tab bar floats: a capsule held clear of the screen's edges, sitting
+     just above the home indicator. --tabbar-space is everything from the
+     bottom of the screen to its top plus a breath, which is what a page's
+     last line, a toast or a sheet has to stay clear of. */
+  --tabbar-lift: max(10px, calc(var(--safe-b) - 12px));
+  --tabbar-space: calc(var(--tabbar-h) + var(--tabbar-lift) + 8px);
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
@@ -101,50 +107,77 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     overflow-y: auto;
     overflow-x: hidden;
     max-width: none;
-    padding: 0 16px calc(var(--tabbar-h) + var(--safe-b) + 24px);
+    padding: 0 16px calc(var(--tabbar-space) + 20px);
     padding-left: max(16px, var(--safe-l));
     padding-right: max(16px, var(--safe-r));
     scroll-padding-top: 56px;
   }
 
   /* ---- the tab bar ----
-     It is the sidebar, moved: same six buttons, same click handlers, same
-     hash routing. Nothing here knows it used to be a sidebar. */
+     It is the sidebar, moved: the same buttons, click handlers and hash
+     routing. On a phone it is a capsule floating over the page, five tabs
+     wide — Home, People, Inbox, Hiring, More — with the current one sitting
+     in a highlight that slides from tab to tab. */
   .sidebar {
     position: fixed;
     /* top: auto matters — the desktop rule is `position: sticky; top: 0` with
        a height, and leaving that top in place stretched the bar over the whole
        screen, blurring the app behind its own backdrop filter. */
     top: auto;
-    left: 0; right: 0; bottom: 0;
+    left: max(12px, var(--safe-l));
+    right: max(12px, var(--safe-r));
+    bottom: var(--tabbar-lift);
     z-index: 60;
     width: auto;
+    max-width: 520px;
+    margin: 0 auto;
     height: auto;
     flex-direction: column;
     align-items: stretch;
     gap: 0;
-    padding: 0 0 var(--safe-b);
-    border-top: 1px solid var(--line);
-    border-right: 0;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 30px;
     background: var(--card);
-    /* The iOS tab bar is translucent over whatever scrolls beneath it. */
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    backdrop-filter: saturate(180%) blur(20px);
+    box-shadow: 0 12px 32px -10px rgba(16, 24, 64, .30), 0 2px 8px rgba(16, 24, 64, .08);
+    /* Frosted, the way an iOS bar is, over whatever scrolls beneath it. */
+    -webkit-backdrop-filter: saturate(180%) blur(22px);
+    backdrop-filter: saturate(180%) blur(22px);
   }
   @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-    .sidebar { background: color-mix(in srgb, var(--card) 82%, transparent); }
+    .sidebar { background: color-mix(in srgb, var(--card) 80%, transparent); }
   }
   /* The wordmark lives in the header on a phone; the tab bar is for tabs. */
   .sidebar .brand, .sidebar-foot { display: none; }
 
   .nav {
+    --tab-n: 5;
+    --tab-i: 0;
+    position: relative;
     display: flex;
     flex-direction: row;
     margin: 0;
-    padding: 0;
-    overflow: visible;                /* six tabs fit; nothing to scroll to */
+    padding: 5px;
+    overflow: visible;
     height: var(--tabbar-h);
+    box-sizing: border-box;
   }
+  /* The highlight: one element, moved by the index of the current tab. */
+  .nav::before {
+    content: '';
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    left: 5px;
+    width: calc((100% - 10px) / var(--tab-n));
+    border-radius: 24px;
+    background: var(--blue-tint);
+    transform: translateX(calc(var(--tab-i) * 100%));
+    opacity: 0;
+    pointer-events: none;
+  }
+  .nav.tabs-ready::before { transition: transform .42s var(--ease-in-ios), opacity .2s; }
+  .nav.has-current::before { opacity: 1; }
   .nav-item {
     flex: 1 1 0;
     min-width: 0;
@@ -152,59 +185,55 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    padding: 5px 2px 4px;
+    gap: 2px;
+    padding: 4px 2px 3px;
     margin: 0;
-    border-radius: 0;
+    border-radius: 24px;
     background: none;
-    font-size: 10px;
+    font-size: 10.5px;
     font-weight: 600;
     letter-spacing: -0.01em;
     line-height: 1.1;
     color: var(--muted);
     white-space: nowrap;
-    overflow: hidden;
     position: relative;
-    transition: color .15s;
+    z-index: 1;
+    transition: color .2s, transform .15s;
   }
-  /* "Dashboard" and "Candidates" need 56px of 10px Inter and the cell is 52px
-     on the smallest phone still in service. Rather than truncate them, or push
-     two of the six behind a More sheet and cost a tap, each tab carries a
-     short name for this width. The sidebar keeps the long ones. */
+  /* Each tab carries a short name for this width; the sidebar keeps the long
+     ones. */
   .nav-item .nav-label { display: none; }
   .nav-item::after { content: attr(data-short); }
   .nav-item .nav-ico { margin: 0; }
-  .nav-item .ico { width: 22px; height: 22px; }
+  .nav-item .ico { width: 23px; height: 23px; }
   .nav-item.active { background: none; color: var(--blue); }
-  .nav-item:active { opacity: .55; }
-  /* The count rides on the icon as a badge rather than sitting after the
-     label, where at 10px it would push the word off its own tab. */
-  /* Anchored to the corner and grown leftwards, the way a badge on an app icon
-     is. A one-digit count sits clear of the icon entirely; a four-digit one
-     reaches back across its top corner and is still whole. Anchoring it to the
-     middle instead, as it was, put the number over the icon and then off the
-     side of the tab.
+  .nav-item:active { transform: scale(.94); }
+  /* The count rides on the icon's shoulder as a badge, anchored to the corner
+     and grown leftwards the way a badge on an app icon is, so a four-digit
+     count reaches back across the icon and is still whole.
 
      It draws data-short, not its own text: the element says "3,514" for the
      sidebar and the badge wants "3514". */
   .nav-count {
     position: absolute;
-    top: 2px;
-    right: 6px;
-    left: auto;
+    top: 3px;
+    left: calc(50% + 4px);
+    right: auto;
     transform: none;
-    min-width: 15px;
-    height: 15px;
-    padding: 0 4.5px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
     border-radius: 99px;
+    border: 2px solid var(--card);
+    box-sizing: border-box;
     background: var(--red);
     color: #fff;
     font-size: 0;
     font-weight: 700;
-    line-height: 15px;
+    line-height: 13px;
     text-align: center;
   }
-  .nav-count::after { content: attr(data-short); font-size: 9px; letter-spacing: -0.01em; }
+  .nav-count::after { content: attr(data-short); font-size: 9.5px; letter-spacing: -0.01em; }
   .nav-count:empty { display: none; }
   /* The badge sits over the icon's shoulder and must not be clipped by the
      cell; the label below it is what needed clipping, and it has its own. */
@@ -215,6 +244,77 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  /* ---- the switch at the top of a grouped page ----
+     Email | Texts under Inbox, Sales IQ | Onboarding under Hiring: a row of
+     two pills under the title, the current one filled. */
+  .page-head.has-group {
+    grid-template-areas:
+      "title chrome"
+      "group group"
+      "acts  acts";
+  }
+  /* The tab's name is the title here; the page's own title is the pill. */
+  .page-head.has-group h1 { display: none; }
+  .group-title {
+    display: block;
+    margin: 0;
+    font-family: var(--font);
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--navy);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: font-size .2s var(--ease-in-ios);
+  }
+  .main.scrolled .group-title { font-size: 19px; }
+  /* The pill already says Email or Texts; the card's own "Inbox" and
+     "Messages" heading would be the third time. */
+  #view-template .messages-card .card-head h2,
+  #view-texting .messages-card .card-head h2 { display: none; }
+  .group-tabs {
+    grid-area: group; display: flex; gap: 8px; min-width: 0;
+    overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px;
+  }
+  .group-tabs::-webkit-scrollbar { display: none; }
+  .group-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 38px;
+    padding: 0 15px 0 13px;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    background: var(--card);
+    color: var(--ink-soft);
+    font: inherit;
+    font-family: var(--font);
+    font-size: 14px;
+    white-space: nowrap;
+    flex: none;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .group-tab .ico { flex: none; }
+  .group-tab.is-on { background: var(--navy); border-color: var(--navy); color: var(--card); }
+  .group-tab:not(.is-on):active { background: var(--surface-sunk); }
+  .group-count {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 99px;
+    background: var(--red);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+  }
+  .group-count:empty { display: none; }
 
   /* ---- cards ----
      Early in the file on purpose: the specific card rules further down have
@@ -712,7 +812,7 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
        min-content width, which is what kept the conversation list 540px wide
        inside a 390px screen. */
     grid-template-columns: minmax(0, 1fr);
-    height: calc(var(--app-h, 100dvh) - var(--tabbar-h) - var(--safe-b) - 232px);
+    height: calc(var(--app-h, 100dvh) - var(--tabbar-space) - 232px);
     min-height: 320px;
     overflow: hidden;
   }
@@ -799,23 +899,31 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .settings-account .sidebar-foot { display: flex; margin: 0; padding: 0; border: 0; }
   .settings-account .account { margin-bottom: 10px; }
 
-  /* Pull the list down to refresh: there is no reload button in a Home
-     Screen app, and the 30-second poll is invisible while you wait for it. */
+  /* Pull down to refresh: the spinner in the gap the page leaves as it comes
+     down. Fixed, outside the scroller, so the scroller cannot clip it. */
   .ptr {
-    position: absolute;
-    top: 0; left: 0; right: 0;
+    position: fixed;
+    top: var(--safe-t);
+    left: 0;
+    right: 0;
+    height: 0;
+    z-index: 45;
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 56px;
-    margin-top: -56px;
+    overflow: hidden;
     color: var(--muted);
     pointer-events: none;
+    opacity: 0;
   }
-  .ptr .ico { transition: transform .2s; }
-  .ptr.armed .ico { transform: rotate(180deg); color: var(--blue); }
-  .ptr.spinning .ico { animation: ptrSpin .9s linear infinite; color: var(--blue); }
-  @keyframes ptrSpin { to { transform: rotate(360deg); } }
+  .ptr.is-on { opacity: 1; }
+  .ptr-spin { flex: none; transition: transform .2s var(--ease-in-ios), color .2s; }
+  .ptr-spin rect { fill: currentColor; transition: opacity .12s; }
+  .ptr.is-armed .ptr-spin { transform: scale(1.12); color: var(--ink-soft); }
+  /* Spinning, the iOS way: the spokes fade in turn around the circle. */
+  .ptr.is-busy .ptr-spin { color: var(--ink-soft); }
+  .ptr.is-busy .ptr-spin rect { animation: ptrFade .8s linear infinite; animation-delay: calc(var(--k) * .1s - .8s); }
+  @keyframes ptrFade { from { opacity: 1; } to { opacity: .22; } }
 
   /* ---- modals arrive from the bottom, like a sheet ---- */
   .modal-backdrop {
@@ -868,10 +976,11 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     top: auto;
     right: 0;
     left: 0;
-    bottom: calc(var(--tabbar-h) + var(--safe-b));
+    bottom: var(--tabbar-space);
     width: auto;
     max-height: 60dvh;
-    border-radius: 16px 16px 0 0;
+    margin: 0 8px;
+    border-radius: 18px;
     z-index: 55;
   }
 
@@ -879,7 +988,7 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .toast-wrap {
     right: 12px;
     left: 12px;
-    bottom: calc(14px + var(--tabbar-h) + var(--safe-b));
+    bottom: calc(6px + var(--tabbar-space));
   }
   .toast { max-width: none; }
   .grid-2, #apolloCard .grid-2, .field-row, .two-col { grid-template-columns: 1fr; }
@@ -939,7 +1048,7 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
 @media (max-width: 380px) {
   /* Two secondary buttons side by side no longer fit their labels: a row each. */
   .head-actions .btn { flex-basis: 100%; }
-  .nav-item { font-size: 9px; }
+  .nav-item { font-size: 10px; }
   .filter-row { grid-template-columns: 1fr; }
   /* Still two across: one tile a row made the dashboard four screens of
      numbers. The tiles give up some padding instead. */
@@ -959,7 +1068,7 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   }
   /* There is no browser chrome to pull down, so a page that ends exactly at
      the bottom looks cut off. */
-  .main { padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 32px); }
+  .main { padding-bottom: calc(var(--tabbar-space) + 28px); }
   /* No URL bar to tell you the page is loading, so the app says it itself. */
   .conn-lost { display: inline-flex; }
 }
@@ -967,7 +1076,9 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
 @media (prefers-reduced-motion: reduce) {
   .messenger .thread-col, .messenger .conv-col { transition: none; }
   .modal { animation: none; }
-  .page-head, .page-head h1 { transition: none; }
+  .page-head, .page-head h1, .group-title { transition: none; }
+  .nav.tabs-ready::before, .nav-item { transition: none; }
+  .ptr.is-busy .ptr-spin rect { animation-duration: 2.4s; }
 }
 
 /* =====================================================================
@@ -999,22 +1110,27 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
    "Candidates" at the large-title size does not fit beside the header's
    controls at this width, and never did. One step down and it does. */
 @media (max-width: 360px) {
-  .page-head h1 { font-size: 26px; }
+  .page-head h1, .group-title { font-size: 26px; }
+  /* Both pills on one line without their icons, rather than the second one
+     running off the edge. */
+  .group-tab .ico { display: none; }
+  .group-tab { padding: 0 14px; }
 }
 
 /* =====================================================================
-   The tab bar's More
-   Eight pages: at a phone's width eight tabs would be 47px each, with
-   "Settings" clipped to "Setti…". On the narrowest screens the two pages
-   visited least (data-overflow on their tabs) move into a More tab, which
-   opens them as a list — what iOS itself does once a tab bar runs out of
-   room. Wider than that, every page has its own tab again, and the
-   sidebar never shows More at all.
+   The tab bar's five tabs
+   Eight pages at a phone's width would be eight 45px tabs, which is a row
+   of icons, not a tab bar. So on a phone Email and Texting share Inbox,
+   Sales IQ and Onboarding docs share Hiring (data-in on their own tabs),
+   and the two pages visited least (data-overflow) are in More, as a list —
+   what iOS itself does once a tab bar runs out of room. The sidebar never
+   shows the grouped tabs or More.
    ===================================================================== */
-.nav .nav-more { display: none; }
-@media (max-width: 520px) {
-  .nav .nav-item[data-overflow] { display: none; }
-  .nav .nav-more { display: flex; }
+.nav .nav-more, .nav .nav-group, .group-tabs { display: none; }
+@media (max-width: 800px) {
+  .nav .nav-item[data-overflow], .nav .nav-item[data-in] { display: none; }
+  .nav .nav-more, .nav .nav-group { display: flex; }
+  .group-tabs { display: flex; }
 }
 .more-sheet .sheet-btn.more-row {
   justify-content: flex-start;

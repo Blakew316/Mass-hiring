@@ -34,6 +34,10 @@
 
     // Three dots: "more of what you can do with this one" — ellipsis in SF.
     more: '<circle cx="5.2" cy="12" r="2.1"/><circle cx="12" cy="12" r="2.1"/><circle cx="18.8" cy="12" r="2.1"/>',
+    // The phone's two grouped tabs: Inbox (Email and Texts) is SF's tray,
+    // Hiring (Sales IQ and Onboarding docs) its briefcase.
+    tray: '<path fill-rule="evenodd" d="M7.9 3.4h8.2a2.8 2.8 0 0 1 2.6 1.9l2.4 7.3c.1.3.1.5.1.8v4.4a2.8 2.8 0 0 1-2.8 2.8H5.6a2.8 2.8 0 0 1-2.8-2.8v-4.4c0-.3 0-.5.1-.8l2.4-7.3a2.8 2.8 0 0 1 2.6-1.9zm-.4 2.9l-2.1 6.1h3.7c.5 0 .9.3 1 .8a2 2 0 0 0 3.8 0c.1-.5.5-.8 1-.8h3.7l-2.1-6.1a.9.9 0 0 0-.8-.6H8.3a.9.9 0 0 0-.8.6z"/>',
+    briefcase: '<path fill-rule="evenodd" d="M10.1 2.6h3.8a2.3 2.3 0 0 1 2.3 2.3v1.2h2.9a2.8 2.8 0 0 1 2.8 2.8v3.2H2.1V8.9a2.8 2.8 0 0 1 2.8-2.8h2.9V4.9a2.3 2.3 0 0 1 2.3-2.3zm-.3 2.3v1.2h4.4V4.9a.3.3 0 0 0-.3-.3h-3.8a.3.3 0 0 0-.3.3z"/><path d="M2.1 13.6h8.3v.9a1 1 0 0 0 1 1h1.2a1 1 0 0 0 1-1v-.9h8.3v4.1a2.8 2.8 0 0 1-2.8 2.8H4.9a2.8 2.8 0 0 1-2.8-2.8z"/>',
 
     // ---- people ----
     users: '<circle cx="9" cy="7.6" r="3.9"/><path d="M9 12.8c-3.9 0-6.9 2.5-6.9 5.9 0 1.4 1 2.2 2.4 2.2h9c1.4 0 2.4-.8 2.4-2.2 0-3.4-3-5.9-6.9-5.9z"/><circle cx="17.8" cy="8.4" r="3"/><path d="M17.8 13.2c-.6 0-1.2 0-1.7.2a8.5 8.5 0 0 1 2.6 5.5h2.6c1.2 0 1.9-.7 1.9-1.8 0-2.3-2.2-3.9-5.4-3.9z"/>',

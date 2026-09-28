@@ -1076,7 +1076,7 @@
     font-size: 16px;
     min-height: 46px;
   }
-  .wph-layer .wh-toast { bottom: calc(var(--tabbar-h, 50px) + var(--safe-b, 0px) + 14px); }
+  .wph-layer .wh-toast { bottom: calc(var(--tabbar-space, 50px) + 6px); }
 }
 
 /* ── Sync ───────────────────────────────────────────────────────────── */
@@ -1134,7 +1134,8 @@
   position: fixed;
   left: 12px;
   right: 12px;
-  bottom: calc(74px + env(safe-area-inset-bottom));
+  /* Clear of the site's floating tab bar (mobile.css sets --tabbar-space). */
+  bottom: calc(var(--tabbar-space, calc(62px + env(safe-area-inset-bottom))) + 6px);
   display: flex;
   align-items: center;
   gap: 12px;

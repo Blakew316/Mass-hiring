@@ -1511,3 +1511,7 @@ button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offs
   background: var(--amber-tint); color: var(--warn-ink); border: 1px solid var(--warn-line);
 }
 .soon-tag.is-now { background: var(--red-tint); color: var(--bad-ink); border-color: var(--bad-line); }
+
+/* Phone-only pieces (mobile.css draws them): the pull-to-refresh spinner,
+   and the grouped pages' title and switch. */
+.ptr, .group-title, .group-tabs { display: none; }

@@ -538,6 +538,40 @@
   // width rather than reflowing the moment you navigate.
   if (mainEl) mainEl.dataset.view = currentView;
   const scrollMemory = Object.create(null);
+
+  // The phone's tab bar has five tabs: Home, People, Inbox, Hiring and More.
+  // Inbox is Email and Texting, Hiring is Sales IQ and Onboarding docs; each
+  // pair is switched from the top of its own page, and the tab goes back to
+  // whichever of the two you were on last. The sidebar still lists all four.
+  const GROUPS = {
+    inbox: { label: 'Inbox', views: [['template', 'Email', 'mail'], ['texting', 'Texts', 'bubble']] },
+    hiring: { label: 'Hiring', views: [['salesiq', 'Sales IQ', 'clipboard'], ['onboarding', 'Onboarding docs', 'signdoc']] },
+  };
+  const groupOf = (view) => Object.keys(GROUPS).find((g) => GROUPS[g].views.some(([v]) => v === view)) || '';
+  const lastInGroup = (() => {
+    try { return JSON.parse(localStorage.getItem('wp-tab-last')) || {}; } catch { return {}; }
+  })();
+  function rememberInGroup(view) {
+    const g = groupOf(view);
+    if (!g || lastInGroup[g] === view) return;
+    lastInGroup[g] = view;
+    try { localStorage.setItem('wp-tab-last', JSON.stringify(lastInGroup)); } catch {}
+  }
+  // The highlight behind the current tab slides from one tab to the next.
+  // Measured from the tabs actually on screen, so it follows whatever the
+  // stylesheet shows at this width; with none of them current it fades out.
+  function placeTabHighlight() {
+    const nav = $('.nav');
+    if (!nav) return;
+    const tabs = $$('.nav > .nav-item').filter((t) => t.getClientRects().length > 0);
+    const i = tabs.findIndex((t) => t.classList.contains('active'));
+    nav.style.setProperty('--tab-n', String(tabs.length || 1));
+    nav.style.setProperty('--tab-i', String(Math.max(0, i)));
+    nav.classList.toggle('has-current', i >= 0);
+    // It slides between tabs, but on the first paint it is simply there.
+    if (!nav.classList.contains('tabs-ready')) requestAnimationFrame(() => requestAnimationFrame(() => nav.classList.add('tabs-ready')));
+  }
+
   function show(view, { record = true } = {}) {
     if (!$(`#view-${view}`)) return;
     if (currentView !== view) scrollMemory[currentView] = mainEl ? mainEl.scrollTop : 0;
@@ -547,8 +581,13 @@
     // the window, everything else is capped for reading.
     if (mainEl) mainEl.dataset.view = view;
     $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
-    // A page that lives in More on a phone lights up More.
+    // A page that lives in More on a phone lights up More, and one of a
+    // pair lights up the tab the pair shares.
     $('#navMore').classList.toggle('active', Boolean($(`.nav-item[data-overflow][data-view="${view}"]`)));
+    const group = groupOf(view);
+    $$('.nav-group').forEach((b) => b.classList.toggle('active', b.dataset.group === group));
+    rememberInGroup(view);
+    placeTabHighlight();
     // Anything that fell behind while you were on another page is drawn now,
     // rather than on every poll for six pages at once.
     if (staleViews.has(view)) renderView(view);
@@ -610,12 +649,49 @@
   // Typing a page into the address bar, or following a link to #texting from
   // outside, changes the hash without reloading and without a popstate.
   window.addEventListener('hashchange', () => route(viewInAddressBar(), false));
+  // Tapping the tab you are already on is how iOS takes you back to the top
+  // of it: out of an open conversation first, then up to the top of the page.
+  function tabAgain() {
+    if (threadIsOpen()) { backFromThread(); return; }
+    if (mainEl) mainEl.scrollTo({ top: 0, behavior: 'smooth' });
+    // A conversation list scrolls inside its page; it goes to the top too.
+    $$('.view.active .conv-list').forEach((l) => l.scrollTo({ top: 0, behavior: 'smooth' }));
+  }
   $$('.nav-item[data-view]').forEach((b) => b.addEventListener('click', () => {
-    // Tapping the tab you are already on is how iOS pops back to the top of
-    // it — here, out of an open conversation.
-    if (b.dataset.view === currentView && threadIsOpen()) { backFromThread(); return; }
+    if (b.dataset.view === currentView) { tabAgain(); return; }
     show(b.dataset.view);
   }));
+  $$('.nav-group').forEach((b) => b.addEventListener('click', () => {
+    const g = b.dataset.group;
+    if (groupOf(currentView) === g) { tabAgain(); return; }
+    show(lastInGroup[g] || GROUPS[g].views[0][0]);
+  }));
+  // The top of each grouped page on a phone: the tab's own name as the title
+  // (Inbox, Hiring), and under it the switch between its two pages — Email |
+  // Texts, Sales IQ | Onboarding docs. Built from GROUPS so the tab bar and
+  // the switch cannot disagree. Phone only: the sidebar lists every page, and
+  // each page keeps its own title there.
+  function buildGroupSwitches() {
+    for (const def of Object.values(GROUPS)) {
+      for (const [view] of def.views) {
+        const head = $(`#view-${view} .page-head`);
+        if (!head || head.querySelector('.group-tabs')) continue;
+        const title = document.createElement('div');
+        title.className = 'group-title';
+        title.setAttribute('role', 'heading');
+        title.setAttribute('aria-level', '1');
+        title.textContent = def.label;
+        head.firstElementChild.prepend(title);
+        const nav = document.createElement('nav');
+        nav.className = 'group-tabs';
+        nav.setAttribute('aria-label', def.label);
+        nav.innerHTML = def.views.map(([v, label, ico]) => `<button type="button" class="group-tab${v === view ? ' is-on' : ''}" ${v === view ? 'aria-current="page"' : `data-goto="${v}"`}>${icon(ico, 15)}<span>${esc(label)}</span><span class="group-count" data-count-for="${v}"></span></button>`).join('');
+        head.classList.add('has-group');
+        head.firstElementChild.after(nav);
+      }
+    }
+  }
+  buildGroupSwitches();
   // More: the pages the phone's tab bar has no room for, as a list. Built
   // from the tab bar itself each time, so the two can never disagree.
   $('#navMore').addEventListener('click', () => {
@@ -5025,6 +5101,7 @@
   // a private window, on an old browser, or when registration simply fails,
   // every request goes to the network and this is the app it was before.
   let updateReady = null;
+  let pulledAt = 0;           // when the page was last pulled down to refresh
   let askedForUpdate = false;
   let updateTaken = false;
   let reloadingForUpdate = false;
@@ -5089,6 +5166,8 @@
             updateReady = worker;
             if (state) renderNotices();
             takeUpdate('launch');
+            // It finished coming down just after a pull asked for it.
+            if (Date.now() - pulledAt < 20000) takeUpdate('pull');
           };
           offerIfWaiting(reg.waiting);
           reg.addEventListener('updatefound', () => {
@@ -5198,7 +5277,7 @@
   });
   // Leaving the page the thread belongs to closes it, or coming back to that
   // page would land straight in a thread nobody asked for.
-  phoneQuery.addEventListener('change', () => { syncThreadStack(threadIsOpen() && onPhone()); placeAccountControls(); });
+  phoneQuery.addEventListener('change', () => { syncThreadStack(threadIsOpen() && onPhone()); placeAccountControls(); placeTabHighlight(); });
 
   // ---- the account pill and Sign out ----
   // They live in the sidebar foot, which is not on screen on a phone. Moving
@@ -5215,64 +5294,137 @@
   placeAccountControls();
 
   // ---- pull down to refresh ----
-  // A Home Screen app has no reload button and no address bar, so the only
-  // way to ask "is that really all of it?" is to wait out the poll. This is
-  // deliberately narrow: it only takes over the gesture when the list is
-  // already at the very top and the finger is travelling down, so an ordinary
-  // scroll is never intercepted.
+  // A Home Screen app has no reload button and no address bar, so pulling
+  // the page down is how you ask for the latest: the page slides down, an
+  // activity spinner fills in spoke by spoke as you pull, and letting go past
+  // the mark holds it there while the app looks again — the team's list, the
+  // page's own list (Sales IQ, Onboarding docs), and a newer version of the
+  // app itself, which it then moves to.
+  //
+  // It only takes the gesture when everything under your finger is already at
+  // its top and the finger is going down, so an ordinary scroll — including
+  // scrolling a conversation list back up — is never intercepted.
+  const PTR_TRIGGER = 64;   // how far the page has to come down to count
+  const PTR_HOLD = 52;      // where it rests while it looks
+  const PTR_MAX = 120;
   (function pullToRefresh() {
-    const PULL = 72;
-    const spinner = document.createElement('div');
-    spinner.className = 'ptr';
-    spinner.innerHTML = icon('reply', 20);
-    let startY = 0, pulling = false, armed = false;
+    const ind = document.createElement('div');
+    ind.className = 'ptr';
+    ind.setAttribute('aria-hidden', 'true');
+    ind.innerHTML = `<svg class="ptr-spin" viewBox="0 0 28 28" width="28" height="28">${Array.from({ length: 8 }, (_, i) => `<rect x="12.9" y="2.5" width="2.2" height="7" rx="1.1" transform="rotate(${i * 45} 14 14)" style="--k:${i}"/>`).join('')}</svg>`;
+    document.body.appendChild(ind);
+    const spokes = [...ind.querySelectorAll('rect')];
+
+    let start = null;      // where the finger went down, while it may still pull
+    let pulling = false;
+    let busy = false;
+    let page = null;       // the page being pulled
+    let dist = 0;
+
+    // Is every scroller between the finger and the page already at its top?
+    const atTop = (el) => {
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        if (n.scrollTop > 0) return false;
+        if (n === mainEl) return true;
+      }
+      return true;
+    };
+    const paint = (d, { settle = false } = {}) => {
+      dist = d;
+      const t = settle ? 'transform .38s var(--ease-in-ios, ease)' : 'none';
+      if (page) { page.style.transition = t; page.style.transform = d ? `translateY(${d}px)` : ''; }
+      ind.style.transition = settle ? 'height .38s var(--ease-in-ios, ease), opacity .25s' : 'none';
+      ind.style.height = `${d}px`;
+      if (!busy) {
+        // One spoke more for every eighth of the way to the mark.
+        const shown = Math.min(8, Math.round((d / PTR_TRIGGER) * 8));
+        spokes.forEach((r, i) => { r.style.opacity = i < shown ? '' : '0'; });
+        ind.classList.toggle('is-armed', d >= PTR_TRIGGER);
+      }
+      ind.classList.toggle('is-on', d > 0 || busy);
+    };
+    const release = () => {
+      paint(0, { settle: true });
+      const was = page;
+      setTimeout(() => {
+        if (dist || busy) return;
+        if (was) { was.style.transition = ''; was.style.transform = ''; }
+        if (page === was) page = null;
+      }, 400);
+    };
 
     mainEl.addEventListener('touchstart', (e) => {
-      if (!onPhone() || mainEl.scrollTop > 0 || e.touches.length !== 1) return;
-      startY = e.touches[0].clientY;
-      pulling = true;
-      armed = false;
+      start = null;
+      if (busy || !onPhone() || e.touches.length !== 1) return;
+      const target = e.target;
+      if (target.closest('input, textarea, select, [contenteditable="true"], .messenger.thread-open .thread-compose')) return;
+      if (!atTop(target)) return;
+      start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      pulling = false;
     }, { passive: true });
 
     mainEl.addEventListener('touchmove', (e) => {
-      if (!pulling) return;
-      const dy = e.touches[0].clientY - startY;
-      if (dy <= 0 || mainEl.scrollTop > 0) { reset(); return; }
-      if (!spinner.isConnected) mainEl.prepend(spinner);
+      if (!start) return;
+      const t = e.touches[0];
+      const dy = t.clientY - start.y;
+      const dx = t.clientX - start.x;
+      if (!pulling) {
+        // Decided on the first real movement: down and more down than across
+        // is a pull; anything else is left entirely to the browser.
+        if (Math.abs(dy) < 3 && Math.abs(dx) < 3) return;
+        if (dy <= 0 || Math.abs(dx) > dy) { start = null; return; }
+        pulling = true;
+        page = $('.view.active');
+      }
       e.preventDefault();
-      const give = Math.min(dy * 0.45, PULL + 18);
-      mainEl.style.transform = `translateY(${give}px)`;
-      armed = give >= PULL * 0.62;
-      spinner.classList.toggle('armed', armed);
+      // Resistance: easy to the mark, then heavier the further past it.
+      const d = dy <= 0 ? 0 : dy * 0.5 < PTR_TRIGGER ? dy * 0.5 : PTR_TRIGGER + (dy * 0.5 - PTR_TRIGGER) * 0.35;
+      paint(Math.min(PTR_MAX, d));
     }, { passive: false });
 
-    const finish = () => {
+    const end = () => {
+      if (!start) return;
+      start = null;
       if (!pulling) return;
       pulling = false;
-      mainEl.style.transition = 'transform .28s cubic-bezier(.32,.72,0,1)';
-      mainEl.style.transform = '';
-      setTimeout(() => { mainEl.style.transition = ''; }, 300);
-      if (!armed) { spinner.remove(); return; }
-      spinner.classList.remove('armed');
-      spinner.classList.add('spinning');
-      // The page on screen looks again too, where it keeps its own list.
-      const own = currentView === 'onboarding' && window.Onboarding ? window.Onboarding.refresh()
-        : currentView === 'salesiq' && window.SalesIQ ? Promise.resolve(window.SalesIQ.reload()).catch(() => {}) : null;
-      Promise.all([poll(), own]).finally(() => {
-        spinner.classList.remove('spinning');
-        spinner.remove();
+      if (dist < PTR_TRIGGER) { release(); return; }
+      busy = true;
+      spokes.forEach((r) => { r.style.opacity = ''; });
+      ind.classList.remove('is-armed');
+      ind.classList.add('is-busy');
+      paint(PTR_HOLD, { settle: true });
+      pullRefresh().finally(() => {
+        busy = false;
+        ind.classList.remove('is-busy');
+        release();
       });
-      armed = false;
     };
-    const reset = () => {
-      pulling = false;
-      armed = false;
-      mainEl.style.transform = '';
-      spinner.remove();
+    // Cancelled — iOS took the gesture for itself, Notification Center say —
+    // is never a request to refresh.
+    const cancel = () => {
+      if (!start) return;
+      start = null;
+      if (pulling) { pulling = false; release(); }
     };
-    mainEl.addEventListener('touchend', finish, { passive: true });
-    mainEl.addEventListener('touchcancel', reset, { passive: true });
+    mainEl.addEventListener('touchend', end, { passive: true });
+    mainEl.addEventListener('touchcancel', cancel, { passive: true });
   }());
+
+  // What a pull does: everything the app shows, looked at again, for at least
+  // long enough that the spinner reads as "done" rather than a flicker.
+  async function pullRefresh() {
+    pulledAt = Date.now();
+    const own = currentView === 'onboarding' && window.Onboarding ? window.Onboarding.refresh()
+      : currentView === 'salesiq' && window.SalesIQ ? Promise.resolve(window.SalesIQ.reload()) : null;
+    const shell = 'serviceWorker' in navigator
+      ? navigator.serviceWorker.getRegistration().then((reg) => reg && reg.update())
+      : null;
+    await Promise.allSettled([poll(), own, shell, new Promise((r) => setTimeout(r, 700))]);
+    if (pollFails) toast('Couldn’t refresh — no connection. Showing what this phone last had.', true);
+    // A newer version of the app is waiting: a pull is somebody asking for
+    // the latest, so this is the moment to take it.
+    takeUpdate('pull');
+  }
 
   // ---- coming back to the app ----
   // iOS freezes a backgrounded web app rather than keeping it running, and
@@ -5315,7 +5467,15 @@
   // or how many are left to email or text, is not a count anyone needs on a
   // tab at all times, so no tab carries one.
   function renderNavCounts() {
-    setNavCount('#navEmailCount', mailUnreadCount() || 0);
+    const mail = mailUnreadCount() || 0;
+    const texts = unreadCount() || 0;
+    setNavCount('#navEmailCount', mail);
+    // The phone's Inbox tab is Email and Texting together, so it counts the
+    // unread in both, and the switch at the top of the page says which.
+    setNavCount('#navInboxCount', mail + texts);
+    const put = (view, n) => $$(`.group-count[data-count-for="${view}"]`).forEach((el) => { el.textContent = n ? n.toLocaleString() : ''; });
+    put('template', mail);
+    put('texting', texts);
   }
 
   function renderAll() {
