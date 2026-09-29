@@ -818,7 +818,9 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     position: relative;
     flex: none;
     margin: 0 -16px;
-    padding: 4px 16px 10px;
+    /* The same top as every other tab's header, so the title and the bell
+       stay put when you move between tabs. */
+    padding: 10px 16px 10px;
     grid-template-columns: minmax(0, 1fr) auto auto;
     grid-template-areas:
       "title compose chrome"
@@ -827,10 +829,12 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     row-gap: 12px;
     background: var(--card);
     box-shadow: none;
-    transition: box-shadow .2s;
   }
-  /* The hairline a navigation bar draws once the list passes under it. */
-  #view-template.list-scrolled .page-head, #view-texting.list-scrolled .page-head { box-shadow: 0 .5px 0 var(--line-strong); }
+  /* Once the list is scrolled: the hairline a navigation bar draws where the
+     list passes under it (below the filters), and the large title shrinks to
+     the compact one, as it does on every other tab. */
+  #view-template.list-scrolled .conv-tabs, #view-texting.list-scrolled .conv-tabs { box-shadow: 0 .5px 0 var(--line-strong); }
+  #view-template.list-scrolled .group-title, #view-texting.list-scrolled .group-title { font-size: 19px; }
   /* The page's own buttons are the compose sheet's, here. */
   #view-template .head-actions, #view-texting .head-actions { display: none; }
   /* Light and dark is a setting, not something the Inbox needs beside its
@@ -857,9 +861,6 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
      Email | Texts, Sales IQ | Onboarding docs: one track, the current half
      raised out of it. The same control on both tabs. */
   .group-tabs {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
     gap: 2px;
     margin: 0;
     padding: 2px;
@@ -868,6 +869,9 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     overflow: visible;
   }
   .group-tab {
+    /* The segments share the whole track, each as wide as its label needs
+       and the rest split between them, so "Onboarding docs" is never cut. */
+    flex: 1 1 auto;
     justify-content: center;
     gap: 6px;
     min-height: 34px;
@@ -950,6 +954,10 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     border-bottom: 0;
     overflow-x: auto;
     scrollbar-width: none;
+    position: relative;
+    z-index: 1;
+    background: var(--card);
+    transition: box-shadow .2s;
   }
   .messenger .conv-tabs::-webkit-scrollbar { display: none; }
   .messenger .conv-tab {
@@ -958,15 +966,19 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     min-height: 32px;
     padding: 0 14px;
     border-radius: 99px;
-    background: var(--surface-sunk);
+    /* The same iOS grey as the search field above it, in both themes. */
+    background: var(--search-fill);
     color: var(--ink-soft);
     font-size: 14px;
     font-weight: 600;
     box-shadow: none;
     gap: 6px;
+    position: relative;
   }
+  /* A 44pt target round a 32pt capsule, inside the row's own padding. */
+  .messenger .conv-tab::before { content: ''; position: absolute; inset: -6px -3px; }
   .messenger .conv-tab.on { background: var(--navy); color: var(--card); box-shadow: none; }
-  .messenger .conv-col.is-searching .conv-tab.on { background: var(--surface-sunk); color: var(--muted); }
+  .messenger .conv-col.is-searching .conv-tab.on { background: var(--search-fill); color: var(--muted); }
   .messenger .conv-tab-n { margin-left: 0; min-width: 18px; height: 18px; line-height: 18px; padding: 0 5px; font-size: 11px; font-weight: 700; }
   .messenger .conv-list {
     flex: 1 1 auto;
@@ -1074,6 +1086,10 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   }
   .messenger .thread-empty { display: none; }
   .thread-live { flex: 1 1 auto; min-height: 0; }
+  /* Nothing may hold the page moved while a conversation is over it (a pull
+     to refresh still settling): a transform there would pin the
+     conversation inside the page, under the tab bar. */
+  .view:has(.messenger.thread-open) { transform: none !important; }
 
   /* Two rows: Back and the actions (Gmail, and ⓘ for their card) along the
      top, as a navigation bar; who this is under it, with Call, Message and

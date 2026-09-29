@@ -19,9 +19,11 @@ const TOTAL_BUDGET_MS = 20000;
 // this it could run into the 30-second limit.
 const BACKUP_START_BEFORE_MS = 22000;
 // Reply detection gets whatever the minute has left after sending, and starts
-// no new Gmail read after this point: one read is bounded at 8 seconds, and the
-// whole run must finish inside 30.
-const REPLIES_STOP_AT_MS = 19500;
+// no new Gmail read after this point. What can follow the last read has to fit
+// in the 30 seconds too: the read itself (bounded at 8s), the one save that
+// stores the replies with their feed lines (~2s), and the phone pushes, sent
+// together and bounded at 8s.
+const REPLIES_STOP_AT_MS = 14000;
 // The smallest slice worth giving anyone. It is the send worker's own floor,
 // not a number picked here: lib/queue.js will not begin a send unless it has
 // SEND_TIMEOUT_MS + WRITE_RESERVE_MS left, so a shorter slice buys a run lease,

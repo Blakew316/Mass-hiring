@@ -284,6 +284,7 @@
     $('#loginScreen').hidden = true;
     await refresh();
     start();
+    takeUpdate('launch');
   }
 
   $('#teamPicker').addEventListener('click', (e) => {
@@ -395,6 +396,8 @@
   function signedOut() {
     signedIn = false;
     resetClientState();
+    // Nothing unread belongs on the icon of an app nobody is signed in to.
+    try { renderAppBadge(); } catch { /* not declared yet: nothing shown */ }
     setTeam(null);
     showLogin();
   }
@@ -420,18 +423,23 @@
     }
     // A problem is said once. Put away, it stays away until a different one
     // comes along — it used to sit on every page for a day.
-    if (state.lastError && !(state.lastErrorId && state.lastErrorId === dismissedErrorId())) {
+    if (state.lastError && !(state.lastErrorId && dismissedErrorIds().includes(state.lastErrorId))) {
       n.push(`<div class="notice warn"><span class="notice-ico">${icon('alert', 16)}</span><div>${esc(state.lastError)}</div>${state.lastErrorId ? `<button type="button" class="notice-x" data-dismiss-error="${esc(state.lastErrorId)}" aria-label="Dismiss" title="Dismiss">${icon('x', 14)}</button>` : ''}</div>`);
     }
     $('#notices').innerHTML = n.join('');
     $('#signOutBtn').hidden = !(state.auth && state.auth.required);
   }
 
-  const dismissedErrorId = () => { try { return localStorage.getItem(teamKey('errorDismissed')) || ''; } catch { return ''; } };
+  // The last few put away, so clearing a newer one cannot bring back an
+  // older one that was dismissed already.
+  const dismissedErrorIds = () => {
+    try { const v = JSON.parse(localStorage.getItem(teamKey('errorsDismissed')) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+  };
   document.addEventListener('click', (e) => {
     const err = e.target.closest('[data-dismiss-error]');
     if (err) {
-      try { localStorage.setItem(teamKey('errorDismissed'), err.dataset.dismissError); } catch {}
+      const id = err.dataset.dismissError;
+      try { localStorage.setItem(teamKey('errorsDismissed'), JSON.stringify([id, ...dismissedErrorIds().filter((x) => x !== id)].slice(0, 20))); } catch {}
       if (state) renderNotices();
       return;
     }
@@ -775,9 +783,9 @@
   mountCompose();
 
   // A list that has scrolled under the header gets the hairline a navigation
-  // bar draws once content passes beneath it.
+  // bar draws once content passes beneath it, and the compact title.
   $$('#view-template .conv-list, #view-texting .conv-list').forEach((l) => l.addEventListener('scroll', () => {
-    l.closest('.view').classList.toggle('list-scrolled', l.scrollTop > 2);
+    l.closest('.view').classList.toggle('list-scrolled', l.scrollTop > 8);
   }, { passive: true }));
   // More: the pages the phone's tab bar has no room for, as a list. Built
   // from the tab bar itself each time, so the two can never disagree.
@@ -4018,6 +4026,7 @@
   let openThreadId = null;
   let thread = null;          // the fetched conversation, or null
   let threadLoading = false;
+  let threadSeq = 0;          // which request for a thread is the latest
 
   // The table's initials() wants a candidate and falls back to an email. A
   // conversation may only ever have had a phone number, so this one takes what
@@ -4139,9 +4148,16 @@
     $('#threadEmpty').hidden = true;
     $('#threadLive').hidden = false;
     if (!quiet) $('#threadBody').innerHTML = '<p class="thread-loading">Loading…</p>';
+    // Only the latest request may draw. A background refresh of the last
+    // conversation that answers after you have opened another one used to
+    // put that person's messages under this one's reply box — and a reply
+    // typed to the name on screen went to somebody else.
+    const seq = ++threadSeq;
+    let got;
     try {
-      thread = await api(`/api/texts/thread?id=${encodeURIComponent(id)}`);
+      got = await api(`/api/texts/thread?id=${encodeURIComponent(id)}`);
     } catch (e) {
+      if (seq !== threadSeq || id !== openThreadId) return;
       threadLoading = false;
       // A failed background refresh keeps the conversation you were reading.
       if (quiet) return;
@@ -4149,6 +4165,8 @@
       $('#threadBody').innerHTML = `<p class="thread-loading">${esc(e.message)}</p>`;
       return;
     }
+    if (seq !== threadSeq || id !== openThreadId) return;
+    thread = got;
     threadLoading = false;
     renderThread();
     if (markSeen) {
@@ -4228,7 +4246,9 @@
       saveDraft('text', to, '');
       if (openThreadId === to) { box.value = ''; box.style.height = ''; }
       // Show it immediately rather than waiting for the next poll.
-      if (thread) { thread.pending = [...(thread.pending || []), { text: body }]; renderThread(); }
+      // Only in its own conversation: another may have been opened while
+      // this was on its way.
+      if (thread && thread.id === to && openThreadId === to) { thread.pending = [...(thread.pending || []), { text: body }]; renderThread(); }
       await refresh();
     } catch (e) {
       toast(e.message, true);
@@ -4287,6 +4307,7 @@
   let openMailId = null;
   let mail = null;
   let mailLoading = false;
+  let mailSeq = 0;
 
   function mailboxes() {
     const all = (state.candidates || []).filter((c) => c.lastEmailedAt || c.emailReplies);
@@ -4337,15 +4358,21 @@
     $('#mailEmpty').hidden = true;
     $('#mailLive').hidden = false;
     if (!quiet) $('#mailBody').innerHTML = '<p class="thread-loading">Reading the conversation from Gmail…</p>';
+    // As for texts: only the latest request may draw.
+    const seq = ++mailSeq;
+    let got;
     try {
-      mail = await api(`/api/emails/thread?id=${encodeURIComponent(id)}`);
+      got = await api(`/api/emails/thread?id=${encodeURIComponent(id)}`);
     } catch (e) {
+      if (seq !== mailSeq || id !== openMailId) return;
       mailLoading = false;
       if (quiet) return;
       mail = null;
       $('#mailBody').innerHTML = `<p class="thread-loading">${esc(e.message)}</p>`;
       return;
     }
+    if (seq !== mailSeq || id !== openMailId) return;
+    mail = got;
     mailLoading = false;
     const mc = (state.candidates || []).find((x) => x.id === id);
     mailShownSig = mc ? mailSig(mc) : '';
@@ -4608,6 +4635,17 @@
     renderAppBadge();
   }
   // The number on the Home Screen icon, where the device supports it.
+  const badgeCanAsk = () => {
+    try { return installed() && 'setAppBadge' in navigator && 'Notification' in window && Notification.permission === 'default'; } catch { return false; }
+  };
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#bellBadgeAsk')) return;
+    Promise.resolve(Notification.requestPermission()).catch(() => {}).then(() => {
+      appBadgeShown = -1;
+      renderAppBadge();
+      if (!$('#bellPanel').hidden) renderBellPanel();
+    });
+  });
   let appBadgeShown = -1;
   function renderAppBadge() {
     const n = state ? allUnread() : 0;
@@ -4695,6 +4733,9 @@
       ? `${unread.length ? `<div class="bell-sec">New</div>${unread.map(row).join('')}` : ''}
          ${recent.length ? `<div class="bell-sec">Earlier</div>${recent.map(row).join('')}` : ''}`
       : '<p class="bell-none">No replies yet. When someone writes back — by text or by email — it lands here.</p>';
+    // On an iPhone the Home Screen icon shows the unread count only once the
+    // app may show notifications, which it can only ask for when you tap.
+    if (badgeCanAsk()) $('#bellBody').insertAdjacentHTML('beforeend', '<button type="button" class="bell-badge-ask" id="bellBadgeAsk">Show the unread count on the app icon</button>');
     $('#bellClear').hidden = !allUnread();
   }
 
@@ -5731,6 +5772,10 @@
     if (!onPhone()) return;
     const m = messengerOf(view);
     if (!m || m.classList.contains('thread-open')) return;
+    // A pull to refresh still holding the page down would hold the
+    // conversation screen inside it, under the tab bar.
+    const page = m.closest('.view');
+    if (page && page.style.transform) { page.style.transition = 'none'; page.style.transform = ''; }
     m.classList.add('thread-open');
     // Opened from the bell over another conversation, it takes that one's
     // place in the history: pushed on top, the first Back went to a thread no
@@ -6036,9 +6081,13 @@
   function threadOnScreen(view) {
     if (currentView !== view || document.hidden) return false;
     if (!(view === 'texting' ? openThreadId : openMailId)) return false;
-    if (!onPhone()) return true;
     const m = messengerOf(view);
-    return Boolean(m && m.classList.contains('thread-open'));
+    if (onPhone()) return Boolean(m && m.classList.contains('thread-open'));
+    // Wider, it is a column beside the list — or, up to 900px, under it and
+    // perhaps scrolled out of sight. It counts only if it is in view.
+    const col = m && m.querySelector('.thread-col');
+    const r = col && col.getBoundingClientRect();
+    return Boolean(r && r.height && r.bottom > 0 && r.top < window.innerHeight);
   }
 
   function renderAll() {
@@ -6174,6 +6223,9 @@
       signedIn = true;
       await refresh();
       start();
+      // A new version that was already waiting when the app opened: now that
+      // the app knows nothing is in flight, it moves to it.
+      takeUpdate('launch');
     };
     // A blip at load used to leave the page dead until somebody noticed and
     // reloaded it: one toast, no polling started, no retry. Keep trying.

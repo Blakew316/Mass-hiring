@@ -1241,6 +1241,8 @@ button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offs
 .conv.on .avatar { background: rgba(255,255,255,.25); color: #fff; }
 .conv-main { flex: 1; min-width: 0; }
 .conv-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+/* The name takes the room, so a bounce's "!" sits beside the time. */
+.conv-top .conv-name { flex: 1 1 auto; min-width: 0; }
 .conv-name { font-size: 13px; font-weight: 600; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conv-when { font-size: 10.5px; color: var(--muted); flex-shrink: 0; }
 .conv-last { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1407,6 +1409,11 @@ button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offs
 .bell-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 650; color: var(--navy); }
 .bell-head-acts { display: inline-flex; align-items: center; gap: 10px; }
 .bell-backdrop { display: none; }
+.bell-badge-ask {
+  display: block; width: 100%; min-height: 44px; margin: 6px 0 0; padding: 10px 16px;
+  border: 0; border-top: 1px solid var(--line); background: none;
+  font-family: var(--font); font-size: 14px; font-weight: 600; color: var(--blue); cursor: pointer;
+}
 .bell-body { overflow-y: auto; }
 .bell-sec { padding: 8px 14px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .bell-row {

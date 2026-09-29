@@ -1939,6 +1939,22 @@ const bookingKey = (uri, email) => `${uri || ''}|${normEmail(email)}`;
 // Where a booking may move someone from on its own. Anything else — booked
 // already, declined, or a status set by hand — is left alone.
 const EARLY_STATUSES = new Set(['new', 'emailed', 'replied', 'bounced']);
+// What this team has been told about each booking, kept apart from the
+// interviews list (which every sync rebuilds from Calendly's listing): the
+// Candidate-updates line, written by whichever of the sync and the webhook
+// sees a booking first, and the phone push, which only the webhook sends —
+// the sync reads a window of past and future bookings, and the first one
+// after connecting Calendly would otherwise push every one of them. Keyed
+// by booking; a cancellation's keys start with "x|". Long enough to outlast
+// the sync's window, then let go.
+const ANNOUNCED_KEEP_MS = 150 * 24 * 3600 * 1000;
+function calendlyMemo(fresh, which) {
+  const now = Date.now();
+  const memo = fresh[which] && typeof fresh[which] === 'object' ? fresh[which] : {};
+  for (const [k, ts] of Object.entries(memo)) if (!(now - Date.parse(ts) < ANNOUNCED_KEEP_MS)) delete memo[k];
+  fresh[which] = memo;
+  return memo;
+}
 const normName = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 function matchCandidate(candidates, email, name) {
   const e = normEmail(email);
@@ -2011,10 +2027,21 @@ async function applyCalendlyEvent(req, db) {
   if (event === 'invitee.created') {
     const ev = p.scheduled_event || {};
     // Calendly retries a delivery it is not sure arrived, and the sync may
-    // already have listed this booking: either way it was announced once.
-    let already = false;
+    // already have listed this booking. The line in Candidate updates is
+    // written once, by whichever got here first; the push is sent once, and
+    // only from here.
+    const key = bookingKey(ev.uri, inviteeEmail);
+    let already = false;     // listed already: by the sync, or an earlier delivery
+    let listed = false;      // its Candidate-updates line is written
+    let pushed = false;      // its push is sent
     const booked = await store.update((fresh) => {
-      already = Boolean(ev.uri) && (fresh.interviews || []).some((i) => i && i.status === 'active' && bookingKey(i.uri, i.inviteeEmail) === bookingKey(ev.uri, inviteeEmail));
+      already = Boolean(ev.uri) && (fresh.interviews || []).some((i) => i && i.status === 'active' && bookingKey(i.uri, i.inviteeEmail) === key);
+      const announced = calendlyMemo(fresh, 'calendlyAnnounced');
+      const pushes = calendlyMemo(fresh, 'calendlyPushed');
+      listed = !ev.uri || Boolean(announced[key]);
+      pushed = !ev.uri || Boolean(pushes[key]);
+      const now = new Date().toISOString();
+      if (ev.uri) { announced[key] = announced[key] || now; pushes[key] = pushes[key] || now; }
       const fc = c && fresh.candidates.find((x) => x.id === c.id);
       if (fc) {
         learnEmail(fc, inviteeEmail);
@@ -2031,15 +2058,18 @@ async function applyCalendlyEvent(req, db) {
           joinUrl: (ev.location && ev.location.join_url) || null, inviteeName: p.name || '', inviteeEmail: p.email || '',
           candidateId: c ? c.id : null, rescheduleUrl: p.reschedule_url || '', cancelUrl: p.cancel_url || '',
           inviteePhone: calendly.phoneFrom(p), bookedAt: p.created_at || null,
+          // When this row was written, so a sync whose listing was taken
+          // before it does not drop it as gone.
+          hookAt: new Date().toISOString(),
         });
         fresh.interviews.sort((x, y) => String(x.start).localeCompare(String(y.start)));
       }
     });
     await feedSalesiq(booked);
-    if (already) return;
     // A reschedule arrives as a new booking that names the one it replaces.
     const moved = Boolean(p.old_invitee);
-    await store.addEvent('booked', `${inviteeName} ${moved ? 'rescheduled' : 'booked'} "${eventName}" — ${when}.`, c ? c.id : null, p.created_at || null);
+    if (!listed && !already) await store.addEvent('booked', `${inviteeName} ${moved ? 'rescheduled' : 'booked'} "${eventName}" — ${when}.`, c ? c.id : null, p.created_at || null);
+    if (pushed) return;
     try {
       await notify.pushToPhone(db.settings, {
         title: moved ? `📅 ${inviteeName} rescheduled` : `📅 ${inviteeName} booked an interview`,
@@ -2054,9 +2084,19 @@ async function applyCalendlyEvent(req, db) {
     // The old half of a reschedule: the new booking carries the news, so this
     // one neither un-books them nor says "canceled".
     const rescheduled = p.rescheduled === true;
-    let wasActive = false;
+    const key = `x|${bookingKey(evUri, inviteeEmail)}`;
+    let listed = false;
+    let pushed = false;
     const canceled = await store.update((fresh) => {
-      wasActive = false;
+      const announced = calendlyMemo(fresh, 'calendlyAnnounced');
+      const pushes = calendlyMemo(fresh, 'calendlyPushed');
+      listed = !evUri || Boolean(announced[key]);
+      pushed = !evUri || Boolean(pushes[key]);
+      if (evUri && !rescheduled) {
+        const now = new Date().toISOString();
+        announced[key] = announced[key] || now;
+        pushes[key] = pushes[key] || now;
+      }
       const fc = c && fresh.candidates.find((x) => x.id === c.id);
       // Only the interview their card is showing: canceling an old one must
       // not un-book someone who has another on the books.
@@ -2065,16 +2105,15 @@ async function applyCalendlyEvent(req, db) {
         fc.bookedAt = null; fc.bookedEvent = ''; fc.calendlyEventUri = ''; fc.bookedJoinUrl = '';
       }
       for (const i of fresh.interviews || []) {
-        if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) {
-          if (i.status === 'active') wasActive = true;
-          i.status = 'canceled';
-        }
+        if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) i.status = 'canceled';
       }
     });
     await feedSalesiq(canceled);
-    // Announced once — a retried delivery finds it canceled already.
-    if (rescheduled || !wasActive) return;
-    await store.addEvent('canceled', `${inviteeName} canceled "${eventName}".`, c ? c.id : null);
+    // Announced once, whether the sync saw it first or Calendly delivers it
+    // twice; the old half of a reschedule not at all.
+    if (rescheduled) return;
+    if (!listed) await store.addEvent('canceled', `${inviteeName} canceled "${eventName}".`, c ? c.id : null);
+    if (pushed) return;
     try {
       await notify.pushToPhone(db.settings, {
         title: `❌ ${inviteeName} canceled`,
@@ -2164,6 +2203,8 @@ async function syncCalendly() {
   const minStart = new Date(Date.now() - 14 * DAY_MS);
   const maxStart = new Date(Date.now() + 120 * DAY_MS);
   let result;
+  // Rows the webhook writes after this moment are newer than the listing.
+  const listedAt = Date.now();
   try {
     result = await calendly.listInterviews(token, { minStart, maxStart });
   } catch (err) {
@@ -2180,6 +2221,10 @@ async function syncCalendly() {
     // anyone with two bookings (a first and a second interview, both inside
     // the window) flip between them and be announced twice on every sync.
     const known = new Set((fresh.interviews || []).filter((i) => i && i.status === 'active').map((i) => bookingKey(i.uri, i.inviteeEmail)));
+    // And what it was told about before, even if the list has since lost it.
+    const announced = calendlyMemo(fresh, 'calendlyAnnounced');
+    const stamp = new Date().toISOString();
+    for (const k of Object.keys(announced)) if (!k.startsWith('x|')) known.add(k);
     const list = [];
     const activeFor = new Map();     // candidate -> [{ ev, inv }], in listing order
     const canceledFor = new Map();
@@ -2218,17 +2263,24 @@ async function syncCalendly() {
       if (EARLY_STATUSES.has(c.status || 'new') || (isNewAny && c.status !== 'declined')) c.status = 'booked';
       for (const { ev: e, inv } of pairs) {
         const key = bookingKey(e.uri, inv.email);
-        if (known.has(key)) continue;
+        const seen = known.has(key);
+        // Remembered either way, so a list that later loses the row (a
+        // listing cut short) never makes it news again.
+        announced[key] = announced[key] || stamp;
+        if (seen) continue;
         known.add(key);
         announce.push({ c, ev: e, at: inv.createdAt || null });
       }
     }
     for (const [c, pairs] of canceledFor) {
       if (activeFor.has(c)) continue;          // still has an interview on the books
-      for (const { ev } of pairs) {
+      for (const { ev, inv } of pairs) {
         if (c.calendlyEventUri !== ev.uri || c.status !== 'booked') continue;
         c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
         c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
+        const key = `x|${bookingKey(ev.uri, inv.email)}`;
+        if (announced[key]) continue;          // the webhook said so already
+        announced[key] = stamp;
         announce.push({ c, ev, canceled: true });
       }
     }
@@ -2246,7 +2298,9 @@ async function syncCalendly() {
       const at = new Date(i.start).getTime();
       if (!(at >= minStart.getTime() && at <= maxStart.getTime())) continue;
       const ev = skipped.get(i.uri);
-      if (!ev && result.complete) continue;
+      // Gone from a full listing: let go — unless the webhook wrote it after
+      // the listing was taken, when the listing simply had not seen it yet.
+      if (!ev && result.complete && !(i.hookAt && Date.parse(i.hookAt) >= listedAt)) continue;
       list.push(ev && ev.status !== 'active' ? { ...i, status: 'canceled' } : i);
     }
     fresh.interviews = list.sort((a, b) => String(a.start).localeCompare(String(b.start)));
