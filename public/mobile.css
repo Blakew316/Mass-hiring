@@ -968,21 +968,125 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .preset-row .btn { flex: 1 1 auto; }
   .preset-links .muted { flex-basis: 100%; margin-left: 0; }
 
-  /* ---- the notifications panel is a sheet too ----
-     It was absolutely positioned at right: 36px, which is the desktop
-     gutter; on a phone it pointed at nothing. */
+  /* ---- the notifications panel is a sheet ----
+     The way every other sheet here works: it rises from the bottom edge over
+     the tab bar, the page behind it dims, and it goes away with a tap
+     outside, the close button, or a swipe down. New replies carry a blue dot
+     rather than a tinted row, the way Mail marks unread. */
+  .bell-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: var(--scrim);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+    touch-action: none;
+    cursor: pointer;
+    animation: bellFadeIn .28s ease;
+    transition: opacity .26s ease;
+  }
+  .bell-backdrop.is-closing { opacity: 0; }
+  @keyframes bellFadeIn { from { opacity: 0; } }
   .bell-panel {
     position: fixed;
     top: auto;
     right: 0;
     left: 0;
-    bottom: var(--tabbar-space);
+    bottom: 0;
+    z-index: 71;
     width: auto;
-    max-height: 60dvh;
-    margin: 0 8px;
-    border-radius: 18px;
-    z-index: 55;
+    max-height: calc(var(--app-h, 100dvh) - var(--safe-t) - 48px);
+    margin: 0;
+    padding-bottom: var(--safe-b);
+    border: 0;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -12px 40px rgba(16, 24, 64, .22);
+    animation: sheetUp .34s var(--ease-in-ios);
+    transition: transform .26s var(--ease-in-ios);
+    will-change: transform;
   }
+  .bell-panel.is-closing { transform: translateY(100%); }
+  .bell-panel::before {
+    content: '';
+    display: block;
+    flex: none;
+    width: 36px;
+    height: 5px;
+    margin: 8px auto 0;
+    border-radius: 99px;
+    background: var(--dot);
+  }
+  .bell-head {
+    padding: 8px 12px 12px 20px;
+    border-bottom: 1px solid var(--line);
+    font-size: 17px;
+  }
+  .bell-title { font-weight: 700; letter-spacing: -0.01em; }
+  .bell-head-acts { gap: 14px; }
+  .bell-head .btn-link { display: inline-flex; align-items: center; font-size: 15px; font-weight: 600; min-height: 44px; }
+  .bell-close {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--surface-sunk);
+    color: var(--ink-soft);
+    position: relative;
+  }
+  /* A 44pt target around the 30pt circle. */
+  .bell-close::after { content: ''; position: absolute; inset: -7px; }
+  .bell-body { overscroll-behavior: contain; padding-bottom: 8px; }
+  .bell-sec { padding: 14px 20px 6px; font-size: 12px; }
+  .bell-row {
+    position: relative;
+    gap: 12px;
+    min-height: 68px;
+    padding: 10px 16px 10px 22px;
+  }
+  .bell-row + .bell-row::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 74px;
+    right: 0;
+    height: 1px;
+    background: var(--line);
+  }
+  .bell-row.new { background: none; }
+  .bell-row.new::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    margin-top: -4px;
+    border-radius: 50%;
+    background: var(--blue);
+  }
+  .bell-row:active { background: var(--surface-sunk); }
+  .bell-row .avatar { width: 40px; height: 40px; font-size: 14px; flex: none; }
+  .bell-name { font-size: 15.5px; }
+  .bell-row.new .bell-name { font-weight: 750; }
+  .bell-when { font-size: 13px; }
+  .bell-text {
+    font-size: 14px;
+    line-height: 1.35;
+    margin-top: 2px;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .bell-row .act-tag { flex: none; align-self: flex-start; margin-top: 3px; }
+  .bell-row.new .act-tag { background: var(--blue-tint); }
+  .bell-row.new .act-tag.ch-text { background: var(--green-tint); }
+  .bell-none { padding: 36px 24px 44px; font-size: 15px; }
+  /* The page behind stays where it is while the sheet is up. */
+  .main.bell-open { overflow: hidden; }
 
   /* ---- odds and ends ---- */
   .toast-wrap {
@@ -1075,7 +1179,7 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
 
 @media (prefers-reduced-motion: reduce) {
   .messenger .thread-col, .messenger .conv-col { transition: none; }
-  .modal { animation: none; }
+  .modal, .bell-panel, .bell-backdrop:not([hidden]) { animation: none; }
   .page-head, .page-head h1, .group-title { transition: none; }
   .nav.tabs-ready::before, .nav-item { transition: none; }
   .ptr.is-busy .ptr-spin rect { animation-duration: 2.4s; }

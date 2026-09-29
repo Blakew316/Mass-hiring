@@ -4355,11 +4355,54 @@
     $('#bellClear').hidden = !unread.length;
   }
 
+  // On a phone the panel is a sheet (mobile.css): it rises over a dimmed page,
+  // holds the page still behind it, and slides back down when put away. On a
+  // desktop it is the small popover under the bell, shown and hidden at once.
+  let bellTimer = 0;
+  let bellOpener = null;
+  const bellIsOpen = () => !$('#bellPanel').hidden && !$('#bellPanel').classList.contains('is-closing');
   function toggleBell(force) {
     const panel = $('#bellPanel');
-    const show = force !== undefined ? force : panel.hidden;
-    panel.hidden = !show;
-    if (show) renderBellPanel();
+    const back = $('#bellBackdrop');
+    const open = bellIsOpen();
+    const want = force !== undefined ? force : !open;
+    if (want === open) return;
+    clearTimeout(bellTimer);
+    const sheet = window.matchMedia('(max-width: 800px)').matches;
+    if (want) {
+      renderBellPanel();
+      bellOpener = document.activeElement;
+      panel.classList.remove('is-closing');
+      back.classList.remove('is-closing');
+      panel.style.transform = '';
+      back.style.opacity = '';
+      panel.hidden = false;
+      back.hidden = !sheet;
+      $('#bellBody').scrollTop = 0;
+      if (sheet) {
+        $('.main').classList.add('bell-open');
+        $('#bellClose').focus({ preventScroll: true });
+      }
+      return;
+    }
+    const done = () => {
+      panel.hidden = true;
+      back.hidden = true;
+      panel.classList.remove('is-closing');
+      back.classList.remove('is-closing');
+      panel.style.transform = '';
+      back.style.opacity = '';
+      $('.main').classList.remove('bell-open');
+      if (sheet && bellOpener && document.contains(bellOpener)) bellOpener.focus({ preventScroll: true });
+      bellOpener = null;
+    };
+    if (!sheet || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { done(); return; }
+    // From wherever a swipe left it, down and out.
+    panel.style.transform = '';
+    back.style.opacity = '';
+    panel.classList.add('is-closing');
+    back.classList.add('is-closing');
+    bellTimer = setTimeout(done, 280);
   }
 
   function wireMessages() {
@@ -4414,7 +4457,59 @@
       if (e.target.closest('#bellPanel') || e.target.closest('.bell')) return;
       toggleBell(false);
     });
+    // iOS sends no click to the document for a tap on a plain element, so the
+    // dimmed page and the close button close it themselves.
+    $('#bellBackdrop').addEventListener('click', () => toggleBell(false));
+    $('#bellClose').addEventListener('click', () => toggleBell(false));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleBell(false); });
+    // Swipe the sheet down to put it away: from the handle and title at any
+    // time, and from the list once it is scrolled to its top — otherwise the
+    // same drag just scrolls the list.
+    (() => {
+      const panel = $('#bellPanel');
+      const back = $('#bellBackdrop');
+      let drag = null;
+      panel.addEventListener('touchstart', (e) => {
+        drag = null;
+        if (e.touches.length !== 1 || !window.matchMedia('(max-width: 800px)').matches) return;
+        const body = $('#bellBody');
+        if (body.contains(e.target) && body.scrollTop > 0) return;
+        if (e.target.closest('button') && !body.contains(e.target)) return;
+        const t = e.touches[0];
+        drag = { x: t.clientX, y: t.clientY, dy: 0, at: e.timeStamp, v: 0, on: false };
+      }, { passive: true });
+      panel.addEventListener('touchmove', (e) => {
+        if (!drag) return;
+        const t = e.touches[0];
+        const dy = t.clientY - drag.y;
+        const dx = t.clientX - drag.x;
+        if (!drag.on) {
+          if (Math.abs(dy) < 4 && Math.abs(dx) < 4) return;
+          if (dy <= 0 || Math.abs(dx) > dy) { drag = null; return; }
+          drag.on = true;
+          panel.style.transition = 'none';
+        }
+        e.preventDefault();
+        const d = Math.max(0, dy);
+        drag.v = (d - drag.dy) / Math.max(1, e.timeStamp - drag.at);
+        drag.dy = d;
+        drag.at = e.timeStamp;
+        panel.style.transform = `translateY(${d}px)`;
+        back.style.opacity = String(Math.max(0.15, 1 - d / 420));
+      }, { passive: false });
+      const end = () => {
+        if (!drag) return;
+        const d = drag;
+        drag = null;
+        if (!d.on) return;
+        panel.style.transition = '';
+        if (d.dy > 110 || (d.dy > 36 && d.v > 0.45)) { toggleBell(false); return; }
+        panel.style.transform = '';
+        back.style.opacity = '';
+      };
+      panel.addEventListener('touchend', end, { passive: true });
+      panel.addEventListener('touchcancel', end, { passive: true });
+    })();
   }
 
   function renderTexting() {
@@ -5356,8 +5451,9 @@
     mainEl.addEventListener('touchstart', (e) => {
       start = null;
       if (busy || !onPhone() || e.touches.length !== 1) return;
+      if (!$('#bellPanel').hidden) return;
       const target = e.target;
-      if (target.closest('input, textarea, select, [contenteditable="true"], .messenger.thread-open .thread-compose')) return;
+      if (target.closest('input, textarea, select, [contenteditable="true"], .messenger.thread-open .thread-compose, #bellPanel, #bellBackdrop')) return;
       if (!atTop(target)) return;
       start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       pulling = false;

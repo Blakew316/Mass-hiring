@@ -187,10 +187,16 @@
   <main class="main">
     <!-- The bell's panel. One of them, anchored to whichever header the bell
          was injected into, rather than six copies that can disagree. -->
-    <div class="bell-panel" id="bellPanel" hidden>
+    <!-- On a phone it is a sheet: it rises from the bottom over a dimmed page,
+         and a tap outside, the close button or a swipe down puts it away. -->
+    <div class="bell-backdrop" id="bellBackdrop" hidden></div>
+    <div class="bell-panel" id="bellPanel" role="dialog" aria-labelledby="bellTitle" hidden>
       <div class="bell-head">
-        <span>Replies</span>
-        <button class="btn-link" id="bellClear" hidden>Mark all read</button>
+        <span class="bell-title" id="bellTitle">Replies</span>
+        <span class="bell-head-acts">
+          <button class="btn-link" id="bellClear" hidden>Mark all read</button>
+          <button type="button" class="bell-close m-only" id="bellClose" aria-label="Close"><span data-icon="x" data-size="14"></span></button>
+        </span>
       </div>
       <div class="bell-body" id="bellBody"></div>
     </div>

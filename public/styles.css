@@ -1367,6 +1367,8 @@ button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offs
   overflow: hidden;
 }
 .bell-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 650; color: var(--navy); }
+.bell-head-acts { display: inline-flex; align-items: center; gap: 10px; }
+.bell-backdrop { display: none; }
 .bell-body { overflow-y: auto; }
 .bell-sec { padding: 8px 14px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .bell-row {
@@ -1377,6 +1379,9 @@ button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offs
 .bell-row:hover { background: var(--navy-tint); }
 .bell-row.new { background: var(--blue-tint); }
 .bell-row.new:hover { background: var(--tint-hover-blue); }
+/* On the blue of a new row the Email pill's own blue vanished; it keeps a
+   white ground there so it reads the same as on every other row. */
+.bell-row.new .act-tag { background: var(--card); }
 .bell-main { flex: 1; min-width: 0; }
 .bell-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .bell-name { font-size: 13px; font-weight: 650; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
