@@ -1,6 +1,7 @@
 // Scheduled function: drains every team's send queue once a minute at a
-// Gmail-safe pace. Runs only on the published production deploy (30s limit);
-// nothing to configure.
+// Gmail-safe pace, then looks for email replies with the time that is left.
+// Runs only on the published production deploy (30s limit); nothing to
+// configure.
 //
 // There is no request here and so no session to take a team from, which is
 // exactly the case lib/tenant.js warns about: the context has to be entered
@@ -11,11 +12,16 @@ import queue from '../../lib/queue.js';
 import backups from '../../lib/backups.js';
 import teams from '../../lib/teams.js';
 import tenant from '../../lib/tenant.js';
+import replies from '../../lib/replies.js';
 
 const TOTAL_BUDGET_MS = 20000;
 // A copy reads and writes the whole list once each; started any later than
 // this it could run into the 30-second limit.
 const BACKUP_START_BEFORE_MS = 22000;
+// Reply detection gets whatever the minute has left after sending, and starts
+// no new Gmail read after this point: one read is bounded at 8 seconds, and the
+// whole run must finish inside 30.
+const REPLIES_STOP_AT_MS = 19500;
 // The smallest slice worth giving anyone. It is the send worker's own floor,
 // not a number picked here: lib/queue.js will not begin a send unless it has
 // SEND_TIMEOUT_MS + WRITE_RESERVE_MS left, so a shorter slice buys a run lease,
@@ -62,6 +68,19 @@ export default async () => {
         if (b) console.log('[send-queue] backup', team.id, JSON.stringify(b));
       } catch (err) {
         console.error(`[send-queue] backup for ${team.id} failed:`, err && err.stack ? err.stack : err);
+      }
+    }
+    // Replies, so a candidate writing back is noticed — and the phone told —
+    // with nobody's app open. Every team in the same rotation, for as long as
+    // the minute allows; one that fails does not stop the next.
+    for (const team of order) {
+      const budgetMs = REPLIES_STOP_AT_MS - (Date.now() - started);
+      if (budgetMs < 1500) break;
+      try {
+        const r = await tenant.run(team.id, () => replies.checkReplies({ budgetMs, waiting: 10, conversing: 3, backfill: 4 }));
+        if (r.replies) console.log('[send-queue] replies', team.id, JSON.stringify(r));
+      } catch (err) {
+        console.error(`[send-queue] replies for ${team.id} failed:`, err && err.stack ? err.stack : err);
       }
     }
   } catch (err) {

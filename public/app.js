@@ -147,6 +147,9 @@
     // Anything kept per team has to be re-read when the team changes, or the
     // new team inherits the old one's view of things.
     if (changed) feedChannel = readFeedChannel();
+    // What the bell has rung for and what was read here are the old team's:
+    // the new team's unread is new to this screen, not news to ring about.
+    if (changed) { try { resetUnreadMemory(); } catch { /* not declared yet: nothing kept */ } }
     // The Sales IQ card holds a live secret and a Disconnect button. A session
     // that lapses and signs in to another team never goes through signedOut(),
     // and until the new team's answer arrives — or for good, if it fails — the
@@ -376,6 +379,7 @@
     openThreadId = null;
     openMailId = null;
     threadLoading = false;
+    try { resetUnreadMemory(); } catch { /* not declared yet: nothing kept */ }
     for (const k of Object.keys(thumbs)) delete thumbs[k];
     for (const k of Object.keys(scrollMemory)) delete scrollMemory[k];
     // Unsaved edits and the template shown belong to the team they were made
@@ -403,8 +407,10 @@
   // Persistence / security warnings that must not be missable.
   function renderNotices() {
     const n = [];
-    if (updateReady) {
-      n.push(`<div class="notice ok"><span class="notice-ico">${icon('download', 16)}</span><div><strong>A new version is ready.</strong> It will be picked up on its own the next time you come back to the app, once whatever is part-way through has finished — or reload now.</div><button class="btn btn-sm notice-action" id="reloadForUpdate">Reload</button></div>`);
+    // Put away with its ×, it stays away for this version: the app still
+    // moves to it by itself the next time you come back to it.
+    if (updateReady && updateDismissed !== updateReady) {
+      n.push(`<div class="notice ok"><span class="notice-ico">${icon('download', 16)}</span><div><strong>A new version is ready.</strong> It installs by itself the next time you open the app, or reload now.</div><button class="btn btn-sm notice-action" id="reloadForUpdate">Reload</button><button type="button" class="notice-x" id="dismissUpdate" aria-label="Not now" title="Not now">${icon('x', 14)}</button></div>`);
     }
     if (state.storage && !state.storage.persistent) {
       n.push(`<div class="notice danger"><span class="notice-ico">${icon('alert', 16)}</span><div><strong>Your data is not being saved permanently.</strong> Netlify Blobs is unavailable${state.storage.error ? ` (${esc(state.storage.error)})` : ''}, so settings and candidates will be lost on the next deploy or restart. Check that Blobs is enabled for this site in Netlify, then redeploy.</div></div>`);
@@ -412,12 +418,28 @@
     if (state.storage && state.storage.deployed && state.auth && !state.auth.required) {
       n.push(`<div class="notice warn"><span class="notice-ico">${icon('lock', 16)}</span><div><strong>This dashboard is public.</strong> Anyone with the URL could send email from your account. Add an environment variable named <code>APP_PASSWORD</code> in Netlify (Project configuration → Environment variables), then redeploy. That is the admin password — it locks the dashboard and is what lets you create and delete teams.</div></div>`);
     }
-    if (state.lastError) {
-      n.push(`<div class="notice warn"><span class="notice-ico">${icon('alert', 16)}</span><div>${esc(state.lastError)}</div></div>`);
+    // A problem is said once. Put away, it stays away until a different one
+    // comes along — it used to sit on every page for a day.
+    if (state.lastError && !(state.lastErrorId && state.lastErrorId === dismissedErrorId())) {
+      n.push(`<div class="notice warn"><span class="notice-ico">${icon('alert', 16)}</span><div>${esc(state.lastError)}</div>${state.lastErrorId ? `<button type="button" class="notice-x" data-dismiss-error="${esc(state.lastErrorId)}" aria-label="Dismiss" title="Dismiss">${icon('x', 14)}</button>` : ''}</div>`);
     }
     $('#notices').innerHTML = n.join('');
     $('#signOutBtn').hidden = !(state.auth && state.auth.required);
   }
+
+  const dismissedErrorId = () => { try { return localStorage.getItem(teamKey('errorDismissed')) || ''; } catch { return ''; } };
+  document.addEventListener('click', (e) => {
+    const err = e.target.closest('[data-dismiss-error]');
+    if (err) {
+      try { localStorage.setItem(teamKey('errorDismissed'), err.dataset.dismissError); } catch {}
+      if (state) renderNotices();
+      return;
+    }
+    if (e.target.closest('#dismissUpdate')) {
+      updateDismissed = updateReady;
+      if (state) renderNotices();
+    }
+  });
 
   // The 30-second poll. The server tags the state, so an unchanged poll comes
   // back 304 with no body — nothing to parse, and nothing to re-render, which
@@ -442,6 +464,9 @@
     state = await res.json();
     authRequired = Boolean(state.auth && state.auth.required);
     setTeam(state.team);
+    // A conversation read on this screen stays read, whatever an answer that
+    // set off before the tap (or a "seen" call lost on a bad connection) says.
+    applyLocallyRead();
     renderAll();
     refreshProfile();
     // Back from a sign-in with Sales IQ on screen: it looks again.
@@ -605,6 +630,13 @@
       renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls();
     }
     if (view === 'texting') renderTexting();
+    // Back on a page whose thread column shows the whole time (anything wider
+    // than a phone): the conversation it holds may have moved on meanwhile.
+    if (state && !phoneQuery.matches) {
+      const c = (id) => (state.candidates || []).find((x) => x.id === id);
+      if (view === 'texting' && openThreadId && !threadLoading) openThread(openThreadId, { quiet: true });
+      if (view === 'template' && openMailId && !mailLoading && c(openMailId) && mailSig(c(openMailId)) !== mailShownSig) openMail(openMailId, { quiet: true });
+    }
     // Arriving at a page is arriving at its list, never at whatever thread was
     // open the last time you were here.
     if (record) syncThreadStack(false);
@@ -637,11 +669,14 @@
   function route(view, thread) {
     const key = `${view}|${thread ? 't' : ''}`;
     if (key === lastRouted) return;
-    lastRouted = key;
     show(view, { record: false });
     // On a phone a thread is its own entry in the history, so going back out
-    // of one is the same gesture as going back out of a page.
-    syncThreadStack(thread);
+    // of one is the same gesture as going back out of a page. Only one that
+    // is still loaded is put back: after a reload there is nothing to show.
+    syncThreadStack(thread && Boolean(view === 'template' ? openMailId : openThreadId));
+    // Set after show(), which records the page alone: set before, the guard
+    // said "no thread" while one was open, and the next Back was skipped.
+    lastRouted = key;
   }
   window.addEventListener('popstate', (e) => {
     route((e.state && e.state.view) || viewInAddressBar(), Boolean(e.state && e.state.thread));
@@ -692,6 +727,58 @@
     }
   }
   buildGroupSwitches();
+
+  // ---- compose, on the phone's Inbox ----
+  // A wider screen has the page's own buttons in its header (Email all, Follow
+  // up, Import; Text everyone, Stop texting). On a phone those made the Inbox
+  // mostly buttons, so they are one compose button in the navigation bar, the
+  // way Mail and Messages do it, opening a sheet of the same actions. The
+  // sheet is read from the real buttons every time it opens — their labels,
+  // counts and whether they can be pressed — and pressing one presses them.
+  const INBOX_ACT_ICON = { emailAllBtn: 'mail', emailFollowUpBtn: 'reply', textSendAllBtn: 'bubble', textStopBtn: 'xcircle' };
+  let inboxSheetSource = [];
+  function mountCompose() {
+    for (const [view] of GROUPS.inbox.views) {
+      const head = $(`#view-${view} .page-head`);
+      if (!head || head.querySelector('.head-compose')) continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'head-compose';
+      b.setAttribute('aria-label', view === 'template' ? 'New email' : 'New text');
+      b.title = b.getAttribute('aria-label');
+      b.innerHTML = icon('compose', 24);
+      b.addEventListener('click', () => openInboxSheet(view));
+      head.appendChild(b);
+    }
+  }
+  function openInboxSheet(view) {
+    // The page's main action first, the way an action sheet leads with it.
+    const btns = $$(`#view-${view} .head-actions > .btn`).filter((x) => !x.hidden)
+      .sort((a, b) => Number(b.classList.contains('btn-primary')) - Number(a.classList.contains('btn-primary')));
+    inboxSheetSource = btns;
+    $('#inboxSheetTitle').textContent = view === 'template' ? 'Email' : 'Texts';
+    $('#inboxSheetButtons').innerHTML = btns.map((b, i) => {
+      const ico = INBOX_ACT_ICON[b.id] || (b.dataset.goto === 'import' ? 'upload' : 'plus');
+      const label = b.textContent.replace(/\s+/g, ' ').trim();
+      return `<button type="button" class="sheet-btn more-row${b.id === 'textStopBtn' ? ' is-danger' : ''}" data-inbox-act="${i}"${b.disabled ? ' disabled' : ''}>
+        <span class="more-ico">${icon(ico, 18)}</span><span class="more-label">${esc(label)}</span></button>`;
+    }).join('');
+    openModal('#inboxSheet');
+  }
+  $('#inboxSheetButtons').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-inbox-act]');
+    if (!b || b.disabled) return;
+    const src = inboxSheetSource[Number(b.dataset.inboxAct)];
+    closeModal($('#inboxSheet'));
+    if (src && !src.disabled) src.click();
+  });
+  mountCompose();
+
+  // A list that has scrolled under the header gets the hairline a navigation
+  // bar draws once content passes beneath it.
+  $$('#view-template .conv-list, #view-texting .conv-list').forEach((l) => l.addEventListener('scroll', () => {
+    l.closest('.view').classList.toggle('list-scrolled', l.scrollTop > 2);
+  }, { passive: true }));
   // More: the pages the phone's tab bar has no room for, as a list. Built
   // from the tab bar itself each time, so the two can never disagree.
   $('#navMore').addEventListener('click', () => {
@@ -1269,13 +1356,14 @@
     const worthFiltering = kinds.length >= 2;
     const chips = [['all', 'All'], ['email', 'Email'], ['text', 'Texting'], ['iq', 'Sales IQ'], ['onb', 'Onboarding']]
       .filter(([k]) => k === 'all' || counts[k] > 0);
+    // Settled before the chips are drawn, so the one lit is the one shown.
+    if (!worthFiltering || !chips.some(([k]) => k === feedChannel)) feedChannel = 'all';
     $('#feedFilters').innerHTML = worthFiltering
       ? chips.map(([k, label]) =>
           `<button class="feed-chip${feedChannel === k ? ' on' : ''}" data-feed="${k}">${label}<span class="feed-n">${counts[k]}</span></button>`).join('')
       : '';
-    if (!worthFiltering || !chips.some(([k]) => k === feedChannel)) feedChannel = 'all';
 
-    const list = feedEvents(feedChannel).slice(0, 15);
+    const list = feedRows(feedEvents(feedChannel), 15);
     const empty = feedChannel === 'iq'
       ? 'No finished questionnaires yet.'
       : feedChannel === 'onb'
@@ -1288,12 +1376,65 @@
     $('#activityList').innerHTML = list.length
       ? list.map((ev) => {
           const k = FEED_KIND[ev.type];
-          return `<li><span class="act-ico ${k.cls}">${icon(k.ico, 14)}</span>
-            <div><div>${esc(ev.message)}</div>
-              <div class="act-time">${k.tag ? `<span class="act-tag ch-${k.ch}">${k.tag}</span>` : ''}${timeAgo(ev.ts)}</div></div></li>`;
+          const to = !ev.more.length && feedTarget(ev);
+          const tag = to ? 'button' : 'div';
+          return `<li><${tag} class="act-row${to ? ' act-open' : ''}"${to ? ` type="button" data-feed-open="${esc(ev.candidateId)}" data-feed-to="${to}"` : ''}>
+            <span class="act-ico ${k.cls}">${icon(k.ico, 14)}</span>
+            <span class="act-main"><span class="act-msg">${esc(feedMessage(ev))}</span>
+              <span class="act-time">${k.tag ? `<span class="act-tag ch-${k.ch}">${k.tag}</span>` : ''}<span data-ago="${esc(ev.ts)}">${timeAgo(ev.ts)}</span></span></span>
+            ${to ? `<span class="act-chev">${icon('chevron', 13)}</span>` : ''}</${tag}></li>`;
         }).join('')
       : `<li class="empty-line">${empty}</li>`;
   }
+
+  // A send wave's opens arrive together, and a hundred lines of "opened your
+  // email" buried the one reply that mattered — and read as the same update
+  // over and over. A run of them is one line.
+  const FEED_FOLDS = { opened: ' opened your email', 'text-read': ' read your text' };
+  function feedRows(events, limit) {
+    const out = [];
+    for (const ev of events) {
+      const prev = out[out.length - 1];
+      if (FEED_FOLDS[ev.type] && prev && prev.type === ev.type) { prev.more.push(ev); continue; }
+      if (out.length >= limit) break;
+      out.push({ ...ev, more: [] });
+    }
+    return out;
+  }
+  function feedMessage(ev) {
+    if (!ev.more.length) return ev.message;
+    const tail = FEED_FOLDS[ev.type];
+    const who = String(ev.message || '').replace(/\.$/, '').replace(tail, '');
+    const n = ev.more.length;
+    return `${who} and ${n.toLocaleString()} other${n === 1 ? '' : 's'}${tail}.`;
+  }
+  // Where tapping an update takes you: the conversation it is about, or the
+  // person. Nowhere, if they have since been removed.
+  function feedTarget(ev) {
+    if (!ev.candidateId || !(state.candidates || []).some((c) => c.id === ev.candidateId)) return '';
+    if (ev.type === 'replied') return 'email';
+    if (ev.type === 'text-replied' || ev.type === 'text-optout' || ev.type === 'text-read') return 'text';
+    return 'profile';
+  }
+  document.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-feed-open]');
+    if (!row) return;
+    const c = (state.candidates || []).find((x) => x.id === row.dataset.feedOpen);
+    if (!c) return;
+    if (row.dataset.feedTo === 'email') { show('template'); openMail(c.id); }
+    else if (row.dataset.feedTo === 'text') { show('texting'); openThread(c.id); }
+    else openProfile(c);
+  });
+
+  // "just now" has to become "5m ago" without waiting for something else to
+  // change: an unchanged poll draws nothing, so the times are kept moving here.
+  setInterval(() => {
+    if (document.hidden) return;
+    $$('[data-ago]').forEach((el) => {
+      const t = timeAgo(el.dataset.ago);
+      if (el.textContent !== t) el.textContent = t;
+    });
+  }, 60000);
 
   function renderTextToday(t) {
     const q = (state.texting && state.texting.queue) || {};
@@ -2222,6 +2363,7 @@
 
   // ---------------- Compose & send ----------------
   let cancelSend = false;
+  let composeSending = false;   // the send window's own loop is running
   let composeFollowUp = false;
   function openCompose(ids, override, { followUp = false } = {}) {
     if (!state.sending.ready) {
@@ -2367,6 +2509,7 @@
         (failed.length ? '<br>' + failed.slice(-5).map((f) => `<span class="bad-ico">${icon('xcircle', 14)}</span> ${esc(f.email || f.id)} — ${esc(f.error)}`).join('<br>') : '');
     };
     update();
+    composeSending = true;
     try {
       let pending = composeIds.slice();
       let retries = 0;
@@ -2423,6 +2566,8 @@
       btn.disabled = false;
       btn.textContent = 'Retry';
       cancel.textContent = 'Close';
+    } finally {
+      composeSending = false;
     }
   });
 
@@ -3919,12 +4064,28 @@
     }, { passive: true });
   }
 
+  // Search looks through every conversation on the channel, whatever filter
+  // is showing: somebody who has not replied is still somebody you can look
+  // up, and on Email's Replied tab they used to be impossible to find. A
+  // number matches however it is typed, the way the Candidates search does,
+  // and so do the words of the last message.
+  function convMatcher(query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return null;
+    const tail = (d) => (d.length === 11 && d[0] === '1' ? d.slice(1) : d);
+    const qDigits = tail(q.replace(/\D/g, ''));
+    const byDigits = qDigits.length >= 3 && /^[\d\s().+-]+$/.test(q);
+    return (c, extra) => {
+      if (byDigits && tail(String(c.phone || '').replace(/\D/g, '')).includes(qDigits)) return true;
+      return `${c.name || ''} ${c.email || ''} ${c.phone || ''} ${c.company || ''} ${c.role || ''} ${extra || ''}`.toLowerCase().includes(q);
+    };
+  }
+
   function conversations() {
     const all = (state.candidates || []).filter((c) => c.textCount > 0);
-    const q = convSearch.trim().toLowerCase();
+    const match = convMatcher(convSearch);
     return all
-      .filter((c) => (convFilter === 'unread' ? c.textUnread : true))
-      .filter((c) => !q || `${c.name || ''} ${c.phone || ''} ${c.company || ''}`.toLowerCase().includes(q))
+      .filter((c) => (match ? match(c, (c.textLast || {}).text) : convFilter === 'unread' ? c.textUnread : true))
       .sort((a, b) => String((b.textLast || {}).ts || '').localeCompare(String((a.textLast || {}).ts || '')));
   }
 
@@ -3938,6 +4099,9 @@
     $('#convUnreadN').textContent = n || '';
     $('#convUnreadN').hidden = !n;
     $$('[data-conv-tab]').forEach((b) => b.classList.toggle('on', b.dataset.convTab === convFilter));
+    // While a search is running it covers every conversation, so the filter
+    // steps back rather than looking as if it still applied.
+    $('#view-texting .conv-col').classList.toggle('is-searching', Boolean(convSearch.trim()));
     const el = $('#convList');
     keepingScroll(el, () => { el.innerHTML = rows.length
       ? rows.map((c) => {
@@ -3946,13 +4110,13 @@
           return `<li><button class="conv${c.id === openThreadId ? ' on' : ''}${c.textUnread ? ' unread' : ''}" data-conv="${esc(c.id)}">
             <span class="avatar">${esc(convInitials(c.name, c.phone))}</span>
             <span class="conv-main">
-              <span class="conv-top"><span class="conv-name">${esc(who)}</span><span class="conv-when">${last.ts ? timeAgo(last.ts) : ''}</span></span>
+              <span class="conv-top"><span class="conv-name">${esc(who)}</span><span class="conv-when"${last.ts ? ` data-ago="${esc(last.ts)}"` : ''}>${last.ts ? timeAgo(last.ts) : ''}</span><span class="conv-chev">${icon('chevron', 12)}</span></span>
               <span class="conv-last">${last.dir === 'out' ? '<span class="conv-you">You:</span> ' : ''}${esc(last.text || '')}</span>
             </span>
             ${c.textUnread ? '<span class="conv-dot" aria-label="unread"></span>' : ''}
           </button></li>`;
         }).join('') + moreRow(all.length - rows.length)
-      : `<li class="conv-none">${convFilter === 'unread' ? 'Nothing unread.' : convSearch ? 'No conversation matches that.' : 'No conversations yet. Texts you send show up here.'}</li>`; });
+      : `<li class="conv-none">${convSearch.trim() ? `No results for “${esc(convSearch.trim())}”.` : convFilter === 'unread' ? 'Nothing unread.' : 'No conversations yet. Texts you send show up here.'}</li>`; });
   }
 
   // `quiet` means this is the background refresh of a conversation already on
@@ -3960,6 +4124,11 @@
   // made a conversation you were reading flicker; leave what is there and swap
   // it when the new copy arrives.
   async function openThread(id, { markSeen = true, quiet = false } = {}) {
+    // A different conversation gets its own half-written reply, not the last
+    // one's: one box shared by all of them carried a draft meant for one
+    // person into the next conversation opened, a tap away from sending it
+    // to the wrong one.
+    if (id !== openThreadId) restoreDraft('text', id, $('#threadInput'));
     openThreadId = id;
     threadLoading = true;
     // On a phone the thread is a screen pushed over the list. `quiet` is the
@@ -3985,9 +4154,11 @@
     if (markSeen) {
       const c = (state.candidates || []).find((x) => x.id === id);
       if (c && c.textUnread) {
-        c.textUnread = false;           // locally, so the badge clears at once
-        renderConvList(); renderBell();
-        api('/api/texts/seen', { method: 'POST', body: { id } }).catch(() => {});
+        // Read up to the newest message this screen now shows, so one that
+        // lands a moment later is still news.
+        const lastIn = [...(thread.thread || [])].reverse().find((m) => m.dir === 'in' && !m.kind);
+        markRead('text', [{ c, ts: newest(lastIn && lastIn.ts, lastInTs(c, 'text')) }]);
+        renderConvList();
       }
     }
   }
@@ -4013,9 +4184,13 @@
           const prev = msgs[i - 1];
           const gap = !prev || (m.ts && prev.ts && new Date(m.ts) - new Date(prev.ts) > 60 * 60 * 1000);
           const stamp = gap && m.ts ? `<div class="thread-stamp">${esc(whenLabel(m.ts))}</div>` : '';
-          return `${stamp}<div class="msg ${m.dir === 'out' ? 'out' : 'in'}${m.pending ? ' pending' : ''}">
+          // A tapback or a Driving Focus reply is the phone talking, not the
+          // candidate: shown, but quietly, and never counted as a reply.
+          const machine = m.dir !== 'out' && m.kind;
+          return `${stamp}<div class="msg ${m.dir === 'out' ? 'out' : 'in'}${m.pending ? ' pending' : ''}${machine ? ' machine' : ''}">
             <div class="bubble">${esc(m.text)}</div>
             ${m.pending ? '<div class="msg-meta">Sending…</div>' : ''}
+            ${machine ? `<span class="msg-tag">${m.kind === 'reaction' ? 'Tapback' : 'Auto-reply'}</span>` : ''}
           </div>`;
         }).join('')
       : '<p class="thread-loading">No messages yet.</p>';
@@ -4024,7 +4199,7 @@
     const stopped = thread.optedOut;
     $('#threadInput').disabled = stopped;
     $('#threadSend').disabled = stopped;
-    $('#threadInput').placeholder = stopped ? 'They replied STOP' : 'iMessage';
+    $('#threadInput').placeholder = stopped ? 'They replied STOP' : 'Text Message';
     const relay = ((state.texting || {}).queue || {}).relay || {};
     $('#threadNote').textContent = stopped
       ? 'They replied STOP, so nothing more can be sent to this number.'
@@ -4048,9 +4223,10 @@
     if (!body || !openThreadId) return;
     $('#threadSend').disabled = true;
     try {
-      await api('/api/texts/reply', { method: 'POST', body: { id: openThreadId, body } });
-      box.value = '';
-      box.style.height = '';
+      const to = openThreadId;
+      await api('/api/texts/reply', { method: 'POST', body: { id: to, body } });
+      saveDraft('text', to, '');
+      if (openThreadId === to) { box.value = ''; box.style.height = ''; }
       // Show it immediately rather than waiting for the next poll.
       if (thread) { thread.pending = [...(thread.pending || []), { text: body }]; renderThread(); }
       await refresh();
@@ -4059,6 +4235,45 @@
     } finally {
       $('#threadSend').disabled = Boolean(thread && thread.optedOut);
     }
+  }
+
+  // ---- drafts: one per conversation ----
+  // Kept for the session as well, so a reload to take a new version of the
+  // app does not throw away what was being written.
+  const DRAFTS_KEY = 'wp-drafts';
+  let drafts = null;
+  function draftStore() {
+    if (!drafts) { try { drafts = JSON.parse(sessionStorage.getItem(DRAFTS_KEY)) || {}; } catch { drafts = {}; } }
+    return drafts;
+  }
+  const draftKey = (ch, id) => `${currentTeam ? currentTeam.id : ''}:${ch}:${id}`;
+  function saveDraft(ch, id, text) {
+    if (!id) return;
+    const d = draftStore();
+    const k = draftKey(ch, id);
+    if (text && text.trim()) d[k] = text; else delete d[k];
+    try { sessionStorage.setItem(DRAFTS_KEY, JSON.stringify(d)); } catch { /* kept in memory */ }
+  }
+  function restoreDraft(ch, id, box) {
+    if (!box) return;
+    box.value = draftStore()[draftKey(ch, id)] || '';
+    box.style.height = '';
+    if (box.value) { box.style.height = 'auto'; box.style.height = `${Math.min(box.scrollHeight, ch === 'email' ? 160 : 120)}px`; }
+  }
+
+  // An email reply carries everything before it underneath ("On Monday,
+  // Blake wrote: > …"). In a conversation that history is already on the
+  // screen, so it is split off and folded away.
+  function splitQuoted(text) {
+    const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+    const at = lines.findIndex((l, i) => /^On .{4,200}wrote:\s*$/i.test(l.trim())
+      || /^-{2,}\s*(Original|Forwarded) Message\s*-{2,}/i.test(l.trim())
+      || /^From:\s.+/.test(l.trim()) && i > 0 && lines[i - 1].trim() === ''
+      || (/^>/.test(l) && lines.slice(i).filter((x) => x.trim()).every((x) => /^>/.test(x))));
+    if (at <= 0) return { main: String(text || ''), quoted: '' };
+    const main = lines.slice(0, at).join('\n').replace(/\s+$/, '');
+    if (!main.trim()) return { main: String(text || ''), quoted: '' };
+    return { main, quoted: lines.slice(at).join('\n').trim() };
   }
 
   // ---------------- The inbox ----------------
@@ -4075,11 +4290,12 @@
 
   function mailboxes() {
     const all = (state.candidates || []).filter((c) => c.lastEmailedAt || c.emailReplies);
-    const q = mailSearch.trim().toLowerCase();
+    const match = convMatcher(mailSearch);
     const when = (c) => (c.emailLast && c.emailLast.ts) || c.lastReplyAt || c.lastEmailedAt || '';
     return all
-      .filter((c) => (mailFilter === 'unread' ? c.emailUnread : mailFilter === 'replied' ? c.emailReplies > 0 : true))
-      .filter((c) => !q || `${c.name || ''} ${c.email || ''} ${c.company || ''}`.toLowerCase().includes(q))
+      .filter((c) => (match
+        ? match(c, `${(c.emailLast || {}).text || ''} ${c.lastSubject || ''}`)
+        : mailFilter === 'unread' ? c.emailUnread : mailFilter === 'replied' ? c.emailReplies > 0 : true))
       .sort((a, b) => String(when(b)).localeCompare(String(when(a))));
   }
 
@@ -4093,6 +4309,7 @@
     $('#mailUnreadN').textContent = n || '';
     $('#mailUnreadN').hidden = !n;
     $$('[data-mail-tab]').forEach((b) => b.classList.toggle('on', b.dataset.mailTab === mailFilter));
+    $('#view-template .conv-col').classList.toggle('is-searching', Boolean(mailSearch.trim()));
     const el = $('#mailList');
     keepingScroll(el, () => { el.innerHTML = rows.length
       ? rows.map((c) => {
@@ -4102,17 +4319,17 @@
           return `<li><button class="conv${c.id === openMailId ? ' on' : ''}${c.emailUnread ? ' unread' : ''}" data-mail="${esc(c.id)}">
             <span class="avatar">${esc(convInitials(c.name, c.email))}</span>
             <span class="conv-main">
-              <span class="conv-top"><span class="conv-name">${esc(c.name || c.email || 'Unknown')}</span><span class="conv-when">${ts ? timeAgo(ts) : ''}</span></span>
+              <span class="conv-top"><span class="conv-name">${esc(c.name || c.email || 'Unknown')}</span>${c.emailBounced && !c.emailReplies ? '<span class="conv-flag" title="Bounced">!</span>' : ''}<span class="conv-when"${ts ? ` data-ago="${esc(ts)}"` : ''}>${ts ? timeAgo(ts) : ''}</span><span class="conv-chev">${icon('chevron', 12)}</span></span>
               <span class="conv-last">${last ? '' : '<span class="conv-you">You:</span> '}${esc(preview)}</span>
             </span>
-            ${c.emailBounced && !c.emailReplies ? '<span class="conv-flag" title="Bounced">!</span>' : ''}
-            ${c.emailUnread ? '<span class="conv-dot"></span>' : ''}
+            ${c.emailUnread ? '<span class="conv-dot" aria-label="unread"></span>' : ''}
           </button></li>`;
         }).join('') + moreRow(all.length - rows.length)
-      : `<li class="conv-none">${mailFilter === 'unread' ? 'Nothing unread.' : mailFilter === 'replied' ? 'Nobody has replied by email yet.' : mailSearch ? 'No conversation matches that.' : 'Nothing emailed yet.'}</li>`; });
+      : `<li class="conv-none">${mailSearch.trim() ? `No results for “${esc(mailSearch.trim())}”.` : mailFilter === 'unread' ? 'Nothing unread.' : mailFilter === 'replied' ? 'Nobody has replied by email yet.' : 'Nothing emailed yet.'}</li>`; });
   }
 
   async function openMail(id, { markSeen = true, quiet = false } = {}) {
+    if (id !== openMailId) restoreDraft('email', id, $('#mailInput'));
     openMailId = id;
     mailLoading = true;
     if (!quiet) pushThread('template');
@@ -4130,16 +4347,19 @@
       return;
     }
     mailLoading = false;
+    const mc = (state.candidates || []).find((x) => x.id === id);
+    mailShownSig = mc ? mailSig(mc) : '';
     renderMail();
-    if (markSeen) {
-      const c = (state.candidates || []).find((x) => x.id === id);
-      if (c && c.emailUnread) {
-        c.emailUnread = false;
-        renderMailList(); renderBell();
-        api('/api/emails/seen', { method: 'POST', body: { id } }).catch(() => {});
-      }
+    if (markSeen && mc && mc.emailUnread) {
+      const lastIn = [...(mail.messages || [])].reverse().find((m) => m.dir !== 'out' && !m.kind);
+      markRead('email', [{ c: mc, ts: newest(lastIn && lastIn.date, lastInTs(mc, 'email')) }]);
+      renderMailList();
     }
   }
+  // What the list knew about a conversation when it was last read from
+  // Gmail: when it changes, the copy on screen is out of date.
+  let mailShownSig = '';
+  const mailSig = (c) => `${lastInTs(c, 'email')}|${c.emailReplies || 0}|${c.lastEmailedAt || ''}`;
 
   function renderMail() {
     if (!mail) return;
@@ -4155,18 +4375,23 @@
     if (mail.unavailable) {
       $('#mailBody').innerHTML = `<p class="thread-loading">${esc(mail.unavailable)}</p>`;
     } else {
+      const them = mail.name || mail.email || 'Them';
       $('#mailBody').innerHTML = (mail.messages || []).length
         ? mail.messages.map((m, i) => {
             const prev = mail.messages[i - 1];
             const gap = !prev || (m.date && prev.date && new Date(m.date) - new Date(prev.date) > 60 * 60 * 1000);
             const stamp = gap && m.date ? `<div class="thread-stamp">${esc(whenLabel(m.date))}</div>` : '';
-            const text = m.text || m.snippet || '';
+            const { main, quoted } = splitQuoted(m.text || m.snippet || '');
             // A bounce is the mail system talking, not the candidate, so it is
             // marked rather than dressed up as a reply.
             const tag = m.kind === 'bounce' ? '<span class="msg-tag bad">Bounce</span>'
               : m.kind === 'auto' ? '<span class="msg-tag">Auto-reply</span>' : '';
+            // Each message says who and when, the way Mail heads one; the
+            // earlier messages it quotes are folded away behind "•••", since
+            // they are already on the screen above it.
             return `${stamp}<div class="msg ${m.dir === 'out' ? 'out' : 'in'}${m.kind ? ' machine' : ''}">
-              <div class="bubble">${esc(text)}${mail.limited && !m.text ? '<span class="msg-clip"> …</span>' : ''}</div>
+              <div class="msg-head"><span class="msg-who">${esc(m.dir === 'out' ? 'You' : them)}</span>${m.date ? `<span class="msg-when">${esc(whenLabel(m.date))}</span>` : ''}</div>
+              <div class="bubble">${esc(main)}${mail.limited && !m.text ? '<span class="msg-clip"> …</span>' : ''}${quoted ? `<details class="msg-quote"><summary aria-label="Show quoted text">•••</summary><div class="msg-quoted">${esc(quoted)}</div></details>` : ''}</div>
               ${tag}
             </div>`;
           }).join('')
@@ -4188,9 +4413,10 @@
     if (!body || !openMailId) return;
     $('#mailSend').disabled = true;
     try {
-      await api('/api/emails/reply', { method: 'POST', body: { id: openMailId, body } });
-      box.value = '';
-      box.style.height = '';
+      const to = openMailId;
+      await api('/api/emails/reply', { method: 'POST', body: { id: to, body } });
+      saveDraft('email', to, '');
+      if (openMailId === to) { box.value = ''; box.style.height = ''; }
       toast('Reply sent.');
       await refresh();
       // The conversation is already on screen — swap the new copy in rather
@@ -4224,8 +4450,11 @@
     $('#mailInput').addEventListener('input', (e) => {
       e.target.style.height = 'auto';
       e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+      saveDraft('email', openMailId, e.target.value);
     });
-    $('#mailOpenCandidate').addEventListener('click', () => { const c = openMailId && state.candidates.find((x) => x.id === openMailId); if (c) openCandidate(c); });
+    // Who this is: their card, with everything that can be done for them —
+    // not the edit form, which put the keyboard up over the conversation.
+    $('#mailOpenCandidate').addEventListener('click', () => { const c = openMailId && state.candidates.find((x) => x.id === openMailId); if (c) openProfile(c); });
   }
 
   // ---------------- Light and dark ----------------
@@ -4289,6 +4518,9 @@
       b.setAttribute('aria-label', 'Notifications');
       b.innerHTML = `${icon('bell', 18)}<span class="bell-n" hidden></span>`;
       b.addEventListener('click', (e) => { e.stopPropagation(); toggleBell(); });
+      // Rung once, then done: a bell left holding the class rang again every
+      // time its page was shown.
+      b.addEventListener('animationend', () => b.classList.remove('ring'));
       row.appendChild(b);
     });
   }
@@ -4297,40 +4529,148 @@
   // a reply is a reply whichever way it arrived.
   const allUnread = () => unreadCount() + mailUnreadCount();
 
-  // null until the first render, so a page load with unread waiting does not
-  // read as something having just arrived.
-  let lastBellCount = null;
+  // ---- read and unread ----
+  // What this screen has read, and up to which reply: `${id}:${ch}` -> the
+  // time of the newest reply shown when it was read. A conversation opened
+  // here is read here at once and stays read: a poll that set off before the
+  // tap, or a "seen" call lost on a bad connection, used to bring the old
+  // flag back, and the badge re-lit and the bell rang again for a reply
+  // already read. A reply newer than the one read is news, and still shows.
+  const locallyRead = new Map();
+  const seenToldAt = new Map();      // when the server was last told, per key
+  const UNREAD_FLAG = { text: 'textUnread', email: 'emailUnread' };
+  const tsNum = (ts) => { const n = Date.parse(ts || ''); return Number.isFinite(n) ? n : 0; };
+  const newest = (...ts) => ts.filter(Boolean).sort((a, b) => tsNum(b) - tsNum(a))[0] || '';
+
+  // The newest thing they wrote on a channel, as the list knows it.
+  function lastInTs(c, ch) {
+    if (ch === 'email') return (c.emailLast && c.emailLast.ts) || c.lastReplyAt || '';
+    return (c.textLastIn && c.textLastIn.ts) || (c.textLast && c.textLast.dir === 'in' ? c.textLast.ts : '') || '';
+  }
+
+  // Every reply the bell has already rung for, by who, which channel and
+  // which message. null until the first render, so a page load with unread
+  // waiting does not read as something having just arrived.
+  let rungKeys = null;
+  function resetUnreadMemory() { locallyRead.clear(); seenToldAt.clear(); rungKeys = null; }
+
+  // Read, here and on the server. `list` is [{ c, ts }], ts being the newest
+  // reply the screen showed; the server keeps the flag if anything newer has
+  // come in since.
+  function markRead(ch, list) {
+    const flag = UNREAD_FLAG[ch];
+    const items = [];
+    for (const { c, ts } of list) {
+      if (!c) continue;
+      const seen = ts || lastInTs(c, ch);
+      locallyRead.set(`${c.id}:${ch}`, seen);
+      c[flag] = false;
+      items.push(seen ? { id: c.id, ts: seen } : { id: c.id });
+    }
+    if (!items.length) return Promise.resolve();
+    renderUnread();
+    return tellSeen(ch, items);
+  }
+  function tellSeen(ch, items) {
+    const now = Date.now();
+    items.forEach((i) => seenToldAt.set(`${i.id}:${ch}`, now));
+    const send = () => api(ch === 'email' ? '/api/emails/seen' : '/api/texts/seen', { method: 'POST', body: { items } });
+    // One more try, then leave it to the next full poll (applyLocallyRead),
+    // which asks again for as long as the server still says unread.
+    return send().catch(() => wait(2500).then(send)).catch(() => { stateTag = ''; });
+  }
+  // Laid over each fresh copy of the state, before anything is drawn.
+  function applyLocallyRead() {
+    if (!state || !locallyRead.size) return;
+    const byId = new Map((state.candidates || []).map((c) => [c.id, c]));
+    const again = { text: [], email: [] };
+    for (const [key, seen] of [...locallyRead]) {
+      const at = key.lastIndexOf(':');
+      const id = key.slice(0, at);
+      const ch = key.slice(at + 1);
+      const c = byId.get(id);
+      // Gone, or read on the server too: nothing left to hold.
+      if (!c || !c[UNREAD_FLAG[ch]]) { locallyRead.delete(key); continue; }
+      // Something newer than what was read: that is news.
+      if (seen && tsNum(lastInTs(c, ch)) > tsNum(seen) + 1000) { locallyRead.delete(key); continue; }
+      c[UNREAD_FLAG[ch]] = false;
+      if (Date.now() - (seenToldAt.get(key) || 0) > 20000) again[ch].push(seen ? { id, ts: seen } : { id });
+    }
+    for (const ch of ['text', 'email']) if (again[ch].length) tellSeen(ch, again[ch]);
+  }
+
+  // Every count of unread in one place — the bell, the Inbox tab, the Email
+  // and Texts switch, the Unread filters and the app icon — so no two of
+  // them can disagree after something is read.
+  function renderUnread() {
+    renderBell();
+    renderNavCounts();
+    renderAppBadge();
+  }
+  // The number on the Home Screen icon, where the device supports it.
+  let appBadgeShown = -1;
+  function renderAppBadge() {
+    const n = state ? allUnread() : 0;
+    if (n === appBadgeShown) return;
+    appBadgeShown = n;
+    try {
+      if (n && navigator.setAppBadge) navigator.setAppBadge(n).catch(() => {});
+      else if (!n && navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
+    } catch { /* not supported here */ }
+  }
+
+  function unreadKeys() {
+    const out = [];
+    for (const c of state.candidates || []) {
+      if (c.textUnread) out.push(`${c.id}:text:${lastInTs(c, 'text')}`);
+      if (c.emailUnread) out.push(`${c.id}:email:${lastInTs(c, 'email')}`);
+    }
+    return out;
+  }
 
   function renderBell() {
     const n = allUnread();
-    const arrived = lastBellCount !== null && n > lastBellCount;
-    lastBellCount = n;
+    // It rings for a reply it has not rung for before — not whenever the
+    // count goes up, which rang again for replies already read.
+    const keys = unreadKeys();
+    const arrived = rungKeys !== null && keys.some((k) => !rungKeys.has(k));
+    if (!rungKeys) rungKeys = new Set();
+    keys.forEach((k) => rungKeys.add(k));
     $$('.bell').forEach((b) => {
       const dot = b.querySelector('.bell-n');
-      dot.textContent = n > 9 ? '9+' : String(n);
+      dot.textContent = n > 99 ? '99+' : String(n);
       dot.hidden = !n;
       b.classList.toggle('lit', Boolean(n));
-      if (arrived) {
-        // Restart the animation even if it is already running: two replies a
-        // second apart should ring twice, not once.
+    });
+    // Only the bell on screen rings. One on a hidden page cannot play the
+    // animation, so it would never let go of the class.
+    if (arrived) {
+      const b = $$('.bell').find((x) => x.getClientRects().length);
+      if (b) {
+        // Restarted even if it is already running: two replies a second
+        // apart ring twice, not once.
         b.classList.remove('ring');
         void b.offsetWidth;
         b.classList.add('ring');
       }
-    });
+    }
     if (!$('#bellPanel').hidden) renderBellPanel();
   }
 
-  // One entry per unanswered conversation, not per person: someone who
-  // answered both the text and the email is two things to read, not one.
+  // One entry per conversation, not per person: someone who answered both
+  // the text and the email is two things to read, not one. Built from the
+  // unread flags as well as the last message, so everything the badge counts
+  // is listed and can be read or cleared from here.
+  const BELL_EARLIER_DAYS = 7;
   function bellItems() {
     const out = [];
     for (const c of state.candidates || []) {
-      if (c.textLast && c.textLast.dir === 'in') {
-        out.push({ c, ch: 'text', ts: c.textLast.ts, text: c.textLast.text, unread: Boolean(c.textUnread), who: c.name || textPhoneOf(c) || 'Unknown' });
+      const tin = c.textLastIn || (c.textLast && c.textLast.dir === 'in' ? c.textLast : null);
+      if (tin || c.textUnread) {
+        out.push({ c, ch: 'text', ts: tin ? tin.ts : (c.textLast || {}).ts, text: tin ? tin.text : 'New text message', unread: Boolean(c.textUnread), who: c.name || textPhoneOf(c) || 'Unknown' });
       }
-      if (c.emailLast) {
-        out.push({ c, ch: 'email', ts: c.emailLast.ts, text: c.emailLast.text, unread: Boolean(c.emailUnread), who: c.name || c.email || 'Unknown' });
+      if (c.emailLast || c.emailUnread) {
+        out.push({ c, ch: 'email', ts: c.emailLast ? c.emailLast.ts : c.lastReplyAt, text: c.emailLast ? c.emailLast.text : 'New email reply', unread: Boolean(c.emailUnread), who: c.name || c.email || 'Unknown' });
       }
     }
     return out.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
@@ -4339,11 +4679,14 @@
   function renderBellPanel() {
     const items = bellItems();
     const unread = items.filter((i) => i.unread);
-    const recent = items.filter((i) => !i.unread).slice(0, 6);
+    // Earlier is the last week's, and only a handful: the same old replies
+    // sitting under the new ones every time read as the same news again.
+    const since = Date.now() - BELL_EARLIER_DAYS * 86400000;
+    const recent = items.filter((i) => !i.unread && tsNum(i.ts) >= since).slice(0, 5);
     const row = (i) => `<button class="bell-row${i.unread ? ' new' : ''}" data-bell-open="${esc(i.c.id)}" data-bell-ch="${i.ch}">
         <span class="avatar">${esc(convInitials(i.c.name, i.ch === 'text' ? i.c.phone : i.c.email))}</span>
         <span class="bell-main">
-          <span class="bell-top"><span class="bell-name">${esc(i.who)}</span><span class="bell-when">${i.ts ? timeAgo(i.ts) : ''}</span></span>
+          <span class="bell-top"><span class="bell-name">${esc(i.who)}</span><span class="bell-when"${i.ts ? ` data-ago="${esc(i.ts)}"` : ''}>${i.ts ? timeAgo(i.ts) : ''}</span></span>
           <span class="bell-text">${esc(i.text || '')}</span>
         </span>
         <span class="act-tag ch-${i.ch === 'text' ? 'text' : 'email'}">${i.ch === 'text' ? 'Text' : 'Email'}</span>
@@ -4352,7 +4695,7 @@
       ? `${unread.length ? `<div class="bell-sec">New</div>${unread.map(row).join('')}` : ''}
          ${recent.length ? `<div class="bell-sec">Earlier</div>${recent.map(row).join('')}` : ''}`
       : '<p class="bell-none">No replies yet. When someone writes back — by text or by email — it lands here.</p>';
-    $('#bellClear').hidden = !unread.length;
+    $('#bellClear').hidden = !allUnread();
   }
 
   // On a phone the panel is a sheet (mobile.css): it rises over a dimmed page,
@@ -4434,8 +4777,17 @@
     $('#threadInput').addEventListener('input', (e) => {
       e.target.style.height = 'auto';
       e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+      saveDraft('text', openThreadId, e.target.value);
     });
-    $('#threadOpenCandidate').addEventListener('click', () => { const c = openThreadId && state.candidates.find((x) => x.id === openThreadId); if (c) openCandidate(c); });
+    $('#threadOpenCandidate').addEventListener('click', () => { const c = openThreadId && state.candidates.find((x) => x.id === openThreadId); if (c) openProfile(c); });
+    // The name and picture at the top of a conversation open the same card.
+    document.addEventListener('click', (e) => {
+      const who = e.target.closest('[data-thread-profile]');
+      if (!who) return;
+      const id = who.closest('#view-template') ? openMailId : openThreadId;
+      const c = id && (state.candidates || []).find((x) => x.id === id);
+      if (c) openProfile(c);
+    });
 
     $('#bellPanel').addEventListener('click', (e) => {
       const r = e.target.closest('[data-bell-open]');
@@ -4444,13 +4796,19 @@
       if (r.dataset.bellCh === 'email') { show('template'); openMail(r.dataset.bellOpen); }
       else { show('texting'); openThread(r.dataset.bellOpen); }
     });
-    $('#bellClear').addEventListener('click', async () => {
-      (state.candidates || []).forEach((c) => { c.textUnread = false; c.emailUnread = false; });
-      renderBell(); renderConvList(); renderMailList();
-      try {
-        await api('/api/texts/seen', { method: 'POST', body: { all: true } });
-        await api('/api/emails/seen', { method: 'POST', body: { all: true } });
-      } catch {}
+    // Read exactly what was listed, each up to the reply shown: one that
+    // arrives on the server meanwhile is still news, where "all" cleared it
+    // unseen. The two channels go independently, so one failing does not
+    // leave the other unsent.
+    $('#bellClear').addEventListener('click', () => {
+      const text = [];
+      const email = [];
+      for (const c of state.candidates || []) {
+        if (c.textUnread) text.push({ c, ts: lastInTs(c, 'text') });
+        if (c.emailUnread) email.push({ c, ts: lastInTs(c, 'email') });
+      }
+      Promise.allSettled([markRead('text', text), markRead('email', email)]);
+      renderConvList(); renderMailList();
     });
     document.addEventListener('click', (e) => {
       if ($('#bellPanel').hidden) return;
@@ -5200,15 +5558,22 @@
   let askedForUpdate = false;
   let updateTaken = false;
   let reloadingForUpdate = false;
+  let updateDismissed = null;  // the waiting version whose notice was put away
   const openedAt = Date.now();
+  // Whether a worker was already in charge when the page opened. Without one,
+  // the first install claims the page, and that is not an update.
+  const hadController = 'serviceWorker' in navigator && Boolean(navigator.serviceWorker.controller);
 
   // Is anything on screen that a reload would throw away? A send part-way
   // through, a dialog, a half-written message, an edit not yet saved.
   function somethingInFlight() {
     if (!state) return true;                              // nothing known yet
     if (importRunning) return true;
-    if (state.queue && state.queue.active) return true;
-    if (state.texting && state.texting.queue && state.texting.queue.active) return true;
+    // The email and text queues are not in the page: they run on the server
+    // and the Mac, and carry on through a reload. Counting them here kept a
+    // paced campaign's app on the old version for weeks. The one send that
+    // does live in the page is the send window's own loop.
+    if (composeSending) return true;
     if ($('.modal-backdrop:not([hidden])')) return true;
     if (window.SalesIQ && window.SalesIQ.busy()) return true;
     if (window.Onboarding && window.Onboarding.busy()) return true;
@@ -5231,19 +5596,27 @@
     if (!updateReady || updateTaken) return;
     if (moment === 'launch' && Date.now() - openedAt > 20000) return;
     if (somethingInFlight()) return;
+    applyUpdate();
+  }
+
+  // The page reloads from the controllerchange below, once the new worker
+  // has actually taken over — not here, or it would reload into the old one.
+  // Unless it already has: another window of the app took it first, and
+  // asking a worker that is already in charge to take over does nothing at
+  // all, which left this window's Reload button dead.
+  function applyUpdate() {
+    if (!updateReady || updateReady.state !== 'installed') {
+      reloadingForUpdate = true;
+      location.reload();
+      return;
+    }
     updateTaken = true;
     askedForUpdate = true;
     updateReady.postMessage('SKIP_WAITING');
   }
 
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('#reloadForUpdate')) return;
-    if (!updateReady) { location.reload(); return; }
-    // The page reloads from the controllerchange below, once the new worker
-    // has actually taken over — not here, or it would reload into the old one.
-    askedForUpdate = true;
-    updateTaken = true;
-    updateReady.postMessage('SKIP_WAITING');
+    if (e.target.closest('#reloadForUpdate')) applyUpdate();
   });
 
   if ('serviceWorker' in navigator) {
@@ -5258,6 +5631,8 @@
             // an update. The same event on a first-ever install is not, and
             // must not put a Reload button in front of somebody.
             if (!worker || worker.state !== 'installed' || !navigator.serviceWorker.controller) return;
+            // A newer one than before: it gets its own chance to be taken.
+            if (worker !== updateReady) { updateTaken = false; askedForUpdate = false; }
             updateReady = worker;
             if (state) renderNotices();
             takeUpdate('launch');
@@ -5290,9 +5665,14 @@
         // reload. It is also the rule that matters most in an app that sends
         // real email: nothing reloads the page out from under a send except a
         // person deciding to.
-        if (!askedForUpdate || reloadingForUpdate) return;
-        reloadingForUpdate = true;
-        location.reload();
+        if (reloadingForUpdate) return;
+        if (askedForUpdate) { reloadingForUpdate = true; location.reload(); return; }
+        if (!hadController) return;
+        // Another window of the app moved to the new version. This one is
+        // still running the old code: it moves too at the next quiet moment
+        // (coming back, a pull), and its Reload reloads straight away.
+        updateTaken = false;
+        if (state) renderNotices();
       });
     });
   }
@@ -5352,7 +5732,12 @@
     const m = messengerOf(view);
     if (!m || m.classList.contains('thread-open')) return;
     m.classList.add('thread-open');
-    history.pushState({ view, thread: true }, '', location.hash || `#${view}`);
+    // Opened from the bell over another conversation, it takes that one's
+    // place in the history: pushed on top, the first Back went to a thread no
+    // longer on screen and appeared to do nothing.
+    const entry = [{ view, thread: true }, '', location.hash || `#${view}`];
+    if (history.state && history.state.thread) history.replaceState(...entry);
+    else history.pushState(...entry);
     // The route guard has to know a thread is now the current state, or the
     // popstate that closes it looks like a repeat of where we already were and
     // gets skipped.
@@ -5373,6 +5758,64 @@
   // Leaving the page the thread belongs to closes it, or coming back to that
   // page would land straight in a thread nobody asked for.
   phoneQuery.addEventListener('change', () => { syncThreadStack(threadIsOpen() && onPhone()); placeAccountControls(); placeTabHighlight(); });
+
+  // ---- swipe from the left edge to go back ----
+  // A Home Screen app has no browser around it to provide the gesture, so the
+  // conversation provides it: the screen follows the finger from the left
+  // edge, and let go past a third of the way (or flicked) it goes back to the
+  // list; otherwise it settles where it was.
+  (function edgeSwipeBack() {
+    const EDGE = 28;
+    let s = null;
+    const parts = (col) => [col, col.closest('.messenger').querySelector('.conv-col')];
+    document.addEventListener('touchstart', (e) => {
+      s = null;
+      if (!onPhone() || e.touches.length !== 1) return;
+      const col = e.target.closest('.messenger.thread-open .thread-col');
+      if (!col || e.touches[0].clientX > EDGE) return;
+      s = { x: e.touches[0].clientX, y: e.touches[0].clientY, col, dx: 0, on: false, t: performance.now(), v: 0 };
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      if (!s) return;
+      const t = e.touches[0];
+      const dx = t.clientX - s.x;
+      const dy = t.clientY - s.y;
+      if (!s.on) {
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        if (dx <= 0 || Math.abs(dy) > dx) { s = null; return; }
+        s.on = true;
+        parts(s.col).forEach((el) => { el.style.transition = 'none'; });
+      }
+      e.preventDefault();
+      const now = performance.now();
+      const w = s.col.getBoundingClientRect().width || window.innerWidth;
+      const d = Math.max(0, dx);
+      s.v = (d - s.dx) / Math.max(1, now - s.t);
+      s.t = now;
+      s.dx = d;
+      const [col, list] = parts(s.col);
+      col.style.transform = `translateX(${d}px)`;
+      if (list) list.style.transform = `translateX(${-22 + 22 * Math.min(1, d / w)}%)`;
+    }, { passive: false });
+    const finish = (cancelled) => {
+      if (!s) return;
+      const { col, on, dx, v } = s;
+      s = null;
+      if (!on) return;
+      const w = col.getBoundingClientRect().width || window.innerWidth;
+      const back = !cancelled && (dx > w / 3 || (v > 0.45 && dx > 40));
+      // Hand the position back to the stylesheet with its transition on, so
+      // it carries on from where the finger left it — out, or back in.
+      parts(col).forEach((el) => { el.style.transition = ''; el.style.transform = ''; });
+      if (!back) return;
+      // Closed in this same frame, so the slide out starts from the finger
+      // rather than snapping back first while the history catches up.
+      syncThreadStack(false);
+      backFromThread();
+    };
+    document.addEventListener('touchend', () => finish(false), { passive: true });
+    document.addEventListener('touchcancel', () => finish(true), { passive: true });
+  }());
 
   // ---- the account pill and Sign out ----
   // They live in the sidebar foot, which is not on screen on a phone. Moving
@@ -5452,6 +5895,10 @@
       start = null;
       if (busy || !onPhone() || e.touches.length !== 1) return;
       if (!$('#bellPanel').hidden) return;
+      // A conversation is a screen of its own over the page: pulling down in
+      // it scrolls back through the messages, it never refreshes the page
+      // underneath.
+      if (threadIsOpen() && e.target.closest('.messenger.thread-open .thread-col')) return;
       const target = e.target;
       if (target.closest('input, textarea, select, [contenteditable="true"], .messenger.thread-open .thread-compose, #bellPanel, #bellBackdrop')) return;
       if (!atTop(target)) return;
@@ -5572,6 +6019,26 @@
     const put = (view, n) => $$(`.group-count[data-count-for="${view}"]`).forEach((el) => { el.textContent = n ? n.toLocaleString() : ''; });
     put('template', mail);
     put('texting', texts);
+    // And the Unread filter inside each list, which is drawn with its list
+    // only when that page is on screen.
+    for (const [sel, n] of [['#mailUnreadN', mail], ['#convUnreadN', texts]]) {
+      const el = $(sel);
+      if (!el) continue;
+      el.textContent = n || '';
+      el.hidden = !n;
+    }
+  }
+
+  // A conversation on screen is being read: a reply that lands in it is read
+  // as it arrives, and never lights the bell or a badge for something already
+  // in front of you. On a phone that means the thread is pushed; on a wider
+  // screen the thread column is always showing on its page.
+  function threadOnScreen(view) {
+    if (currentView !== view || document.hidden) return false;
+    if (!(view === 'texting' ? openThreadId : openMailId)) return false;
+    if (!onPhone()) return true;
+    const m = messengerOf(view);
+    return Boolean(m && m.classList.contains('thread-open'));
   }
 
   function renderAll() {
@@ -5585,9 +6052,15 @@
     // The controls are created hidden and filled in here, because mounting
     // happens after the team is known, not before.
     renderTeamChip();
-    renderBell();
+    const liveText = threadOnScreen('texting');
+    const liveMail = threadOnScreen('template');
+    const byId = (id) => (state.candidates || []).find((x) => x.id === id);
+    const tc = liveText && byId(openThreadId);
+    const mc = liveMail && byId(openMailId);
+    if (tc && tc.textUnread) markRead('text', [{ c: tc, ts: lastInTs(tc, 'text') }]);
+    if (mc && mc.emailUnread) markRead('email', [{ c: mc, ts: lastInTs(mc, 'email') }]);
+    renderUnread();
     renderConnection();
-    renderNavCounts();
     // These two are cheap and cross-view: the send and follow-up buttons live
     // in the Email header, the due badge in Settings, and the queue timer has
     // to keep running wherever you are. They used to ride along inside
@@ -5595,9 +6068,13 @@
     // dashboard-only.
     renderEmailAllButtons();
     scheduleQueueWork();
-    // A thread left open stays live: a reply arriving while you are reading it
-    // should appear, not wait for you to click away and back.
-    if (openThreadId && !threadLoading) openThread(openThreadId, { markSeen: false, quiet: true });
+    // A thread on screen stays live: a reply arriving while you are reading it
+    // should appear, not wait for you to click away and back. One that is not
+    // on screen is not fetched at all — it is read again when it is opened.
+    if (liveText && !threadLoading) openThread(openThreadId, { quiet: true });
+    // An email conversation is read from Gmail, so only when the list says
+    // something in it has changed.
+    if (mc && !mailLoading && mailSig(mc) !== mailShownSig) openMail(openMailId, { quiet: true });
     renderSettings();
     // Only prime the template editor when there are no unsaved edits.
     if (!templateDirty) {
@@ -5663,6 +6140,12 @@
 
   // Ask the server to look at a few sent threads for replies; new replies
   // flip candidates to "Replied" and appear in the feed.
+  // Said once a day, not on every launch of the app: it is a setting to
+  // change, not news.
+  const SCOPE_HINT_KEY = () => teamKey('scopeHintAt');
+  function scopeHintDue() {
+    try { return Date.now() - Number(localStorage.getItem(SCOPE_HINT_KEY()) || 0) > 24 * 3600 * 1000; } catch { return true; }
+  }
   let scopeHintShown = false;
   let replyTextLimited = false;
   async function checkReplies() {
@@ -5670,7 +6153,11 @@
     try {
       const r = await api('/api/replies/check', { method: 'POST' });
       replyTextLimited = Boolean(r.scopeError);
-      if (r.scopeError && !scopeHintShown) { scopeHintShown = true; toast(r.scopeError, true); }
+      if (r.scopeError && !scopeHintShown && scopeHintDue()) {
+        scopeHintShown = true;
+        try { localStorage.setItem(SCOPE_HINT_KEY(), String(Date.now())); } catch {}
+        toast(r.scopeError, true);
+      }
       if (r.replies > 0) { await refresh(); toast(`${r.replies} new repl${r.replies === 1 ? 'y' : 'ies'} detected.`); }
     } catch {}
   }

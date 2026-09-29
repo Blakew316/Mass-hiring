@@ -673,12 +673,6 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .native-act.is-off .native-label { opacity: 0.6; }
   span.native-act.is-off { cursor: default; }
 
-  /* In a conversation's header: the icons alone, beside the name. The name
-     and its line give way (ellipsis) rather than pushing them off the edge. */
-  .thread-who > div:not(.thread-native) { flex: 1 1 auto; min-width: 0; }
-  .thread-native { margin-left: auto; flex: none; }
-  .thread-native .native-acts { gap: 2px; }
-  .thread-native .native-act { min-width: 44px; padding: 0; }
 
   /* ---- the tiles' lists (Interviews booked, Emailed, Replied) ----
      One column: who and when across the full width, then Call / Message /
@@ -785,50 +779,290 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .search-wrap.wide { margin-bottom: 12px; }
   .card-views, #candViews { gap: 8px; }
 
-  /* ---- Email and Texting: a stack, not two panes ----
-     Stacking them vertically put sixty conversations above the thread, and
-     took the bounded height that both scrollers depend on, so neither
-     scrolled and the composer sat at the bottom of a 3,600px page. Here the
-     list is one screen and the thread slides over it. */
-  /* The conversation card gives up its side padding so the list can run the
-     full width of the screen. It needs two classes to say so: Email and
-     Texting are `.view.dense`, whose own .card rule is more specific than a
-     single class and was keeping a 17px gutter on both sides. */
-  /* Edge to edge, like Messages itself: the page gutter is cancelled so the
-     conversation rows run the full width of the screen. */
-  .view .messages-card, .view.dense .messages-card {
-    padding: 12px 0 0;
-    margin-left: -16px;
-    margin-right: -16px;
-    border-left: 0;
-    border-right: 0;
-    border-radius: 0;
-  }
-  .messages-card .card-head { padding: 0 14px; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
-  .messages-card .msg-head-right, .messages-card .msg-search { width: 100%; max-width: none; }
-  .messenger {
-    position: relative;
-    /* minmax(0, 1fr), not 1fr: a plain 1fr refuses to go below the content's
-       min-content width, which is what kept the conversation list 540px wide
-       inside a 390px screen. */
-    grid-template-columns: minmax(0, 1fr);
-    height: calc(var(--app-h, 100dvh) - var(--tabbar-space) - 232px);
-    min-height: 320px;
+  /* ---- Inbox: Email and Texts, the way Mail and Messages are laid out ----
+     A large title with the compose button and the bell beside it; a
+     segmented switch between Email and Texts; a search field; the filters;
+     and then the list, which runs to the bottom edge under the floating tab
+     bar and is the one thing on the page that scrolls. A conversation is a
+     screen of its own, pushed over all of it — tab bar included — with its
+     reply box on the bottom edge where a thumb is.
+
+     Before this, the page and the list both scrolled, a 216px header of
+     bulk-send buttons sat over everything, and a conversation opened inside
+     a card under that header, its reply box behind the tab bar. */
+
+  /* The page is a column and does not scroll; the list inside it does. */
+  .main[data-view="template"], .main[data-view="texting"] {
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0;
+    /* A plain list, like Mail: one white screen, header and all, rather
+       than the grey behind the other pages' grouped cards. */
+    background: var(--card);
   }
-  .messenger .conv-col {
-    border-right: 0;
+  .main[data-view="template"] > .notices, .main[data-view="texting"] > .notices { flex: none; margin-top: 8px; }
+  #view-template.active, #view-texting.active {
+    flex: 1 1 auto;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    /* A fade with no movement: a transform on the page, even for the moment
+       it plays, would hold the conversation screen inside it. */
+    animation-name: inboxIn;
+  }
+  @keyframes inboxIn { from { opacity: 0; } }
+
+  /* ---- the navigation bar ---- */
+  #view-template .page-head.has-group, #view-texting .page-head.has-group {
+    position: relative;
+    flex: none;
+    margin: 0 -16px;
+    padding: 4px 16px 10px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "title compose chrome"
+      "group group   group";
+    column-gap: 8px;
+    row-gap: 12px;
+    background: var(--card);
+    box-shadow: none;
+    transition: box-shadow .2s;
+  }
+  /* The hairline a navigation bar draws once the list passes under it. */
+  #view-template.list-scrolled .page-head, #view-texting.list-scrolled .page-head { box-shadow: 0 .5px 0 var(--line-strong); }
+  /* The page's own buttons are the compose sheet's, here. */
+  #view-template .head-actions, #view-texting .head-actions { display: none; }
+  /* Light and dark is a setting, not something the Inbox needs beside its
+     title; every other page still carries the switch. */
+  #view-template .theme-switch, #view-texting .theme-switch { display: none; }
+  .head-compose {
+    grid-area: compose;
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    padding: 0 0 2px 2px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--blue);
+    cursor: pointer;
+  }
+  .head-compose:active { background: var(--surface-sunk); }
+  .head-compose:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  /* ---- the switch between a grouped tab's two pages: a segmented control ----
+     Email | Texts, Sales IQ | Onboarding docs: one track, the current half
+     raised out of it. The same control on both tabs. */
+  .group-tabs {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 2px;
+    margin: 0;
+    padding: 2px;
+    border-radius: 10px;
+    background: var(--seg-track);
+    overflow: visible;
+  }
+  .group-tab {
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 600;
     min-width: 0;
   }
-  .messenger .conv-list, .messenger .conv, .messenger .conv-main { min-width: 0; }
-  .messenger .conv-tabs { min-width: 0; }
-  .messenger .conv-tab { min-width: 0; flex: 1 1 0; }
-  .messenger .thread-col {
-    position: absolute;
-    inset: 0;
-    z-index: 5;
+  .group-tab > span:not(.group-count) { overflow: hidden; text-overflow: ellipsis; }
+  .group-tab.is-on {
+    background: var(--seg-on);
+    border: 0;
+    color: var(--ink);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .04), 0 3px 8px rgba(0, 0, 0, .12);
+  }
+  .group-tab:not(.is-on):active { background: transparent; opacity: .55; }
+  .group-tab .ico { color: var(--muted); }
+  .group-tab.is-on .ico { color: var(--blue); }
+  .group-count { min-width: 20px; height: 20px; line-height: 20px; font-size: 12px; }
+
+  /* ---- the list ---- */
+  #view-template .messages-card, #view-texting .messages-card {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin: 0 -16px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
     background: var(--card);
+    box-shadow: none;
+  }
+  .messages-card .card-head { flex: none; margin: 0; padding: 10px 16px 0; }
+  .messages-card .msg-head-right, .messages-card .msg-search { width: 100%; max-width: none; }
+  /* The search field: grey, rounded, no border, the magnifier inside. */
+  .messages-card .msg-search .input.search {
+    min-height: 38px;
+    height: 38px;
+    padding: 0 12px 0 34px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--search-fill);
+    color: var(--ink);
+  }
+  .messages-card .msg-search .input.search::placeholder { color: var(--muted); opacity: 1; }
+  .messages-card .msg-search .input.search:focus { box-shadow: 0 0 0 2px var(--blue-tint); }
+  .messages-card .msg-search .search-ico { left: 11px; color: var(--muted); }
+  .messenger {
+    position: static;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    border: 0;
+    border-radius: 0;
+    overflow: hidden;
+    background: none;
+  }
+  .messenger .conv-col {
+    min-width: 0;
+    min-height: 0;
+    border-right: 0;
+    background: var(--card);
+    transition: transform var(--push-ms) var(--ease-in-ios);
+  }
+  .messenger.thread-open .conv-col { transform: translateX(-22%); }
+  .messenger .conv-list, .messenger .conv, .messenger .conv-main { min-width: 0; }
+  /* The filters: a row of capsules under the search, not a second switch. */
+  .messenger .conv-tabs {
+    flex: none;
+    gap: 8px;
+    padding: 10px 16px 8px;
+    border-bottom: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .messenger .conv-tabs::-webkit-scrollbar { display: none; }
+  .messenger .conv-tab {
+    flex: none;
+    min-width: 0;
+    min-height: 32px;
+    padding: 0 14px;
+    border-radius: 99px;
+    background: var(--surface-sunk);
+    color: var(--ink-soft);
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: none;
+    gap: 6px;
+  }
+  .messenger .conv-tab.on { background: var(--navy); color: var(--card); box-shadow: none; }
+  .messenger .conv-col.is-searching .conv-tab.on { background: var(--surface-sunk); color: var(--muted); }
+  .messenger .conv-tab-n { margin-left: 0; min-width: 18px; height: 18px; line-height: 18px; padding: 0 5px; font-size: 11px; font-weight: 700; }
+  .messenger .conv-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    /* Under the floating tab bar, so the last row can be scrolled clear of it. */
+    padding-bottom: calc(var(--tabbar-space) + 8px);
+  }
+
+  /* ---- a row, the way Mail draws one ----
+     The unread dot in the margin, a picture, the name with the time and a
+     chevron on its line, and two lines of the last message under it. The
+     separator starts where the words do. */
+  .messenger .conv {
+    position: relative;
+    align-items: flex-start;
+    gap: 12px;
+    min-height: 76px;
+    padding: 10px 16px 10px 28px;
+    border-bottom: 0;
+    background: none;
+  }
+  .messenger li + li .conv::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 84px;
+    right: 0;
+    height: 1px;
+    background: var(--line);
+    transform: scaleY(.5);
+    transform-origin: top;
+  }
+  .messenger .conv:active { background: var(--surface-sunk); }
+  /* What was open is not left looking selected behind you. */
+  .messenger .conv.on { background: none; }
+  .messenger .conv.on .conv-name { color: var(--navy); }
+  .messenger .conv.on .conv-last, .messenger .conv.on .conv-when { color: var(--muted); }
+  .messenger .conv.on .conv-you { color: var(--navy-soft); }
+  .messenger .conv.on .avatar { background: var(--avatar-bg); color: var(--avatar-ink); }
+  .messenger .conv.on .conv-dot { background: var(--blue); }
+  .messenger .conv.unread.on .conv-last { color: var(--ink); }
+  .messenger .conv .avatar {
+    width: 44px;
+    height: 44px;
+    margin-top: 2px;
+    font-size: 16px;
+    font-weight: 600;
+    background: var(--avatar-bg);
+    color: var(--avatar-ink);
+  }
+  .messenger .conv-top { align-items: baseline; gap: 6px; }
+  .messenger .conv-name { flex: 1 1 auto; min-width: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--navy); }
+  .messenger .conv-when { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .messenger .conv-chev { display: inline-flex; align-self: center; color: var(--dot); margin-left: -1px; }
+  .messenger .conv-last {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow: hidden;
+    margin-top: 2px;
+    font-size: 15px;
+    line-height: 1.33;
+    color: var(--muted);
+  }
+  .messenger .conv.unread .conv-name { font-weight: 700; }
+  .messenger .conv.unread .conv-last { color: var(--ink-soft); }
+  .messenger .conv-dot {
+    position: absolute;
+    left: 10px;
+    top: 30px;
+    width: 10px;
+    height: 10px;
+    background: var(--blue);
+  }
+  .messenger .conv-flag { align-self: center; }
+  .messenger .conv-none { padding: 48px 32px; font-size: 15px; }
+  .messenger .conv-more { padding: 14px 16px 18px; font-size: 13px; }
+
+  /* ---- a conversation: its own screen ----
+     Fixed to the screen rather than laid over the list, so it can be the
+     whole screen: over the page's header and the tab bar, from the top edge
+     to the bottom, the keyboard's top when it is up (--app-h). */
+  .messenger .thread-col {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: auto;
+    height: var(--app-h, 100dvh);
+    z-index: 65;
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, .08);
     transform: translateX(100%);
     visibility: hidden;
     transition: transform var(--push-ms) var(--ease-in-ios), visibility 0s linear var(--push-ms);
@@ -838,60 +1072,221 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
     visibility: visible;
     transition: transform var(--push-ms) var(--ease-in-ios), visibility 0s;
   }
-  /* The list slides a little the other way, which is what makes it read as
-     one screen sitting behind another rather than a panel appearing. */
-  .messenger .conv-col {
-    transition: transform var(--push-ms) var(--ease-in-ios);
-  }
-  .messenger.thread-open .conv-col { transform: translateX(-22%); }
-  /* There is no list to go back to when nothing is open. */
   .messenger .thread-empty { display: none; }
+  .thread-live { flex: 1 1 auto; min-height: 0; }
+
+  /* Two rows: Back and the actions (Gmail, and ⓘ for their card) along the
+     top, as a navigation bar; who this is under it, with Call, Message and
+     Mail. */
+  .thread-head {
+    flex: none;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "back acts"
+      "who  who";
+    align-items: center;
+    row-gap: 2px;
+    column-gap: 8px;
+    padding: var(--safe-t) max(12px, var(--safe-r)) 10px max(12px, var(--safe-l));
+    border-bottom: .5px solid var(--line-strong);
+    background: var(--bar-bg);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
   .thread-back {
+    grid-area: back;
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 0;
     min-width: 44px;
     min-height: 44px;
-    margin-left: -8px;
-    padding: 0 6px 0 2px;
+    margin-left: -6px;
+    padding: 0 8px 0 0;
     border: 0;
     background: none;
     color: var(--blue);
     font-family: var(--font);
-    font-size: 16px;
-    font-weight: 500;
+    font-size: 17px;
+    font-weight: 400;
     cursor: pointer;
   }
-  .thread-back:active { opacity: .5; }
-  /* Two rows, because one will not hold a back button, a name, a number, a
-     role, a company and an action inside 390px — they were sitting on top of
-     each other. Navigation on top, who you are talking to underneath. */
-  .thread-head {
-    flex-wrap: wrap;
-    align-items: center;
-    row-gap: 8px;
-    column-gap: 8px;
-    padding: 8px 12px 10px;
-  }
-  .thread-back { order: 1; flex: 0 0 auto; }
+  .thread-back .ico { width: 22px; height: 22px; }
+  .thread-back:active { opacity: .45; }
   .thread-head-actions, .thread-head > .btn {
-    order: 2;
-    margin-left: auto;
-    flex: 0 0 auto;
-    white-space: nowrap;
+    grid-area: acts;
+    justify-self: end;
+    display: flex;
+    gap: 2px;
+    margin: 0;
   }
-  .thread-head-actions { display: flex; gap: 8px; }
-  .thread-head-actions .btn, .thread-head > .btn { padding: 9px 13px; min-height: 40px; }
-  .thread-who { order: 3; flex: 1 1 100%; min-width: 0; gap: 10px; }
-  .thread-who .thread-name { font-size: 16px; }
-  .thread-who .thread-sub {
+  /* The icon, not the words: ⓘ is what iOS draws for "about this one". */
+  .thread-head .thread-act {
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--blue);
+  }
+  .thread-head .thread-act[hidden] { display: none; }
+  .thread-head .thread-act:active { opacity: .45; }
+  .thread-act .thread-act-label { display: none; }
+  .thread-act .thread-act-ico { display: inline-flex; }
+  .thread-who {
+    grid-area: who;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .thread-person { flex: 1 1 auto; gap: 12px; padding: 2px 0; }
+  .thread-person:active { opacity: .6; }
+  .thread-who .avatar {
+    width: 44px;
+    height: 44px;
+    font-size: 16px;
+    font-weight: 600;
+    background: var(--avatar-bg);
+    color: var(--avatar-ink);
+  }
+  .thread-who .thread-name {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--navy);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .thread-compose {
-    padding-bottom: 10px;
+  .thread-who .thread-sub {
+    margin-top: 1px;
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .thread-native { margin-left: auto; flex: none; }
+  .thread-native .native-acts { gap: 2px; }
+  .thread-native .native-act { min-width: 40px; padding: 0; }
+
+  /* The messages. */
+  .thread-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 12px max(12px, var(--safe-r)) 16px max(12px, var(--safe-l));
+    gap: 3px;
+    background: var(--card);
+  }
+  .thread-stamp { font-size: 12px; margin: 14px 0 8px; }
+  .msg { max-width: 80%; }
+  .bubble { font-size: 17px; line-height: 1.32; padding: 8px 13px; border-radius: 19px; }
+  .msg-meta, .msg-tag { font-size: 12px; }
+
+  /* Email is not a chat: each message is a card the width of the screen,
+     headed with who sent it and when, like a message in Mail. */
+  .mail-body { gap: 10px; background: var(--surface-sunk); }
+  .mail-body .thread-stamp { display: none; }
+  .mail-body .msg, .mail-body .msg.in, .mail-body .msg.out {
+    align-self: stretch;
+    align-items: stretch;
+    max-width: none;
+    padding: 12px 14px 14px;
+    border-radius: 14px;
+    background: var(--card);
+    box-shadow: 0 0 0 .5px var(--line-strong);
+  }
+  .mail-body .msg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+  .mail-body .msg-who { font-size: 15px; font-weight: 650; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mail-body .msg-when { flex: none; font-size: 13px; color: var(--muted); }
+  .mail-body .msg .bubble, .mail-body .msg.in .bubble, .mail-body .msg.out .bubble {
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--ink);
+    font-size: 16px;
+    line-height: 1.45;
+    max-width: none;
+  }
+  .mail-body .msg.out .msg-who { color: var(--blue); }
+  .mail-body .msg.machine { background: var(--surface-sunk); box-shadow: 0 0 0 .5px var(--line); }
+  .mail-body .msg.machine .bubble { background: none; color: var(--muted); }
+  .mail-body .msg.out .msg-quote > summary { background: var(--code-wash); color: var(--muted); }
+  .mail-body .msg.out .msg-quoted { color: var(--muted); border-left-color: var(--line-strong); }
+  .mail-body .msg-tag { margin-top: 8px; }
+  /* "•••": a small capsule, with a target a thumb can find around it. */
+  .msg-quote > summary {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-height: 0;
+    height: 22px;
+    padding: 0 11px;
+    font-size: 13px;
+  }
+  .msg-quote > summary::after { content: ''; position: absolute; inset: -11px -8px; }
+  .msg-quoted { font-size: 15px; }
+  /* A tapback or a Driving Focus reply: quieter than anything they typed. */
+  .thread-body .msg.machine .bubble { font-size: 14px; padding: 5px 12px; }
+  .thread-body .msg.machine .msg-tag { font-size: 11px; margin-top: 2px; }
+
+  /* The reply box on the bottom edge, clear of the home indicator. */
+  .thread-compose {
+    flex: none;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 8px max(10px, var(--safe-r)) max(8px, var(--safe-b)) max(12px, var(--safe-l));
+    border-top: .5px solid var(--line-strong);
+    background: var(--bar-bg);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  .thread-compose .textarea {
+    min-height: 38px;
+    padding: 8px 14px;
+    border-radius: 19px;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    line-height: 1.3;
+  }
+  /* Send is the up-arrow in a circle, the way Messages draws it. */
+  .thread-compose .send-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 0;
+    background: none;
+    color: var(--blue);
+    position: relative;
+  }
+  .thread-compose .send-btn::after { content: ''; position: absolute; inset: -4px; }
+  .thread-compose .send-btn:hover { background: none; }
+  .thread-compose .send-btn .send-ico { display: none; }
+  .thread-compose .send-btn .send-ico-up { display: inline-flex; }
+  .thread-compose .send-btn:disabled { opacity: .3; }
+  .thread-note { flex: none; margin: 0; padding: 0 16px max(8px, var(--safe-b)); font-size: 13px; background: var(--bar-bg); }
+  .thread-compose + .thread-note:not(:empty) { margin-top: -2px; }
+  .thread-compose:has(+ .thread-note:not(:empty)) { padding-bottom: 6px; }
+
+  /* The compose sheet: the same rows as More. */
+  .inbox-sheet .sheet-sub:empty { display: none; }
+  .inbox-sheet .sheet-btn.more-row {
+    justify-content: flex-start;
+    gap: 14px;
+    color: var(--ink);
+    font-weight: 500;
+    text-align: left;
+  }
+  .inbox-sheet .sheet-btn.more-row:disabled { opacity: .45; }
+  .inbox-sheet .sheet-btn.more-row.is-danger { color: var(--red); }
+  .inbox-sheet .sheet-btn.more-row.is-danger .more-ico { background: var(--red); }
 
   /* The account pill and Sign out, moved into Settings because the tab bar
      has no room for them and there was otherwise no way to sign out. */
@@ -1131,6 +1526,22 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
   .field-row > .input, .field-row > input, .field-row > select, .field-row > .select { flex: 1 1 100%; }
   .field-row > .btn { flex: 1 1 0; justify-content: center; white-space: nowrap; }
 
+  /* ---- Candidate updates: part of the page, not a box inside it ----
+     A short scroller inside the page's own was a trap for the thumb: a flick
+     at its end went nowhere. Rows are a readable size and open whoever they
+     are about. */
+  .activity { max-height: none; overflow: visible; }
+  .activity li { font-size: 15px; line-height: 1.35; border-bottom: 0; position: relative; }
+  .activity li:not(:last-child)::after {
+    content: ""; position: absolute; left: 42px; right: 0; bottom: 0;
+    height: 1px; background: var(--line); transform: scaleY(.5); transform-origin: bottom;
+  }
+  .activity .act-row { padding: 11px 0; min-height: 52px; gap: 12px; }
+  .activity .act-ico { width: 30px; height: 30px; margin-top: 1px; }
+  .activity .act-time { font-size: 12.5px; margin-top: 4px; }
+  .activity .act-open:active { background: var(--navy-tint); }
+  .feed-chip { padding: 6px 12px; font-size: 13px; min-height: 32px; }
+
   /* ---- the dashboard's charts: labels on one line ---- */
   .pipe-row { grid-template-columns: 112px minmax(0, 1fr) 34px; gap: 10px; }
   .pipe-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1219,6 +1630,17 @@ button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
      running off the edge. */
   .group-tab .ico { display: none; }
   .group-tab { padding: 0 14px; }
+  /* The Inbox filters fit on one line, and a conversation's name keeps
+     room beside Call, Message and Mail. */
+  .messenger .conv-tabs { gap: 6px; }
+  .messenger .conv-tab { padding: 0 11px; font-size: 13.5px; }
+  .thread-who, .thread-person { gap: 10px; }
+  .thread-who .avatar { width: 38px; height: 38px; font-size: 14px; }
+  .thread-native .native-act { min-width: 36px; }
+  .messenger .conv { padding-left: 24px; gap: 10px; }
+  .messenger .conv .avatar { width: 40px; height: 40px; font-size: 15px; }
+  .messenger .conv-dot { left: 8px; }
+  .messenger li + li .conv::before { left: 74px; }
 }
 
 /* =====================================================================

@@ -17,6 +17,7 @@ const csv = require('./lib/csv');
 const google = require('./lib/google');
 const mailer = require('./lib/mailer');
 const notify = require('./lib/notify');
+const replies = require('./lib/replies');
 const calendly = require('./lib/calendly');
 const tracking = require('./lib/tracking');
 const queue = require('./lib/queue');
@@ -317,6 +318,9 @@ const MAX_PER_REQUEST = 8;
 // showing something whenever there is anything to show.
 const FEED_WINDOW = 60;
 const TEXT_WINDOW = 25;
+// Someone doing something: writing back, booking, canceling. What Candidate
+// updates is for, as opposed to opens and read receipts.
+const HUMAN_TYPES = new Set(['replied', 'text-replied', 'text-optout', 'booked', 'canceled']);
 function feedWindow(events) {
   const feed = (events || [])
     .filter((e) => store.FEED_TYPES.has(e.type))
@@ -324,8 +328,9 @@ function feedWindow(events) {
   const keep = new Map(feed.slice(0, FEED_WINDOW).map((e) => [e.id, e]));
   for (const e of feed.filter((e) => store.EVENT_CHANNEL[e.type] === 'text').slice(0, TEXT_WINDOW)) keep.set(e.id, e);
   // A finished questionnaire or signed paperwork is never pushed out of view
-  // by a morning of opens.
+  // by a morning of opens — and neither is a person writing back or booking.
   for (const e of feed.filter((e) => e.type === 'assessed' || e.type === 'signed').slice(0, 15)) keep.set(e.id, e);
+  for (const e of feed.filter((e) => HUMAN_TYPES.has(e.type)).slice(0, 30)) keep.set(e.id, e);
   return [...keep.values()].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
@@ -352,7 +357,11 @@ function publicCandidate(c) {
   const out = {};
   for (const k of CANDIDATE_FIELDS) if (c[k] !== undefined) out[k] = c[k];
   const thread = c.textThread;
-  const last = thread && thread.length ? thread[thread.length - 1] : null;
+  // The last thing said, for the list's preview and its order: a tapback on
+  // our message ("Liked …") is not what the conversation was last about.
+  let last = null;
+  for (let i = (thread || []).length - 1; i >= 0; i--) if (!(thread[i].dir === 'in' && thread[i].kind)) { last = thread[i]; break; }
+  if (!last && thread && thread.length) last = thread[thread.length - 1];
   const real = (c.replies || []).filter((r) => !r.kind);
   const lastReply = real[real.length - 1] || null;
   // Industry is derived, never stored — it is a view of role/company/history
@@ -360,6 +369,11 @@ function publicCandidate(c) {
   out.industry = priority.industry(c).code;
   out.textCount = thread ? thread.length : 0;
   out.textLast = last ? { dir: last.dir, ts: last.ts, text: last.text.slice(0, 120) } : null;
+  // The newest thing they wrote, for the replies list: not our own message
+  // sent a moment later, not a tapback.
+  let lastIn = null;
+  for (let i = (thread || []).length - 1; i >= 0; i--) if (thread[i].dir === 'in' && !thread[i].kind) { lastIn = thread[i]; break; }
+  out.textLastIn = lastIn ? { ts: lastIn.ts, text: lastIn.text.slice(0, 120) } : null;
   // Email's conversation lives in Gmail, so what rides along here is only
   // enough to list and sort it: how many real replies, and the last one.
   out.emailReplies = real.length;
@@ -393,6 +407,8 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     industries: priority.INDUSTRY_LABELS,
     events: feedWindow(db.events),
     lastError: lastError ? lastError.message : '',
+    // So a banner someone has dismissed stays dismissed until a new problem.
+    lastErrorId: lastError ? lastError.id : '',
     template: db.template,
     templates: presets.publicView(db),
     // Whether this team has written its own outreach letter yet, for the
@@ -1327,9 +1343,15 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
       const textedAt = c.lastTextedAt ? new Date(c.lastTextedAt).getTime() : null;
       if (textedAt && new Date(ts).getTime() < textedAt - 5 * 60 * 1000) { seen.tooOld += 1; continue; }
       if (!textedAt) { seen.neverTexted += 1; continue; }
-      patch.replied = ts;
-      patch.replies.push({ ts, text });
-      if (phone.optedOut(text)) { patch.optOut = true; optOuts.push(p); }
+      // A tapback or a Driving Focus auto-reply goes in the conversation, but
+      // nobody answered: it is not a reply and must not ring like one.
+      const machine = phone.classifyText(text);
+      if (machine) { (patch.machine = patch.machine || []).push({ ts, text, kind: machine }); }
+      else {
+        patch.replied = ts;
+        patch.replies.push({ ts, text });
+        if (phone.optedOut(text)) optOuts.push(p);
+      }
     } else continue;
     touched.set(c.id, patch);
     seen.applied += 1;
@@ -1338,6 +1360,9 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
   if (touched.size) {
     await store.update((fresh) => {
       for (const patch of touched.values()) {
+        // The mutator can run again after a write conflict: start clean.
+        patch.fresh = [];
+        patch.firstRead = false;
         const c = fresh.candidates.find((x) => x.id === patch.id);
         if (!c) continue;
         // Messages accepts a send and only then marks it failed, so this can
@@ -1346,19 +1371,27 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
         // that already proved delivery still wins.
         if (patch.undelivered && (TEXT_RANK[c.textStatus || ''] || 0) <= TEXT_RANK.sent) c.textStatus = 'not-imessage';
         if (patch.delivered) { c.textDeliveredAt = c.textDeliveredAt || patch.delivered; advanceText(c, 'delivered'); }
-        if (patch.read) { c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
-        if (patch.replied) {
-          c.textRepliedAt = c.textRepliedAt || patch.replied;
+        if (patch.read) { patch.firstRead = !c.textReadAt; c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
+        for (const m of patch.machine || []) store.addToThread(c, 'in', m.text, m.ts, { kind: m.kind });
+        // Only a message this thread has never held is news. A relay reports
+        // the same line again (a restart, a second Mac, a re-read window), and
+        // each repeat used to mark the conversation unread again, add another
+        // feed line and send another notification to the phone.
+        for (const r of patch.replies) if (store.addToThread(c, 'in', r.text, r.ts)) patch.fresh.push(r);
+        if (patch.fresh.length) {
+          const latest = patch.fresh[patch.fresh.length - 1].ts;
+          c.textRepliedAt = c.textRepliedAt || latest;
           advanceText(c, 'replied');
-          for (const r of patch.replies) store.addToThread(c, 'in', r.text, r.ts);
           // Cleared when the thread is opened, so the bell survives a reload
           // and agrees with itself across devices.
           c.textUnread = true;
           // A text reply is the same pipeline signal as an email reply.
           if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
-          c.repliedAt = c.repliedAt || patch.replied;
+          c.repliedAt = c.repliedAt || latest;
+          // STOP only counts when it is a new message: a repeat of an old one
+          // must not undo someone putting them back on the list by hand.
+          if (patch.fresh.some((r) => phone.optedOut(r.text))) c.status = 'declined';
         }
-        if (patch.optOut) c.status = 'declined';
       }
     });
   }
@@ -1369,32 +1402,39 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
     seen.optOut = optOuts.length;
   }
 
-  // The feed and the phone push, for real replies only.
+  // The feed and the phone push: once per new message, never per report.
   for (const patch of touched.values()) {
     const c = db.candidates.find((x) => x.id === patch.id);
     if (!c) continue;
     const who = c.name || phone.display(phone.normalize(c.phone));
-    if (patch.read && !patch.replied) {
+    const fresh = patch.fresh || [];
+    // The first read only; a receipt reported again says nothing new.
+    if (patch.read && patch.firstRead && !fresh.length) {
       await store.addEvent('text-read', `${who} read your text.`, c.id, patch.read).catch(() => {});
     }
-    for (const r of patch.replies) {
+    for (const r of fresh) {
       // STOP is the one reply that changes what you may legally do next, and
       // as a plain "replied" line it read exactly like someone saying yes.
-      const stop = phone.optedOut(r.text);
-      if (stop) {
+      if (phone.optedOut(r.text)) {
         await store.addEvent('text-optout', `${who} replied STOP — blocked from texting.`, c.id, r.ts).catch(() => {});
       } else {
         await store.addEvent('text-replied', `${who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts).catch(() => {});
       }
-      try {
-        await notify.pushToPhone(db.settings, {
-          title: stop ? `🛑 ${who} replied STOP` : `💬 ${who} replied`,
-          message: stop ? `Blocked from texting. Their message: ${r.text.slice(0, 260)}` : r.text.slice(0, 300),
-          priority: 'high',
-          tags: stop ? 'no_entry' : 'speech_balloon',
-        });
-      } catch {}
     }
+    if (!fresh.length) continue;
+    // One notification per person per batch: "Hi" / "yes" / "call me at 3"
+    // arriving together is one thing to read, not three buzzes.
+    const stop = fresh.find((r) => phone.optedOut(r.text));
+    const last = fresh[fresh.length - 1];
+    const more = fresh.length > 1 ? ` (+${fresh.length - 1} more)` : '';
+    try {
+      await notify.pushToPhone(db.settings, {
+        title: stop ? `🛑 ${who} replied STOP` : `💬 ${who} replied`,
+        message: stop ? `Blocked from texting. Their message: ${stop.text.slice(0, 260)}` : `${last.text.slice(0, 280)}${more}`,
+        priority: 'high',
+        tags: stop ? 'no_entry' : 'speech_balloon',
+      });
+    } catch {}
   }
   res.json({ ok: true, ...seen });
 }));
@@ -1576,15 +1616,44 @@ app.post('/api/emails/reply', asyncRoute(async (req, res) => {
   }
 }));
 
+// Which unread flags a "seen" call may clear. `items` names each conversation
+// with the time of the newest reply the screen actually showed; a flag is only
+// cleared when nothing newer has arrived since, so a reply that lands while
+// the call is on its way is still news. `id` (with an optional `ts`) is one
+// conversation; `all` is every one, and kept for older clients.
+function seenMatcher(body, ch) {
+  const b = body || {};
+  if (b.all) return () => true;
+  const want = new Map();
+  if (Array.isArray(b.items)) for (const it of b.items.slice(0, 2000)) if (it && it.id) want.set(String(it.id), it.ts || null);
+  if (b.id) want.set(String(b.id), b.ts || null);
+  return (c) => {
+    if (!want.has(c.id)) return false;
+    const shown = want.get(c.id);
+    if (!shown) return true;
+    const latest = lastInboundTs(c, ch);
+    return !latest || new Date(latest).getTime() <= new Date(shown).getTime() + 1000;
+  };
+}
+// The newest message they sent on a channel: a real email reply, or an
+// inbound text that a person typed (not a tapback or an auto-reply).
+function lastInboundTs(c, ch) {
+  if (ch === 'email') {
+    const real = (c.replies || []).filter((r) => !r.kind);
+    const last = real[real.length - 1];
+    return (last && last.date) || c.lastReplyAt || '';
+  }
+  const t = (c.textThread || []).filter((m) => m.dir === 'in' && !m.kind);
+  return t.length ? t[t.length - 1].ts : '';
+}
+
 app.post('/api/emails/seen', asyncRoute(async (req, res) => {
-  const id = String((req.body && req.body.id) || '');
-  const all = Boolean(req.body && req.body.all);
+  const match = seenMatcher(req.body, 'email');
   let n = 0;
   await store.update((db) => {
     n = 0;   // re-run on a conflict: count afresh
     for (const c of db.candidates) {
-      if (!c.emailUnread) continue;
-      if (!all && c.id !== id) continue;
+      if (!c.emailUnread || !match(c)) continue;
       c.emailUnread = false; n += 1;
     }
     if (!n) return false;
@@ -1652,14 +1721,12 @@ app.post('/api/texts/reply', asyncRoute(async (req, res) => {
 
 // Opening a conversation is reading it.
 app.post('/api/texts/seen', asyncRoute(async (req, res) => {
-  const id = String((req.body && req.body.id) || '');
-  const all = Boolean(req.body && req.body.all);
+  const match = seenMatcher(req.body, 'text');
   let n = 0;
   await store.update((db) => {
     n = 0;   // re-run on a conflict: count afresh
     for (const c of db.candidates) {
-      if (!c.textUnread) continue;
-      if (!all && c.id !== id) continue;
+      if (!c.textUnread || !match(c)) continue;
       c.textUnread = false; n += 1;
     }
     if (!n) return false;
@@ -1766,107 +1833,10 @@ app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
 }));
 
 // ---------- Reply detection (Gmail thread headers, a few at a time) ----------
-// Local, cheap: (re)classify stored replies; drop bounces/auto-replies from
-// the record, fix the status, and remove feed lines that were not real replies.
-function reclassifyCandidate(c) {
-  const all = (c.replies || []).map((r) => ({ ...r, kind: r.kind !== undefined ? r.kind : google.classifyReply(r) }));
-  const real = all.filter((r) => !r.kind);
-  const bounced = all.some((r) => r.kind === 'bounce');
-  c.replies = all;
-  c.lastReplyAt = real.length ? real[real.length - 1].date || c.lastReplyAt : null;
-  if (c.status === 'replied' && !real.length) {
-    c.status = bounced ? 'bounced' : 'emailed';
-    c.repliedAt = null;
-    return { fixed: true };
-  }
-  if (c.status === 'emailed' && bounced && !real.length) { c.status = 'bounced'; return { fixed: true }; }
-  return { fixed: false };
-}
-
+// The checking itself lives in lib/replies.js, shared with the scheduled
+// worker so replies are noticed with the app closed too.
 app.post('/api/replies/check', asyncRoute(async (_req, res) => {
-  const db = await store.load();
-  const g = await google.status(db.settings);
-  if (!g.connected) return res.json({ ok: true, checked: 0, replies: 0, unavailable: 'Google not connected' });
-  const byCheck = (a, b) => String(a.repliesCheckedAt || '').localeCompare(String(b.repliesCheckedAt || ''));
-  const withThread = db.candidates.filter((c) => c.gmailThreadId);
-  const waiting = withThread.filter((c) => c.status === 'emailed').sort(byCheck).slice(0, 20);
-  // Replies saved before the read permission existed have no text: refetch them.
-  const backfill = withThread.filter((c) => (c.replies || []).some((r) => !r.text && !r.kind && !r.textFetched)).slice(0, 8);
-  const conversing = withThread.filter((c) => c.status === 'replied').sort(byCheck).slice(0, 5);
-  const seen = new Set();
-  const pool = [...backfill, ...waiting, ...conversing].filter((c) => !seen.has(c.id) && seen.add(c.id));
-  const results = {};   // id -> { gone, limited, replies }
-  let scopeError = '';
-  let limitedAny = false;
-  for (const c of pool) {
-    try {
-      const r = await google.threadReplies(db.settings, c.gmailThreadId, g.email);
-      results[c.id] = { gone: false, limited: r.limited, replies: r.replies };
-      if (r.limited) limitedAny = true;
-    } catch (err) {
-      if (err.scope) { scopeError = 'Reconnect Google (Settings) to allow reply detection.'; break; }
-      results[c.id] = { gone: Boolean(err.gone), replies: [] };
-    }
-  }
-  const now = new Date().toISOString();
-  const announce = [];
-  await store.update((fresh) => {
-    announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
-    for (const [id, r] of Object.entries(results)) {
-      const fc = fresh.candidates.find((x) => x.id === id);
-      if (!fc) continue;
-      fc.repliesCheckedAt = now;
-      if (r.gone) { fc.gmailThreadId = ''; continue; }
-      const existing = new Map((fc.replies || []).map((x) => [x.id, x]));
-      const before = new Set(existing.keys());
-      for (const rep of r.replies) {
-        const prev = existing.get(rep.id) || {};
-        // textFetched: the full message was read once; if it has no readable
-        // text (attachment-only), stop re-fetching it every minute.
-        existing.set(rep.id, {
-          ...prev, ...rep,
-          text: rep.text || prev.text || '',
-          snippet: rep.snippet || prev.snippet || '',
-          textFetched: Boolean(prev.textFetched) || !r.limited,
-        });
-      }
-      fc.replies = [...existing.values()].sort((a, b) => String(a.date).localeCompare(String(b.date))).slice(-10);
-      const fresh_real = fc.replies.filter((x) => !x.kind);
-      const newReal = fresh_real.filter((x) => !before.has(x.id));
-      const bounced = fc.replies.some((x) => x.kind === 'bounce');
-      if (fresh_real.length) {
-        fc.lastReplyAt = fresh_real[fresh_real.length - 1].date || now;
-        if (fc.status === 'emailed' || fc.status === 'bounced') { fc.status = 'replied'; fc.repliedAt = fc.repliedAt || now; }
-        if (newReal.length) {
-          announce.push({ c: fc, reply: newReal[newReal.length - 1] });
-          // Lights the bell, and stays lit until the conversation is opened.
-          fc.emailUnread = true;
-        }
-      } else if (bounced && fc.status === 'emailed') {
-        fc.status = 'bounced';
-      }
-    }
-    // Housekeeping for everyone marked replied: bounces/auto-replies are not replies.
-    const cleaned = new Set();
-    for (const c of fresh.candidates) {
-      if (!(c.replies || []).length) continue;
-      if (reclassifyCandidate(c).fixed) cleaned.add(c.id);
-    }
-    if (cleaned.size) fresh.events = fresh.events.filter((e) => !(e.type === 'replied' && cleaned.has(e.candidateId)));
-    if (!Object.keys(results).length && !cleaned.size) return false;
-  });
-  for (const { c, reply } of announce) {
-    const preview = (reply.text || reply.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 140);
-    await store.addEvent('replied', `${c.name || c.email} replied${preview ? `: “${preview}${preview.length === 140 ? '…' : ''}”` : '.'}`, c.id, reply.date || null);
-    try {
-      await notify.pushToPhone(db.settings, {
-        title: `💬 ${c.name || c.email} replied`,
-        message: preview || 'Check your inbox.',
-        tags: 'speech_balloon',
-      });
-    } catch {}
-  }
-  res.json({ ok: true, checked: pool.length, replies: announce.length, scopeError: scopeError || (limitedAny ? 'Reconnect Google (Settings) to see reply text in the dashboard.' : '') });
+  res.json(await replies.checkReplies());
 }));
 
 // ---------- Google OAuth ----------
@@ -1964,6 +1934,11 @@ const lastSignatureWarning = new Map();
 // bookings — then a unique full-name match, because people often book with
 // a different address (work vs personal) than the one on the sheet.
 const normEmail = (e) => String(e || '').trim().toLowerCase();
+// One booking: an event and the person booked into it.
+const bookingKey = (uri, email) => `${uri || ''}|${normEmail(email)}`;
+// Where a booking may move someone from on its own. Anything else — booked
+// already, declined, or a status set by hand — is left alone.
+const EARLY_STATUSES = new Set(['new', 'emailed', 'replied', 'bounced']);
 const normName = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 function matchCandidate(candidates, email, name) {
   const e = normEmail(email);
@@ -2035,11 +2010,15 @@ async function applyCalendlyEvent(req, db) {
 
   if (event === 'invitee.created') {
     const ev = p.scheduled_event || {};
+    // Calendly retries a delivery it is not sure arrived, and the sync may
+    // already have listed this booking: either way it was announced once.
+    let already = false;
     const booked = await store.update((fresh) => {
+      already = Boolean(ev.uri) && (fresh.interviews || []).some((i) => i && i.status === 'active' && bookingKey(i.uri, i.inviteeEmail) === bookingKey(ev.uri, inviteeEmail));
       const fc = c && fresh.candidates.find((x) => x.id === c.id);
       if (fc) {
         learnEmail(fc, inviteeEmail);
-        fc.status = 'booked';
+        if (EARLY_STATUSES.has(fc.status || 'new') || (!already && fc.status !== 'declined')) fc.status = 'booked';
         fc.bookedAt = startTime || new Date().toISOString();
         fc.bookedEvent = eventName;
         fc.calendlyEventUri = ev.uri || '';
@@ -2057,29 +2036,44 @@ async function applyCalendlyEvent(req, db) {
       }
     });
     await feedSalesiq(booked);
-    await store.addEvent('booked', `${inviteeName} booked "${eventName}" — ${when}.`, c ? c.id : null, p.created_at || null);
+    if (already) return;
+    // A reschedule arrives as a new booking that names the one it replaces.
+    const moved = Boolean(p.old_invitee);
+    await store.addEvent('booked', `${inviteeName} ${moved ? 'rescheduled' : 'booked'} "${eventName}" — ${when}.`, c ? c.id : null, p.created_at || null);
     try {
       await notify.pushToPhone(db.settings, {
-        title: `📅 ${inviteeName} booked an interview`,
+        title: moved ? `📅 ${inviteeName} rescheduled` : `📅 ${inviteeName} booked an interview`,
         message: `${eventName} — ${when}${c && c.role ? `\n${c.role}${c.company ? ' @ ' + c.company : ''}` : ''}`,
         tags: 'tada,calendar',
       });
     } catch (err) {
-      await store.addEvent('error', `Phone notification failed: ${err.message}`);
+      await store.addErrorOnce(`Phone notification failed: ${err.message}`);
     }
   } else if (event === 'invitee.canceled') {
     const evUri = (p.scheduled_event && p.scheduled_event.uri) || '';
+    // The old half of a reschedule: the new booking carries the news, so this
+    // one neither un-books them nor says "canceled".
+    const rescheduled = p.rescheduled === true;
+    let wasActive = false;
     const canceled = await store.update((fresh) => {
+      wasActive = false;
       const fc = c && fresh.candidates.find((x) => x.id === c.id);
-      if (fc && fc.status === 'booked') {
+      // Only the interview their card is showing: canceling an old one must
+      // not un-book someone who has another on the books.
+      if (fc && fc.status === 'booked' && fc.calendlyEventUri === evUri && !rescheduled) {
         fc.status = (fc.replies || []).some((r) => !r.kind) ? 'replied' : 'emailed';
         fc.bookedAt = null; fc.bookedEvent = ''; fc.calendlyEventUri = ''; fc.bookedJoinUrl = '';
       }
       for (const i of fresh.interviews || []) {
-        if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) i.status = 'canceled';
+        if (i.uri === evUri && String(i.inviteeEmail || '').toLowerCase() === inviteeEmail) {
+          if (i.status === 'active') wasActive = true;
+          i.status = 'canceled';
+        }
       }
     });
     await feedSalesiq(canceled);
+    // Announced once — a retried delivery finds it canceled already.
+    if (rescheduled || !wasActive) return;
     await store.addEvent('canceled', `${inviteeName} canceled "${eventName}".`, c ? c.id : null);
     try {
       await notify.pushToPhone(db.settings, {
@@ -2110,7 +2104,7 @@ function calendlyWebhook(req, res, team) {
       const last = lastSignatureWarning.get(team.id) || 0;
       if (calendly.parseSignature(header) && Date.now() - last > 10 * 60 * 1000) {
         lastSignatureWarning.set(team.id, Date.now());
-        await store.addEvent('error', CALENDLY_SIGNATURE_WARNING);
+        await store.addErrorOnce(CALENDLY_SIGNATURE_WARNING);
       }
       return res.status(401).json({ error: 'Invalid Calendly signature' });
     }
@@ -2179,7 +2173,16 @@ async function syncCalendly() {
   const announce = [];
   const synced = await store.update((fresh) => {
     announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
+    // Every booking this team has already been told about — what the last
+    // sync listed and what the webhook has added since. A booking is
+    // announced the first time its (event, invitee) pair shows up, and never
+    // again. Deciding "new" from the one event a candidate's card shows made
+    // anyone with two bookings (a first and a second interview, both inside
+    // the window) flip between them and be announced twice on every sync.
+    const known = new Set((fresh.interviews || []).filter((i) => i && i.status === 'active').map((i) => bookingKey(i.uri, i.inviteeEmail)));
     const list = [];
+    const activeFor = new Map();     // candidate -> [{ ev, inv }], in listing order
+    const canceledFor = new Map();
     for (const ev of result.interviews) {
       if (!ev.invitees.length) {
         list.push({ uri: ev.uri, name: ev.name, status: ev.status, start: ev.start, end: ev.end, joinUrl: ev.joinUrl, inviteeName: '', inviteeEmail: '', candidateId: null });
@@ -2195,21 +2198,38 @@ async function syncCalendly() {
           inviteePhone: inv.phone || '', bookedAt: inv.createdAt || null,
         });
         if (!c) continue;
-        if (active) {
-          const isNew = c.calendlyEventUri !== ev.uri;
-          if (isNew || c.status !== 'booked') {
-            c.status = 'booked';
-            c.bookedAt = ev.start;
-            c.bookedEvent = ev.name;
-            c.calendlyEventUri = ev.uri;
-            c.bookedJoinUrl = ev.joinUrl || '';
-            if (isNew) announce.push({ c, ev, at: inv.createdAt || null });
-          }
-        } else if (c.calendlyEventUri === ev.uri && c.status === 'booked') {
-          c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
-          c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
-          announce.push({ c, ev, canceled: true });
-        }
+        const into = active ? activeFor : canceledFor;
+        if (!into.has(c)) into.set(c, []);
+        into.get(c).push({ ev, inv });
+      }
+    }
+    for (const [c, pairs] of activeFor) {
+      // The card shows one interview: the first the listing gives (it lists
+      // upcoming ones soonest first, then past ones latest first), so the
+      // next one coming up, or else the most recent.
+      const { ev } = pairs[0];
+      const isNewAny = pairs.some(({ ev: e, inv }) => !known.has(bookingKey(e.uri, inv.email)));
+      c.bookedAt = ev.start;
+      c.bookedEvent = ev.name;
+      c.calendlyEventUri = ev.uri;
+      c.bookedJoinUrl = ev.joinUrl || '';
+      // Only moved forward from earlier in the funnel, or on a booking nobody
+      // has seen yet; a status set by hand is not undone every five minutes.
+      if (EARLY_STATUSES.has(c.status || 'new') || (isNewAny && c.status !== 'declined')) c.status = 'booked';
+      for (const { ev: e, inv } of pairs) {
+        const key = bookingKey(e.uri, inv.email);
+        if (known.has(key)) continue;
+        known.add(key);
+        announce.push({ c, ev: e, at: inv.createdAt || null });
+      }
+    }
+    for (const [c, pairs] of canceledFor) {
+      if (activeFor.has(c)) continue;          // still has an interview on the books
+      for (const { ev } of pairs) {
+        if (c.calendlyEventUri !== ev.uri || c.status !== 'booked') continue;
+        c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
+        c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
+        announce.push({ c, ev, canceled: true });
       }
     }
     // What this sync did not read is kept as it was, rather than replaced by
@@ -2875,7 +2895,7 @@ async function notifyIqCompletion(reportId, ctx) {
       tags: 'clipboard',
     });
   } catch (err) {
-    await store.addEvent('error', `Phone notification failed: ${err.message}`).catch(() => {});
+    await store.addErrorOnce(`Phone notification failed: ${err.message}`).catch(() => {});
   }
   // Emailed to the results address from the team's own mailbox. The report
   // is on the dashboard whether or not this goes; what happened is noted on

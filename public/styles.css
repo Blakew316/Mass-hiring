@@ -65,6 +65,15 @@
   --green-ink: #1e8a50;
   --mint-ink: #279a63;
   --scrim: rgba(20, 27, 77, 0.32);   /* behind a modal */
+  /* The phone's iOS controls: a segmented control's track and its raised
+     half, a search field's fill, a translucent bar, and the grey monogram a
+     contact without a photo gets. */
+  --seg-track: rgba(118, 118, 128, 0.12);
+  --seg-on: #ffffff;
+  --search-fill: rgba(118, 118, 128, 0.12);
+  --bar-bg: rgba(255, 255, 255, 0.88);
+  --avatar-bg: linear-gradient(180deg, #a9afbb, #868d9b);
+  --avatar-ink: #ffffff;
   --code-wash: rgba(0, 0, 0, 0.06);  /* inline code inside a notice */
   --radius: 14px;
   --shadow: 0 1px 2px rgba(20, 27, 77, 0.05), 0 8px 24px -12px rgba(20, 27, 77, 0.10);
@@ -145,6 +154,12 @@
   --mint-ink: #5fe0a0;
   --scrim: rgba(0, 0, 0, 0.62);
   --code-wash: rgba(255, 255, 255, 0.09);
+  --seg-track: rgba(118, 118, 128, 0.24);
+  --seg-on: #5b5f6b;
+  --search-fill: rgba(118, 118, 128, 0.24);
+  --bar-bg: rgba(27, 30, 38, 0.88);
+  --avatar-bg: linear-gradient(180deg, #6f7482, #4e5360);
+  --avatar-ink: #ffffff;
 
   /* Black, not navy, and deeper: on a dark surface a shadow reads as
      separation only if it is darker than the thing it sits on. */
@@ -339,8 +354,20 @@ button.tile-link { border: 0; background: none; padding: 0; font-family: var(--f
 
 /* ---------------- Activity ---------------- */
 .activity { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
-.activity li { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.activity li { border-bottom: 1px solid var(--line); font-size: 13px; }
 .activity li:last-child { border-bottom: none; }
+.activity .act-row {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 9px 0; margin: 0; border: 0; background: none;
+  font: inherit; color: inherit; text-align: left;
+}
+.activity .act-main { flex: 1; min-width: 0; display: block; }
+.activity .act-msg { display: block; overflow-wrap: anywhere; }
+/* An update about someone opens them — their conversation, or their card. */
+.activity .act-open { cursor: pointer; border-radius: 8px; transition: background .12s; }
+.activity .act-open:hover { background: var(--navy-tint); }
+.activity .act-open:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.activity .act-chev { flex: none; align-self: center; color: var(--muted); opacity: .6; display: inline-flex; padding-right: 2px; }
 .activity .act-ico {
   width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -921,6 +948,17 @@ tr.cand-row:hover .row-open { opacity: 1; color: var(--blue); transform: transla
 .map-note.map-guess { color: var(--amber); background: var(--amber-tint); }
 .notice.ok { background: var(--green-tint); color: var(--ok-ink); border-color: var(--ok-line); }
 .notice .notice-action { margin-left: auto; flex: none; align-self: center; }
+/* Put a notice away. After an action button it sits beside it; alone, it
+   takes the far end of the row itself. */
+.notice-x {
+  flex: none; align-self: center; margin-left: auto;
+  width: 28px; height: 28px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: inherit; opacity: .6; cursor: pointer;
+}
+.notice-action + .notice-x { margin-left: 0; }
+.notice-x:hover { opacity: 1; background: var(--code-wash); }
+.notice-x:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; opacity: 1; }
 .follow-up-btn:disabled { opacity: .55; }
 .head-actions .follow-up-btn { margin-right: 6px; }
 .tile-actions .btn-small, .btn.small { padding: 5px 10px; font-size: 12px; }
@@ -1402,6 +1440,41 @@ button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offs
 .msg-tag.bad { color: var(--red); }
 .msg-clip { opacity: .55; }
 .thread-head-actions { display: flex; gap: 8px; flex-shrink: 0; }
+/* The person at the top of a conversation — picture, name, number — is a
+   button: it opens their card. */
+.thread-person {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  margin: 0; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 10px;
+}
+.thread-person:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.thread-id { display: flex; flex-direction: column; min-width: 0; }
+.thread-name, .thread-sub { display: block; }
+/* Back to the list is the phone's: on a wider screen the list is beside the
+   conversation, not under it. */
+.thread-back { display: none; }
+/* Words here; the phone swaps them for the icons it has room for. */
+.thread-act-ico, .send-btn .send-ico-up, .conv-chev, .head-compose { display: none; }
+/* While a search is running it covers every conversation, so the filter
+   steps back rather than looking as if it still applied. */
+.conv-col.is-searching .conv-tab.on { background: transparent; box-shadow: none; color: var(--muted); }
+/* An email in a conversation carries everything before it underneath. That
+   history is already on screen, so it is folded behind "•••". */
+.mail-body .msg-head { display: none; }
+.msg-quote { margin-top: 6px; }
+.msg-quote > summary {
+  list-style: none; display: inline-block; cursor: pointer;
+  padding: 0 9px; border-radius: 99px; background: var(--code-wash); color: var(--muted);
+  font-size: 12px; font-weight: 700; line-height: 18px; letter-spacing: .12em; font-style: normal;
+}
+.msg-quote > summary::-webkit-details-marker { display: none; }
+.msg-quote > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.msg-quoted { margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--line-strong); color: var(--muted); white-space: pre-wrap; }
+.msg.out .msg-quote > summary { background: rgba(255, 255, 255, .22); color: #fff; }
+.msg.out .msg-quoted { color: rgba(255, 255, 255, .85); border-left-color: rgba(255, 255, 255, .5); }
+/* A tapback or an auto-reply in a text thread is the phone talking, not the
+   person: shown, but quietly. */
+.thread-body .msg.machine .bubble { background: transparent; border: 1px dashed var(--line-strong); color: var(--muted); font-style: italic; }
 .conv-flag {
   width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%;
   background: var(--red-tint); color: var(--red);

@@ -32,6 +32,16 @@
     // clapper as its own shape, the way bell.fill is drawn.
     bell: '<path d="M12 1.6a1.5 1.5 0 0 1 1.5 1.5v.8a7 7 0 0 1 5.4 6.8v2.5c0 1.4.5 2.8 1.4 3.9a1.3 1.3 0 0 1-1 2.2H4.7a1.3 1.3 0 0 1-1-2.2 6.2 6.2 0 0 0 1.4-3.9v-2.5a7 7 0 0 1 5.4-6.8v-.8A1.5 1.5 0 0 1 12 1.6z"/><path d="M9.3 18.9a.6.6 0 0 0-.6.7 3.4 3.4 0 0 0 6.6 0 .6.6 0 0 0-.6-.7z"/>',
 
+    // square.and.pencil: start something new — Mail's and Messages' compose.
+    compose: S('M11.2 4.3H7.3A3.3 3.3 0 0 0 4 7.6v9.1A3.3 3.3 0 0 0 7.3 20h9.1a3.3 3.3 0 0 0 3.3-3.3v-3.9', 2.1)
+      + '<path d="M18.3 2.7a1.9 1.9 0 0 1 2.7 0l.3.3a1.9 1.9 0 0 1 0 2.7l-8.2 8.2-3.7 1.1 1.1-3.7z"/>',
+    // info.circle.fill: about this one — the person behind a conversation.
+    info: '<path fill-rule="evenodd" d="M12 1.8a10.2 10.2 0 1 0 0 20.4 10.2 10.2 0 0 0 0-20.4zm-1.25 8.5h2.5v7.6h-2.5zM12 5.9a1.55 1.55 0 1 1 0 3.1 1.55 1.55 0 0 1 0-3.1z"/>',
+    // arrow.up.circle.fill: send, the way Messages draws it.
+    arrowup: '<path fill-rule="evenodd" d="M12 1.8a10.2 10.2 0 1 0 0 20.4 10.2 10.2 0 0 0 0-20.4zm.9 5.2l4.3 4.3a1.25 1.25 0 0 1-1.8 1.8l-2.15-2.15v6.3a1.25 1.25 0 0 1-2.5 0v-6.3L8.6 13.1a1.25 1.25 0 0 1-1.8-1.8L11.1 7a1.3 1.3 0 0 1 1.8 0z"/>',
+    // arrow.up.right.square: leaves this app for another (Gmail).
+    external: S('M13.5 4.5h6v6M19.3 4.7l-8.1 8.1M10 5.2H7.4A3.2 3.2 0 0 0 4.2 8.4v8.2a3.2 3.2 0 0 0 3.2 3.2h8.2a3.2 3.2 0 0 0 3.2-3.2V14', 2.1),
+
     // Three dots: "more of what you can do with this one" — ellipsis in SF.
     more: '<circle cx="5.2" cy="12" r="2.1"/><circle cx="12" cy="12" r="2.1"/><circle cx="18.8" cy="12" r="2.1"/>',
     // The phone's two grouped tabs: Inbox (Email and Texts) is SF's tray,

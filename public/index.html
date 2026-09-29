@@ -550,7 +550,7 @@
           <div class="msg-head-right">
             <div class="search-wrap msg-search">
               <span class="search-ico" data-icon="search" data-size="14"></span>
-              <input type="text" id="mailSearch" class="input search" placeholder="Search conversations…">
+              <input type="text" id="mailSearch" class="input search" placeholder="Search" aria-label="Search conversations" enterkeyhint="search">
             </div>
           </div>
         </div>
@@ -572,22 +572,24 @@
               <header class="thread-head">
                 <button class="thread-back" data-thread-back type="button" aria-label="Back to the list"><span data-icon="chevron" data-size="18" style="transform:rotate(180deg)"></span><span>Inbox</span></button>
                 <div class="thread-who">
-                  <span class="avatar" id="mailAvatar"></span>
-                  <div>
-                    <div class="thread-name" id="mailName"></div>
-                    <div class="thread-sub" id="mailSub"></div>
-                  </div>
+                  <button type="button" class="thread-person" data-thread-profile aria-label="About this candidate">
+                    <span class="avatar" id="mailAvatar"></span>
+                    <span class="thread-id">
+                      <span class="thread-name" id="mailName"></span>
+                      <span class="thread-sub" id="mailSub"></span>
+                    </span>
+                  </button>
                   <div class="thread-native m-only" id="mailNative"></div>
                 </div>
                 <div class="thread-head-actions">
-                  <a class="btn btn-sm" id="mailGmail" target="_blank" rel="noopener" hidden>Open in Gmail</a>
-                  <button class="btn btn-sm" id="mailOpenCandidate">Open candidate</button>
+                  <a class="btn btn-sm thread-act" id="mailGmail" target="_blank" rel="noopener" hidden aria-label="Open in Gmail"><span class="thread-act-ico" data-icon="external" data-size="21"></span><span class="thread-act-label">Open in Gmail</span></a>
+                  <button class="btn btn-sm thread-act" id="mailOpenCandidate" aria-label="About this candidate"><span class="thread-act-ico" data-icon="info" data-size="23"></span><span class="thread-act-label">Open candidate</span></button>
                 </div>
               </header>
               <div class="thread-body mail-body" id="mailBody"></div>
               <form class="thread-compose" id="mailCompose">
-                <textarea id="mailInput" class="input textarea" rows="1" placeholder="Write a reply…" maxlength="8000"></textarea>
-                <button class="send-btn" type="submit" id="mailSend" title="Send"><span data-icon="send" data-size="15"></span></button>
+                <textarea id="mailInput" class="input textarea" rows="1" placeholder="Reply" aria-label="Reply" maxlength="8000"></textarea>
+                <button class="send-btn" type="submit" id="mailSend" title="Send" aria-label="Send"><span class="send-ico" data-icon="send" data-size="15"></span><span class="send-ico-up" data-icon="arrowup" data-size="32"></span></button>
               </form>
               <p class="thread-note" id="mailNote"></p>
             </div>
@@ -616,7 +618,7 @@
           <div class="msg-head-right">
             <div class="search-wrap msg-search">
               <span class="search-ico" data-icon="search" data-size="14"></span>
-              <input type="text" id="convSearch" class="input search" placeholder="Search conversations…">
+              <input type="text" id="convSearch" class="input search" placeholder="Search" aria-label="Search conversations" enterkeyhint="search">
             </div>
           </div>
         </div>
@@ -635,21 +637,25 @@
             </div>
             <div class="thread-live" id="threadLive" hidden>
               <header class="thread-head">
-                <button class="thread-back" data-thread-back type="button" aria-label="Back to the list"><span data-icon="chevron" data-size="18" style="transform:rotate(180deg)"></span><span>Messages</span></button>
+                <button class="thread-back" data-thread-back type="button" aria-label="Back to the list"><span data-icon="chevron" data-size="18" style="transform:rotate(180deg)"></span><span>Inbox</span></button>
                 <div class="thread-who">
-                  <span class="avatar" id="threadAvatar"></span>
-                  <div>
-                    <div class="thread-name" id="threadName"></div>
-                    <div class="thread-sub" id="threadSub"></div>
-                  </div>
+                  <button type="button" class="thread-person" data-thread-profile aria-label="About this candidate">
+                    <span class="avatar" id="threadAvatar"></span>
+                    <span class="thread-id">
+                      <span class="thread-name" id="threadName"></span>
+                      <span class="thread-sub" id="threadSub"></span>
+                    </span>
+                  </button>
                   <div class="thread-native m-only" id="threadNative"></div>
                 </div>
-                <button class="btn btn-sm" id="threadOpenCandidate">Open candidate</button>
+                <div class="thread-head-actions">
+                  <button class="btn btn-sm thread-act" id="threadOpenCandidate" aria-label="About this candidate"><span class="thread-act-ico" data-icon="info" data-size="23"></span><span class="thread-act-label">Open candidate</span></button>
+                </div>
               </header>
               <div class="thread-body" id="threadBody"></div>
               <form class="thread-compose" id="threadCompose">
-                <textarea id="threadInput" class="input textarea" rows="1" placeholder="iMessage" maxlength="2000"></textarea>
-                <button class="send-btn" type="submit" id="threadSend" title="Send"><span data-icon="send" data-size="15"></span></button>
+                <textarea id="threadInput" class="input textarea" rows="1" placeholder="Text Message" aria-label="Text message" maxlength="2000"></textarea>
+                <button class="send-btn" type="submit" id="threadSend" title="Send" aria-label="Send"><span class="send-ico" data-icon="send" data-size="15"></span><span class="send-ico-up" data-icon="arrowup" data-size="32"></span></button>
               </form>
               <p class="thread-note" id="threadNote"></p>
             </div>
@@ -1428,6 +1434,19 @@
     <div class="sheet-group">
       <div class="sheet-head"><div class="sheet-title" id="moreSheetTitle">More</div></div>
       <div class="sheet-buttons" id="moreSheetButtons"></div>
+    </div>
+    <button type="button" class="sheet-cancel" data-close>Cancel</button>
+  </div>
+</div>
+
+<!-- The phone's compose button on Inbox: what the page header's buttons do on
+     a wider screen, as an action sheet. Filled from those buttons each time it
+     opens, so the two can never disagree. -->
+<div class="modal-backdrop" id="inboxSheet" hidden>
+  <div class="modal action-sheet inbox-sheet" role="dialog" aria-modal="true" aria-labelledby="inboxSheetTitle">
+    <div class="sheet-group">
+      <div class="sheet-head"><div class="sheet-title" id="inboxSheetTitle">New</div><div class="sheet-sub" id="inboxSheetSub"></div></div>
+      <div class="sheet-buttons" id="inboxSheetButtons"></div>
     </div>
     <button type="button" class="sheet-cancel" data-close>Cancel</button>
   </div>
