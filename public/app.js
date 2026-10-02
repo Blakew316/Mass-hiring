@@ -2583,6 +2583,7 @@
   const MAP_FIELDS = [
     ['email', 'Email *'], ['name', 'Full name'], ['firstName', 'First name'], ['lastName', 'Last name'],
     ['role', 'Role / title'], ['company', 'Company'], ['phone', 'Phone'], ['location', 'Location'], ['notes', 'Notes'],
+    ['altEmails', 'Other emails'],
   ];
   const IMPORT_TEXT_CHUNK = 3 * 1024 * 1024;   // characters of file text per request (the server accepts 6 MB)
   const IMPORT_ROW_SLICE = 4000;               // spreadsheet rows per request when reading an .xlsx
