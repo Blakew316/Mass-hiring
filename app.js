@@ -752,8 +752,17 @@ function mailboxKey(e) {
   return `${k.slice(0, at).split('+')[0].replace(/\./g, '')}@gmail.com`;
 }
 // The same person by name, loosely: the surnames agree (one may be cut short
-// or carry an accent), or, with no surname to go on, the first names do.
-const nameKey = (v) => String(v || '').toLowerCase().normalize('NFKD').replace(/[^a-z]/g, '');
+// to an initial or a few letters, or carry an accent), or, with no surname to
+// go on, the first names do. Letters and digits both count, and a number must
+// match exactly: "Person 9" and "Person 9009" are two people, as are "Li" and
+// "Lin" on one office line.
+const nameKey = (v) => String(v || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+function sameName(x, y) {
+  if (x === y) return true;
+  if (/[^a-z]/.test(x + y)) return false;
+  const [short, long] = x.length < y.length ? [x, y] : [y, x];
+  return (short.length === 1 || short.length >= 4) && long.startsWith(short);
+}
 function surnameOf(p) {
   if (p.lastName) return nameKey(p.lastName);
   const parts = String(p.name || '').trim().split(/\s+/);
@@ -762,9 +771,9 @@ function surnameOf(p) {
 function givenOf(p) { return nameKey(p.firstName || String(p.name || '').trim().split(/\s+/)[0]); }
 function namesAgree(a, b) {
   const la = surnameOf(a); const lb = surnameOf(b);
-  if (la && lb) return la === lb || la.startsWith(lb) || lb.startsWith(la);
+  if (la && lb) return sameName(la, lb);
   const fa = givenOf(a); const fb = givenOf(b);
-  return Boolean(fa && fb) && (fa === fb || fa.startsWith(fb) || fb.startsWith(fa));
+  return Boolean(fa && fb) && sameName(fa, fb);
 }
 // "a@x.com; b@y.com" in an Other Emails column.
 const listEmails = (v) => String(v || '').split(/[;,\s]+/).map((e) => address.normalize(e)).filter(Boolean);
