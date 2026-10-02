@@ -751,45 +751,92 @@ function mailboxKey(e) {
   if (domain !== 'gmail.com' && domain !== 'googlemail.com') return k;
   return `${k.slice(0, at).split('+')[0].replace(/\./g, '')}@gmail.com`;
 }
-// The same person by name, loosely: the surnames agree (one may be cut short
-// to an initial or a few letters, or carry an accent), or, with no surname to
-// go on, the first names do. Letters and digits both count, and a number must
-// match exactly: "Person 9" and "Person 9009" are two people, as are "Li" and
+// The same person by name. A part either side leaves blank decides nothing;
+// a part both give must agree. Surnames: the same, one cut short to an initial
+// or four or more letters, or sharing a whole word ("Salcedo Castellanos" and
+// "Castellanos"), with Jr/Sr/MBA ignored. First names: the same, an initial,
+// cut short, sharing a word ("José Iván" and "Iván"), or a common short form
+// (Bob and Robert). So John and Mary Smith on one home number stay two
+// people, "Person 9" and "Person 9009" are two people, and so are "Li" and
 // "Lin" on one office line.
-const nameKey = (v) => String(v || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+const nameWords = (v) => String(v || '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '').split(/[^a-z0-9]+/).filter(Boolean);
+const NAME_SUFFIX = /^(jr|sr|ii|iii|iv|mba|cpa|phd|md|esq)$/;
+const NICKNAMES = new Map();
+for (const group of [
+  'william bill will billy willy liam', 'robert bob rob bobby robbie bert', 'richard rick rich dick ricky richie',
+  'james jim jimmy jamie', 'john jack johnny jon', 'joseph joe joey', 'michael mike mikey mick', 'thomas tom tommy',
+  'christopher chris kit', 'christina chris tina christy', 'christine chris tina', 'daniel dan danny', 'david dave davey',
+  'edward ed eddie ted ned', 'charles charlie chuck', 'anthony tony', 'andrew andy drew', 'matthew matt matty',
+  'nicholas nick nicky', 'stephen steve stevie', 'steven steve stevie', 'benjamin ben benny', 'samuel sam sammy',
+  'samantha sam sammy', 'alexander alex al', 'alexandra alex lexi sandra', 'albert al bert', 'alan al', 'allan al',
+  'ronald ron ronnie', 'donald don donnie', 'timothy tim timmy', 'kenneth ken kenny', 'gregory greg', 'jeffrey jeff',
+  'joshua josh', 'jonathan jon jonny', 'patrick pat paddy', 'patricia pat patty trish tricia', 'katherine kate kathy katie kat',
+  'catherine cathy cat kate katie', 'elizabeth liz beth betty lizzy eliza', 'margaret maggie meg peggy', 'jennifer jen jenny',
+  'jessica jess jessie', 'rebecca becky becca', 'deborah debbie deb', 'debra debbie deb', 'susan sue suzy', 'victoria vicky tori',
+  'kimberly kim', 'pamela pam', 'cynthia cindy', 'barbara barb', 'jacqueline jackie', 'theodore ted teddy theo',
+  'zachary zach zack', 'gerald jerry gerry', 'lawrence larry', 'raymond ray', 'frederick fred freddie', 'harold harry hal',
+  'henry hank harry', 'leonard leo len lenny', 'douglas doug', 'eugene gene', 'phillip phil', 'philip phil', 'peter pete',
+  'walter walt wally', 'vincent vince vinny', 'nathaniel nate nat', 'nathan nate', 'jacob jake', 'abigail abby',
+  'valerie val', 'angela angie', 'cassandra cassie', 'dorothy dot dottie', 'judith judy', 'teresa terri tess',
+  'theresa terri tess', 'sandra sandy', 'gabriel gabe', 'gabrielle gabby', 'mitchell mitch', 'terrence terry',
+  'terence terry', 'bradley brad', 'randall randy', 'russell russ', 'stanley stan', 'francis frank', 'franklin frank',
+  'francisco frank paco', 'manuel manny', 'alejandro alex', 'guillermo memo', 'roberto beto',
+]) {
+  const names = group.split(' ');
+  for (const n of names) { if (!NICKNAMES.has(n)) NICKNAMES.set(n, new Set()); names.forEach((m) => m !== n && NICKNAMES.get(n).add(m)); }
+}
 function sameName(x, y) {
   if (x === y) return true;
   if (/[^a-z]/.test(x + y)) return false;
   const [short, long] = x.length < y.length ? [x, y] : [y, x];
   return (short.length === 1 || short.length >= 4) && long.startsWith(short);
 }
-function surnameOf(p) {
-  if (p.lastName) return nameKey(p.lastName);
-  const parts = String(p.name || '').trim().split(/\s+/);
-  return parts.length > 1 ? nameKey(parts[parts.length - 1]) : '';
+function surnameWords(p) {
+  const words = p.lastName ? nameWords(p.lastName) : nameWords(p.name).slice(1);
+  while (words.length && NAME_SUFFIX.test(words[words.length - 1])) words.pop();
+  return p.lastName ? words : words.slice(-1);
 }
-function givenOf(p) { return nameKey(p.firstName || String(p.name || '').trim().split(/\s+/)[0]); }
+function givenWords(p) { return p.firstName ? nameWords(p.firstName) : nameWords(p.name).slice(0, 1); }
+// true, false, or null when one side does not say.
+function surnamesAgree(a, b) {
+  const wa = surnameWords(a); const wb = surnameWords(b);
+  if (!wa.length || !wb.length) return null;
+  return sameName(wa.join(''), wb.join('')) || wa.some((w) => w.length >= 4 && /^[a-z]+$/.test(w) && wb.includes(w));
+}
+function givenAgree(a, b) {
+  const wa = givenWords(a); const wb = givenWords(b);
+  if (!wa.length || !wb.length) return null;
+  return sameName(wa.join(''), wb.join(''))
+    || wa.some((w) => w.length >= 3 && /^[a-z]+$/.test(w) && wb.includes(w))
+    || wa.some((w) => wb.some((v) => Boolean(NICKNAMES.get(w) && NICKNAMES.get(w).has(v))));
+}
 function namesAgree(a, b) {
-  const la = surnameOf(a); const lb = surnameOf(b);
-  if (la && lb) return sameName(la, lb);
-  const fa = givenOf(a); const fb = givenOf(b);
-  return Boolean(fa && fb) && sameName(fa, fb);
+  const sur = surnamesAgree(a, b); const given = givenAgree(a, b);
+  if (sur === false || given === false) return false;
+  return sur === true || given === true;
 }
+// Nothing in the names says these are two different people.
+const noNameConflict = (a, b) => surnamesAgree(a, b) !== false && givenAgree(a, b) !== false;
 // "a@x.com; b@y.com" in an Other Emails column.
 const listEmails = (v) => String(v || '').split(/[;,\s]+/).map((e) => address.normalize(e)).filter(Boolean);
+// A shared inbox says nothing about who a row is: info@acme.com is everyone at Acme.
+const ROLE_MAILBOX = /^(info|contact|sales|support|admin|hello|mail|office|team|hr|billing|service|jobs?|careers|inquiries|bizdev|marketing|help|accounts|noreply|no-reply|merchants)$/;
+const isRoleMailbox = (e) => ROLE_MAILBOX.test(emailKey(e).split('@')[0]);
+const MAX_OTHER_EMAILS = 10;
+const altsOf = (c) => (Array.isArray(c && c.altEmails) ? c.altEmails : []);
+const NAME_FIELDS = new Set(['name', 'firstName', 'lastName']);
 
 function analyzeImport(candidates, rows, mapping, { lines = null, headerless = false } = {}) {
   const m = mapping || {};
   const col = (row, key) => (m[key] != null && m[key] >= 0 ? csv.cleanCell(row[m[key]]) : '');
+  const keysOf = (e) => [emailKey(e), mailboxKey(e)];
   // Every address a person is known by (the one on file plus any they booked
   // with), by mailbox, so a Gmail address spelled with or without its dots is
-  // the person already on the list rather than a second one.
+  // the person already on the list rather than a second one. Everyone's own
+  // address first: one listed as someone else's "other" never takes it over.
   const byEmail = new Map();
-  for (const c of candidates) {
-    for (const e of [c.email, ...(c.altEmails || [])]) {
-      for (const k of [emailKey(e), mailboxKey(e)]) if (k && !byEmail.has(k)) byEmail.set(k, c);
-    }
-  }
+  for (const c of candidates) for (const k of keysOf(c.email)) if (k && !byEmail.has(k)) byEmail.set(k, c);
+  for (const c of candidates) for (const e of altsOf(c)) for (const k of keysOf(e)) if (k && !byEmail.has(k)) byEmail.set(k, c);
   // And by phone: somebody who signed up again with a different address is
   // still the person whose number this is — when the names agree. An office
   // line shared by a whole sales floor never makes two coworkers one person.
@@ -800,20 +847,50 @@ function analyzeImport(candidates, rows, mapping, { lines = null, headerless = f
     if (!byPhone.has(p)) byPhone.set(p, []);
     byPhone.get(p).push(c);
   }
-  const phoneMatch = (list, fields) => {
-    const same = (list || []).filter((c) => namesAgree(c, fields));
+  const phoneMatch = (list, fields, of = (x) => x) => {
+    const same = (list || []).filter((x) => namesAgree(of(x), fields));
     return same.length === 1 ? same[0] : null;
   };
+  // An "other" address two rows of this file both give is nobody's in
+  // particular, so it identifies neither of them.
+  const otherCount = new Map();
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    for (const k of new Set(listEmails(col(row, 'altEmails')).map(mailboxKey))) otherCount.set(k, (otherCount.get(k) || 0) + 1);
+  }
   // A shifted row may carry its address in another column — but only when the
   // file has just one column of addresses, so a "Referred by" column can never
   // be mistaken for the candidate's own.
-  const emailColumns = rows.length
-    ? rows[0].map((_, i) => i).filter((i) => i !== m.email && csv.scoreColumn(rows.map((r) => r[i])).email >= 0.3)
+  const emailColumns = rows.length && Array.isArray(rows[0])
+    ? rows[0].map((_, i) => i).filter((i) => i !== m.email && i !== m.altEmails && csv.scoreColumn(rows.map((r) => (Array.isArray(r) ? r[i] : ''))).email >= 0.3)
     : [];
   const allowShift = emailColumns.length === 0;
   const rowNumber = (idx) => (lines && lines[idx] ? lines[idx] : idx + (headerless ? 1 : 2));
-  const seen = new Set();
-  const seenPhones = new Map();   // number -> the people earlier in this file with it
+  const claimed = new Map();      // address key -> the row of this file it belongs to
+  const byExisting = new Map();   // candidate on the list -> the row of this file that matched them
+  const seenPhones = new Map();   // number -> the rows earlier in this file with it
+  // The addresses a row brings that are free to be this person's: not someone
+  // else's on the list, not another row's in this file, not one already theirs.
+  const freeFor = (entry, emails) => {
+    const own = entry.kind === 'new' ? [entry.email, ...entry.altEmails] : [entry.existing.email, ...(entry.fill.altEmails || altsOf(entry.existing))];
+    const known = new Set(own.map(mailboxKey));
+    return emails.filter((e) => {
+      if (known.has(mailboxKey(e))) return false;
+      const holder = keysOf(e).map((k) => byEmail.get(k)).find(Boolean);
+      if (holder && (entry.kind === 'new' || holder !== entry.existing)) return false;
+      const row = keysOf(e).map((k) => claimed.get(k)).find(Boolean);
+      return !row || row === entry;
+    });
+  };
+  const learn = (entry, emails) => {
+    const more = freeFor(entry, emails);
+    if (entry.kind === 'new') entry.altEmails.push(...more.slice(0, Math.max(0, MAX_OTHER_EMAILS - entry.altEmails.length)));
+    else if (more.length) {
+      const have = entry.fill.altEmails || [...altsOf(entry.existing)];
+      entry.fill.altEmails = [...have, ...more].slice(0, Math.max(have.length, MAX_OTHER_EMAILS));
+    }
+    for (const e of [entry.email, ...more]) for (const k of keysOf(e)) if (!claimed.has(k)) claimed.set(k, entry);
+  };
   const out = [];
   rows.forEach((row, idx) => {
     if (!Array.isArray(row)) return;
@@ -840,33 +917,58 @@ function analyzeImport(candidates, rows, mapping, { lines = null, headerless = f
     };
     const rowNo = rowNumber(idx);
     if (!email) { out.push({ idx, row: rowNo, kind: 'invalid', cell: col(row, 'email') || row.find((v) => String(v || '').includes('@')) || '', fields }); return; }
-    // Every address on the row, one per mailbox, the one to write to first.
-    const boxes = new Set();
-    const emails = [email, ...others].filter((e) => { const k = mailboxKey(e); if (boxes.has(k)) return false; boxes.add(k); return true; });
-    const keys = emails.flatMap((e) => [emailKey(e), mailboxKey(e)]);
+    // The row's other addresses, one per mailbox. Those that can say who the
+    // row is: not a shared inbox, and not given by another row of this file too.
+    const boxes = new Set([mailboxKey(email)]);
+    const extra = others.filter((e) => { const k = mailboxKey(e); if (boxes.has(k)) return false; boxes.add(k); return true; });
+    const telling = extra.filter((e) => !isRoleMailbox(e) && otherCount.get(mailboxKey(e)) === 1);
+    const mainKeys = keysOf(email);
+    const tellingKeys = telling.flatMap(keysOf);
     const tel = phone.normalize(fields.phone);
-    // The same person earlier in this file: by address, or by number and name.
-    if (keys.some((k) => seen.has(k)) || (tel && phoneMatch(seenPhones.get(tel), fields))) {
+    const repeatOf = (entry) => {
+      learn(entry, [email, ...telling]);
       out.push({ idx, row: rowNo, kind: 'duplicate', email, fields });
-      return;
-    }
-    keys.forEach((k) => seen.add(k));
-    if (tel) { if (!seenPhones.has(tel)) seenPhones.set(tel, []); seenPhones.get(tel).push(fields); }
-    let existing = keys.map((k) => byEmail.get(k)).find(Boolean) || null;
+    };
+    // The same person earlier in this file, by address. Their own address
+    // settles it; an "other" one only when the names do not say otherwise.
+    const whoIs = (entry) => (entry.kind === 'existing' ? entry.existing : entry.fields);
+    const earlier = mainKeys.map((k) => claimed.get(k)).find(Boolean)
+      || tellingKeys.map((k) => claimed.get(k)).find((e) => e && noNameConflict(whoIs(e), fields));
+    if (earlier) { repeatOf(earlier); return; }
+    // Already on the list, by address — the same rule.
+    let existing = mainKeys.map((k) => byEmail.get(k)).find(Boolean) || null;
     let matchedBy = existing ? 'email' : '';
-    if (!existing && tel) { existing = phoneMatch(byPhone.get(tel), fields); if (existing) matchedBy = 'phone'; }
-    if (existing) {
-      const fill = {};
-      for (const k of IMPORT_FIELDS) if (fields[k] && !String(existing[k] || '').trim()) fill[k] = fields[k];
-      // An address of theirs the list did not know yet is kept as one of
-      // theirs, so it is recognised next time (and a reply from it is theirs).
-      const known = new Set([existing.email, ...(existing.altEmails || [])].map(mailboxKey));
-      const more = emails.filter((e) => !known.has(mailboxKey(e)));
-      if (more.length) fill.altEmails = [...(existing.altEmails || []), ...more];
-      out.push({ idx, row: rowNo, kind: 'existing', email, fields, existing, fill, shifted, matchedBy });
-      return;
+    if (!existing) {
+      existing = tellingKeys.map((k) => byEmail.get(k)).find((c) => c && noNameConflict(c, fields)) || null;
+      if (existing) matchedBy = 'other email';
     }
-    out.push({ idx, row: rowNo, kind: 'new', email, fields, shifted, altEmails: emails.slice(1) });
+    // The same person earlier in this file, by number and name.
+    if (!existing && tel) {
+      const prior = phoneMatch(seenPhones.get(tel), fields, (x) => x.fields);
+      if (prior) { repeatOf(prior); return; }
+      existing = phoneMatch(byPhone.get(tel), fields);
+      if (existing) matchedBy = 'phone';
+    }
+    let entry;
+    if (existing) {
+      if (byExisting.has(existing)) { repeatOf(byExisting.get(existing)); return; }
+      const fill = {};
+      // A name is only filled in from a row that has their own address: a
+      // number or an "other" address is never enough to rename someone.
+      for (const k of IMPORT_FIELDS) {
+        if (matchedBy !== 'email' && NAME_FIELDS.has(k)) continue;
+        if (fields[k] && !String(existing[k] || '').trim()) fill[k] = fields[k];
+      }
+      entry = { idx, row: rowNo, kind: 'existing', email, fields, existing, fill, shifted, matchedBy };
+      byExisting.set(existing, entry);
+    } else {
+      entry = { idx, row: rowNo, kind: 'new', email, fields, shifted, altEmails: [] };
+    }
+    out.push(entry);
+    // An address of theirs the list did not know yet is kept as one of
+    // theirs, so it is recognised next time (and a reply from it is theirs).
+    learn(entry, [email, ...telling]);
+    if (tel) { if (!seenPhones.has(tel)) seenPhones.set(tel, []); seenPhones.get(tel).push(entry); }
   });
   return out;
 }
@@ -879,7 +981,9 @@ function summarize(analysis) {
     existing: count('existing'),
     // Already on the list under another address, found by their phone number.
     existingByPhone: analysis.filter((a) => a.kind === 'existing' && a.matchedBy === 'phone').length,
-    updatable: analysis.filter((a) => a.kind === 'existing' && Object.keys(a.fill).length).length,
+    updatable: analysis.filter((a) => a.kind === 'existing' && Object.keys(a.fill).some((k) => k !== 'altEmails')).length,
+    // Already on the list, and this file has an address of theirs the list did not know.
+    newAddresses: analysis.filter((a) => a.kind === 'existing' && a.fill.altEmails).length,
     duplicate: count('duplicate'),
     invalid: count('invalid'),
     shifted: analysis.filter((a) => a.shifted).length,
@@ -922,9 +1026,13 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
           bookedAt: null,
         });
         added++;
-      } else if (a.kind === 'existing' && updateExisting && Object.keys(a.fill).length) {
-        Object.assign(a.existing, a.fill);
-        updated++;
+      } else if (a.kind === 'existing') {
+        // A newly learned address of theirs is kept either way: it is what
+        // stops the next file adding them a second time.
+        const { altEmails, ...details } = a.fill;
+        if (altEmails) a.existing.altEmails = altEmails;
+        if (updateExisting && Object.keys(details).length) Object.assign(a.existing, details);
+        if (altEmails || (updateExisting && Object.keys(details).length)) updated++;
       }
     }
     result = { ok: true, added, updated, ...summarize(analysis) };
@@ -972,6 +1080,7 @@ app.post('/api/apollo/import', asyncRoute(async (req, res) => {
           id: store.rid(),
           ...a.fields,
           email: a.email,
+          ...(a.altEmails && a.altEmails.length ? { altEmails: a.altEmails } : {}),
           status: 'new',
           source: 'apollo',
           addedAt: now,
@@ -1021,7 +1130,9 @@ app.post('/api/candidates', asyncRoute(async (req, res) => {
     bookedAt: null,
   };
   await store.update((db) => {
-    if (db.candidates.some((x) => x.email.toLowerCase() === email.toLowerCase())) {
+    // Their address, a Gmail spelling of it, or one they are already known by.
+    const box = mailboxKey(email);
+    if (db.candidates.some((x) => [x.email, ...altsOf(x)].some((e) => e && mailboxKey(e) === box))) {
       throw new Error('A candidate with that email already exists.');
     }
     db.candidates.push(c);

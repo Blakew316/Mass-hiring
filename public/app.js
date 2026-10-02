@@ -2789,7 +2789,10 @@
   const rowEmailKey = (row, mapping) => {
     const cell = mapping.email >= 0 ? String(row[mapping.email] || '') : '';
     const m = cell.match(/<([^<>]+)>\s*$/);
-    return (m ? m[1] : cell).replace(/^mailto:/i, '').trim().toLowerCase();
+    const k = (m ? m[1] : cell).replace(/^mailto:/i, '').trim().toLowerCase();
+    // Gmail ignores dots and "+tags": one inbox, however it is spelled.
+    const g = k.match(/^([^@]+)@(gmail|googlemail)\.com$/);
+    return g ? `${g[1].split('+')[0].replace(/\./g, '')}@gmail.com` : k;
   };
   function splitRepeats(rows, lines, mapping) {
     const seen = new Set();
@@ -2804,12 +2807,12 @@
     return { rows: keep, lines: keepLines, repeats };
   }
   async function dryRunBatches(allRows, mapping) {
-    const totals = { total: 0, newCount: 0, existing: 0, updatable: 0, duplicate: 0, invalid: 0, shifted: 0, invalidSamples: [], existingSamples: [] };
+    const totals = { total: 0, newCount: 0, existing: 0, existingByPhone: 0, updatable: 0, duplicate: 0, invalid: 0, shifted: 0, invalidSamples: [], existingSamples: [] };
     const { rows, lines, repeats } = splitRepeats(allRows, pendingImport.lines, mapping);
     totals.total += repeats; totals.duplicate += repeats;
     for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
       const r = await api('/api/import/preview', { method: 'POST', body: { rows: rows.slice(i, i + IMPORT_ROW_BATCH), lines: lines.slice(i, i + IMPORT_ROW_BATCH), headerless: pendingImport.headerless, mapping } });
-      for (const k of ['total', 'newCount', 'existing', 'updatable', 'duplicate', 'invalid', 'shifted']) totals[k] += r[k] || 0;
+      for (const k of ['total', 'newCount', 'existing', 'existingByPhone', 'updatable', 'duplicate', 'invalid', 'shifted']) totals[k] += r[k] || 0;
       if (totals.invalidSamples.length < 10) totals.invalidSamples.push(...(r.invalidSamples || []));
       if (totals.existingSamples.length < 5) totals.existingSamples.push(...(r.existingSamples || []));
     }
@@ -2819,7 +2822,8 @@
 
   function renderSummary(t) {
     const parts = [`<strong>${t.newCount.toLocaleString()} new</strong>`];
-    if (t.existing) parts.push(`${t.existing.toLocaleString()} already in your list${t.updatable ? ` (${t.updatable.toLocaleString()} with blank details this file can fill in)` : ''}`);
+    const why = [t.existingByPhone && `${t.existingByPhone.toLocaleString()} recognised by phone number`, t.updatable && `${t.updatable.toLocaleString()} with blank details this file can fill in`].filter(Boolean);
+    if (t.existing) parts.push(`${t.existing.toLocaleString()} already in your list${why.length ? ` (${why.join('; ')})` : ''}`);
     if (t.duplicate) parts.push(`${t.duplicate.toLocaleString()} repeated in the file`);
     if (t.invalid) parts.push(`<span class="bad-text">${t.invalid.toLocaleString()} without a usable email</span>`);
     let html = `<div class="summary-line">${t.total.toLocaleString()} row${t.total === 1 ? '' : 's'}: ${parts.join(' · ')}</div>`;
