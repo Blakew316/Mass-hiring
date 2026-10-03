@@ -201,7 +201,7 @@
       else if (code === OBJ) {
         const keys = kl[i] || [];
         expr = `(a = r[${j++}], {${keys.map((key, n) => `${JSON.stringify(key)}: (typeof (x = a[${n}]) === 'number' ? w[x] : x)`).join(', ')}})`;
-      } else throw new Error(`Unknown field code ${code}`);
+      } else throw refused(`a shape has a field code (${code}) this page does not know`);
       parts.push(`${JSON.stringify(fields[i])}: ${expr}`);
     }
     return { body: parts.length ? `let x, a; return {${parts.join(', ')}};` : 'return null;', next: j };
@@ -224,7 +224,7 @@
           const a = r[j++];
           v = {};
           (kl[i] || []).forEach((key, n) => put(v, key, T(a[n])));
-        } else throw new Error(`Unknown field code ${code}`);
+        } else throw refused(`a shape has a field code (${code}) this page does not know`);
         if (!out) out = {};
         put(out, fields[i], v);
       }
@@ -240,7 +240,7 @@
     const key = `${walk ? 'w' : 'c'}${fields.length}:${k}:${fields.join('\u0001')}\u0002${JSON.stringify(kl)}\u0002${shape}`;
     let d = made.get(key);
     if (d) return d;
-    if (shape.length !== fields.length) throw new Error('A row\'s shape does not fit the message\'s fields.');
+    if (typeof shape !== 'string' || shape.length !== fields.length) throw refused('a shape does not fit the message\'s fields');
     const odd = fields.includes('__proto__') || (kl || []).some((keys) => keys && keys.includes('__proto__'));
     const sideFrom = 1 + tokensBefore(shape, k);
     if (compileOk && !odd && !walk) {
@@ -250,6 +250,7 @@
         // eslint-disable-next-line no-new-func
         d = { cand: new Function('r', 'w', 'z', `'use strict'; ${c.body.replace('return null;', 'return {};')}`), side: new Function('r', 'w', 'z', `'use strict'; ${s.body}`) };
       } catch (e) {
+        if (e.refused) throw e;
         compileOk = false;
       }
     }
@@ -272,10 +273,14 @@
     const sides = new Array(r.length);
     for (let i = 0; i < r.length; i++) {
       const row = r[i];
-      const d = decoders[row[0]];
+      const d = Array.isArray(row) ? decoders[row[0]] : null;
       if (!d) throw refused('a row names a shape the message does not have');
-      cands[i] = d.cand(row, w, z);
-      sides[i] = d.side(row, w, z);
+      try {
+        cands[i] = d.cand(row, w, z);
+        sides[i] = d.side(row, w, z);
+      } catch {
+        throw refused('a row does not fit its shape');
+      }
     }
     return { cands, sides };
   }

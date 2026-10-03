@@ -156,6 +156,43 @@ const total = (page) => page.evaluate(() => (document.querySelector('#statTotal'
     await ctx.close();
   }
 
+  // ================= the load: everything asked for at once, each once =================
+  {
+    const { ctx, page, errors } = await open(browser, s);
+    // Signed in, the page leaves itself the hint index.html reads.
+    ok(await page.evaluate(() => localStorage.getItem('wp-signed-in')) === '1', 'signed in, the page notes it for its next load');
+    const asked = [];
+    page.on('request', (r) => { const u = new URL(r.url()); if (/^\/(api\/|app\.js$)/.test(u.pathname)) asked.push(`${r.method()} ${u.pathname}${u.search}`); });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.querySelector('.bell') && document.querySelector('#loginScreen').hidden);
+    await page.waitForTimeout(500);
+    const boot = asked.filter((a) => a !== 'POST /api/settings');
+    const first = boot.slice(0, 3).sort();
+    ok(J(first) === J(['GET /api/auth/status', 'GET /api/candidates?v=2', 'GET /api/state?v=2']), 'the session, the state and the list are asked for first, before app.js', boot);
+    for (const one of ['GET /api/auth/status', 'GET /api/state?v=2', 'GET /api/candidates?v=2']) {
+      ok(boot.filter((a) => a === one).length === 1, `and each once (${one})`, boot);
+    }
+    ok(!boot.some((a) => a.startsWith('POST /api/candidates/sync')), 'with no sync on top', boot);
+    ok(errors.length === 0, 'no page errors', errors);
+
+    // The hint left behind, but signed out since: the early answers are
+    // refusals, which the page ignores; signed in again, it asks again.
+    await ctx.clearCookies();
+    asked.length = 0;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#loginScreen:not([hidden])');
+    ok(await page.evaluate(() => localStorage.getItem('wp-signed-in')) === null, 'signed out, the sign-in screen takes the hint away');
+    const [name, value] = s.cookie.split('=');
+    await ctx.addCookies([{ name, value, domain: 'localhost', path: '/' }]);
+    asked.length = 0;
+    await page.fill('#loginPassword', 'test-password');
+    await page.click('#loginBtn');
+    ok(await waitIn(page, () => document.querySelector('#statTotal').textContent === '300'), 'signed in again, the list is drawn', await total(page));
+    ok(asked.includes('GET /api/state?v=2') && asked.includes('GET /api/candidates?v=2'), 'asked for again rather than taken from the refusals', asked);
+    ok(errors.length === 0, 'no page errors', errors);
+    await ctx.close();
+  }
+
   // ================= a read lost on the way, and the negative control =================
   for (const control of [false, true]) {
     const tag = control ? 'without lifting (control)' : 'with this page';
