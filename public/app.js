@@ -776,14 +776,15 @@
   // kept; refresh() draws it only under a state of the same team.
   async function bringListUp(cands) {
     const team = cands.t;
+    // Another team's copy is never sent up, patched or drawn from.
+    if (list && list.t !== team) dropList();
     const epoch = listEpoch;
-    // Signed out (or into another team) while it was on its way: handed
-    // back for refresh() to drop, never kept.
+    // Signed out while it was on its way: handed back for refresh() to drop,
+    // never kept.
     const keep = (copy) => {
       if (epoch === listEpoch) list = copy;
       return copy;
     };
-    if (list && list.t !== team) dropList();
     if (list && !distrust.size && !(wantOrder && !list.ro)) {
       if (list.v === cands.v) return list;
       // A new version with the same people, order and digests (a ten-minute
@@ -874,7 +875,7 @@
     : setTimeout(() => fn({ timeRemaining: () => 8, didTimeout: true }), 50));
   function scheduleVerify(soon = false) {
     if (verifyTimer || !Wire.canDigest()) return;
-    verifyTimer = setTimeout(() => idle(() => checkIndex(list)), soon ? 10000 : verifyWait);
+    verifyTimer = setTimeout(() => idle(() => checkIndex(list)), soon ? 30000 : verifyWait);
   }
   function checkIndex(copy) {
     if (!copy || copy !== list || document.hidden) { verifyTimer = 0; if (list) scheduleVerify(); return; }
