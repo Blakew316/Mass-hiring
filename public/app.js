@@ -46,12 +46,26 @@
   let stateVersion = 0;
   const bumpList = () => { listVersion += 1; };
 
+  // Whatever is kept holds on to the copy of the list it was made from (its
+  // keys name it, and its rows are that copy's people), and one copy of
+  // 33,000 people is tens of megabytes. Kept until next asked for, the
+  // answers of a page last drawn an hour ago kept that hour-old copy alive
+  // beside the current one — a copy for each page visited between polls,
+  // five times the memory a phone needed before, and every collection of it
+  // slower. A new state puts every kept answer out of date anyway (both
+  // versions move), so each new state, and signing out, lets go of them all:
+  // forgetKept(). Anything kept outside kept() registers here how to let go.
+  const forgetters = [];
+  const forgetWithState = (fn) => { forgetters.push(fn); };
+  function forgetKept() { for (const fn of forgetters) fn(); }
+
   // A value worked out from the state, kept until one of its keys changes.
   // `keysOf` names what it depends on (versions, side objects, a query); the
   // keys are compared one by one, by identity.
   function kept(keysOf, build) {
     let keys = null;
     let value;
+    forgetWithState(() => { keys = null; value = undefined; });
     return () => {
       const now = keysOf();
       if (!keys || now.length !== keys.length || now.some((k, i) => k !== keys[i])) {
@@ -416,6 +430,7 @@
     stateTag = '';
     listVersion += 1;
     stateVersion += 1;
+    forgetKept();
     appliedAskedAt = 0;
     selected = new Set();
     filter = 'all';
@@ -574,6 +589,9 @@
     state = fresh;
     listVersion += 1;
     stateVersion += 1;
+    // Nothing kept from the last state answers for this one, and keeping it
+    // would keep the last copy of the list alive too.
+    forgetKept();
     authRequired = Boolean(state.auth && state.auth.required);
     setTeam(state.team);
     // A conversation read on this screen stays read, whatever an answer that
@@ -1834,6 +1852,7 @@
   // Kept for this version of the list and this exact question, so paging,
   // ticking and the redraw after a status change do not filter 33,000 again.
   let visibleKept = { keys: null, rows: [] };
+  forgetWithState(() => { visibleKept = { keys: null, rows: [] }; });
   function visibleCandidates() {
     const pri = state.texting && state.texting.priority;
     const keys = [listVersion, state.candidates, state.salesiq, state.onboarding, pri,
@@ -2148,6 +2167,7 @@
   // is worked out once per person rather than twice per comparison, and the
   // sort is stable, so ties keep the list's own order as they always did.
   let sortedKept = { from: null, by: '', rows: [] };
+  forgetWithState(() => { sortedKept = { from: null, by: '', rows: [] }; });
   function sortedCandidates() {
     const rows = visibleCandidates();
     if (sortedKept.from === rows && sortedKept.by === sortBy) return sortedKept.rows;
@@ -4598,6 +4618,7 @@
   // What the list last drew, so that growing it only adds the new rows under
   // the ones already there (see growOnScroll).
   let convDrawn = null;
+  forgetWithState(() => { convDrawn = null; });
   let convShown = CONV_PAGE;
   function renderConvList({ more = false } = {}) {
     const all = conversations();
@@ -4838,6 +4859,7 @@
   }
 
   let mailDrawn = null;
+  forgetWithState(() => { mailDrawn = null; });
   let mailShown = CONV_PAGE;
   function renderMailList({ more = false } = {}) {
     const all = mailboxes();
@@ -5253,6 +5275,7 @@
   const BELL_PAGE = 40;
   let bellShown = BELL_PAGE;
   let bellDrawn = null;   // { items, n }: what the New section last drew
+  forgetWithState(() => { bellDrawn = null; });
   function renderBellPanel({ more = false } = {}) {
     const items = bellItems();
     const body = $('#bellBody');
