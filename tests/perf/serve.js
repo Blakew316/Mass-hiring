@@ -16,20 +16,19 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
   require(path.join(ROOT, 'lib/tenant.js')).adopt(team);
   fs.rmSync(path.join(ROOT, 'data'), { recursive: true, force: true });
   fs.cpSync(fixture, path.join(ROOT, 'data'), { recursive: true });
+  // With blobMs the data lives in a stand-in for Netlify Blobs (fake-blobs.js)
+  // instead of files: every read and write is a network call that takes a
+  // round trip of blobMs plus the transfer, and a read naming the current
+  // ETag is a 304 with no body, as the real store answers it. It is put in
+  // place before anything in ROOT loads lib/storage.js.
+  let blobs = null;
+  if (blobMs) blobs = require('./fake-blobs').install(ROOT, { latencyMs: blobMs, seed: fixture });
   const google = require(path.join(ROOT, 'lib/google.js'));
   google.status = async () => ({ connected: true, configured: true, email: 'blake@wholesalepayments.com' });
   google.threadMessages = async () => ({ limited: false, messages: [] });
   google.threadReplies = async () => ({ limited: false, replies: [] });
   google.recentInboundThreads = async () => new Set();
   require(path.join(ROOT, 'lib/mailer.js')).sendStatus = async () => ({ ready: true, from: 'Blake Woodruff <blake@wholesalepayments.com>', via: 'gmail-api', reason: '' });
-  if (blobMs) {
-    // Netlify Blobs is a network read: a fixed round trip plus the transfer.
-    const storage = require(path.join(ROOT, 'lib/storage.js'));
-    for (const fn of ['getJson', 'getJsonWithEtag']) {
-      const real = storage[fn];
-      storage[fn] = async (...a) => { const v = await real(...a); const bytes = Buffer.byteLength(JSON.stringify((v && v.value !== undefined ? v.value : v) || '')); await new Promise((r) => setTimeout(r, blobMs + bytes / 100e6 * 1000)); return v; };
-    }
-  }
   const app = require(path.join(ROOT, 'app.js'));
   // The function gzips any text answer over 1 KB for a browser that accepts it.
   const express = require(path.join(ROOT, 'node_modules/express'));
@@ -79,6 +78,6 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
   const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password, team }) });
   const cookie = (login.headers.get('set-cookie') || '').split(';')[0];
   const store = require(path.join(ROOT, 'lib/store.js'));
-  return { base, cookie, store, close: () => server.close(), ROOT };
+  return { base, cookie, store, blobs, close: () => server.close(), ROOT };
 }
 module.exports = { start };

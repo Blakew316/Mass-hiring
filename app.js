@@ -474,14 +474,16 @@ function spliceState(json, pieces) {
 }
 
 app.get('/api/state', asyncRoute(async (req, res) => {
-  const db = await store.read();
-  const now = Date.now();
-  const lastError = db.events.find((e) => e.type === 'error' && now - new Date(e.ts).getTime() < 24 * 3600 * 1000);
   // Independent reads. On Netlify Blobs each one is its own round trip, so
-  // awaiting them in a line made this route as slow as the sum of them; nothing
-  // here depends on anything else here.
-  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList, iq, onb, calendlySync] = await Promise.all([
-    google.status(db.settings),
+  // awaiting them in a line made this route as slow as the sum of them. All
+  // of them start at once, the document's included — and the token record
+  // Google's status reads, which needs the document's settings for the rest.
+  // (A read that fails while another is awaited is still answered for: the
+  // empty catch only stops it being reported as unhandled.)
+  const tokens = google.loadTokens();
+  tokens.catch(() => {});
+  const syncRecord = storage.getJson(CALENDLY_SYNC_KEY).catch(() => null);
+  const others = Promise.all([
     textQueue.loadQ(),
     queue.loadQ(),
     storage.getJson('relay').catch(() => null),
@@ -489,7 +491,15 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     backups.list().catch(() => []),
     salesiq.load().catch(() => salesiq.blank()),
     onboarding.load().catch(() => onboarding.blank()),
-    calendlySyncState(db),
+  ]);
+  others.catch(() => {});
+  const db = await store.read();
+  const now = Date.now();
+  const lastError = db.events.find((e) => e.type === 'error' && now - new Date(e.ts).getTime() < 24 * 3600 * 1000);
+  const [googleStatus, calendlySync, [textQ, emailQ, relay, storageBackend, backupList, iq, onb]] = await Promise.all([
+    google.status(db.settings, tokens),
+    calendlySyncState(db, syncRecord),
+    others,
   ]);
   // Derived from the status above rather than fetching it a second time.
   const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
@@ -2297,6 +2307,41 @@ function learnEmail(c, email) {
   if (!e || normEmail(c.email) === e) return;
   c.altEmails = Array.from(new Set([...(c.altEmails || []), e]));
 }
+// matchCandidate() for a whole listing at once. It walks the list for every
+// invitee, and at 33,000 candidates and a listing of a few hundred bookings
+// that was most of a sync; this indexes the list once and answers exactly as
+// it would: the first person in list order with that address (their own or
+// one learned before), else the one person with that full name. learn() is
+// learnEmail() kept in step with the index, so a booking later in the same
+// listing finds an address learned earlier in it, as the walk did.
+function bookingMatcher(candidates) {
+  const byEmail = new Map();
+  const byName = new Map();
+  for (const c of candidates) {
+    for (const a of [c.email, ...(c.altEmails || [])]) {
+      const e = normEmail(a);
+      if (e && !byEmail.has(e)) byEmail.set(e, c);
+    }
+    for (const n of new Set([normName(c.name), normName(`${c.firstName || ''}${c.lastName || ''}`)])) {
+      if (!byName.has(n)) byName.set(n, []);
+      byName.get(n).push(c);
+    }
+  }
+  return {
+    match(email, name) {
+      const e = normEmail(email);
+      if (e && byEmail.has(e)) return byEmail.get(e);
+      const n = normName(name);
+      const same = n.length >= 4 ? byName.get(n) : null;
+      return same && same.length === 1 ? same[0] : null;
+    },
+    learn(c, email) {
+      learnEmail(c, email);
+      const e = normEmail(email);
+      if (e && !byEmail.has(e)) byEmail.set(e, c);
+    },
+  };
+}
 
 // Manual link from the Interviews tile for the rare booking the matcher
 // could not place (different name and address).
@@ -2525,8 +2570,9 @@ const DAY_MS = 24 * 3600 * 1000;
 // a team's first sync after the move, the values its document still holds
 // stand.
 const CALENDLY_SYNC_KEY = 'calendly-sync';
-async function calendlySyncState(db) {
-  const rec = await storage.getJson(CALENDLY_SYNC_KEY).catch(() => null);
+// `record` is the record, or its read already under way, if the caller has it.
+async function calendlySyncState(db, record) {
+  const rec = record !== undefined ? await record : await storage.getJson(CALENDLY_SYNC_KEY).catch(() => null);
   const r = rec && typeof rec === 'object' ? rec : {};
   if (r.lastSyncAt !== undefined) return { lastSyncAt: r.lastSyncAt || null, error: r.error || '', claimedAt: r.claimedAt || null };
   return { lastSyncAt: db.calendlyLastSyncAt || null, error: db.calendlySyncError || '', claimedAt: r.claimedAt || db.salesiqSyncClaimedAt || null };
@@ -2546,6 +2592,7 @@ function applyCalendlyListing(fresh, result, { minStart, maxStart, listedAt }) {
   const interviewsBefore = JSON.stringify(fresh.interviews || []);
   const memoBefore = new Set(Object.keys(fresh.calendlyAnnounced && typeof fresh.calendlyAnnounced === 'object' ? fresh.calendlyAnnounced : {}));
   const before = new Map();          // matched candidate -> as it was
+  const matcher = bookingMatcher(fresh.candidates);
   // Every booking this team has already been told about — what the last
   // sync listed and what the webhook has added since. A booking is
   // announced the first time its (event, invitee) pair shows up, and never
@@ -2565,12 +2612,12 @@ function applyCalendlyListing(fresh, result, { minStart, maxStart, listedAt }) {
       list.push({ uri: ev.uri, name: ev.name, status: ev.status, start: ev.start, end: ev.end, joinUrl: ev.joinUrl, inviteeName: '', inviteeEmail: '', candidateId: null });
     }
     for (const inv of ev.invitees) {
-      const c = matchCandidate(fresh.candidates, inv.email, inv.name);
+      const c = matcher.match(inv.email, inv.name);
       if (c) {
         // A dry run has copies of only the people a booking can match.
         if (Object.isFrozen(c)) throw new Error('a booking matched someone the dry run did not copy');
         if (!before.has(c)) before.set(c, JSON.stringify(c));
-        learnEmail(c, inv.email);
+        matcher.learn(c, inv.email);
       }
       const active = ev.status === 'active' && inv.status !== 'canceled';
       list.push({
@@ -2680,9 +2727,10 @@ async function syncCalendly() {
   let outcome;
   try {
     const matched = new Set();
+    const matcher = bookingMatcher(db.candidates);
     for (const ev of result.interviews) {
       for (const inv of ev.invitees) {
-        const c = matchCandidate(db.candidates, inv.email, inv.name);
+        const c = matcher.match(inv.email, inv.name);
         if (c) matched.add(c);
       }
     }
