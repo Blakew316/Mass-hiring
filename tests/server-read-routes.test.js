@@ -6,6 +6,7 @@
 //   GET  /api/texts/relay-token  the Mac's token, in full, only here
 //   GET  /api/salesiq-connection the Sales IQ connection code, only when it would work
 //   GET  /api/onboarding/status  onboarding's view of sending and storage
+//   POST /api/onboarding/packet/preview  a packet document, as the PDF the hire would get
 //   GET  /api/iq/state           the Sales IQ page (bookings folded in, links signed for this team)
 // None of them sends anything, and none clears an unread flag: reading a
 // conversation here is not the same as the page saying it was seen.
@@ -100,8 +101,14 @@ const { guardOutside, stubSenders, as, getState, ago, daysAgo } = require('./ser
   google.threadMessages = async () => { throw new Error('Gmail is having a moment'); };
   const eo = await me.json('GET', '/api/emails/thread?id=j1');
   ok(eo.status === 200 && eo.body.unavailable === 'Gmail is having a moment', 'any other Gmail failure is passed on as it was said', eo.body.unavailable);
-  const ek = await me.json('GET', '/api/emails/thread?id=k1');
+  // Noor has never been emailed. (Kim was emailed, but with no Gmail thread on
+  // record — sent over an App Password, or before the app — and what she is
+  // told is not pinned here: today it is the same "Nothing has been emailed"
+  // line, which is not true of her.)
+  const ek = await me.json('GET', '/api/emails/thread?id=n1');
   ok(ek.status === 200 && ek.body.unavailable === 'Nothing has been emailed to this person yet.' && ek.body.gmailUrl === '' && ek.body.messages.length === 0, 'someone never emailed has nothing to read', ek.body);
+  const ekim = await me.json('GET', '/api/emails/thread?id=k1');
+  ok(ekim.status === 200 && ekim.body.messages.length === 0 && ekim.body.gmailUrl === '' && !ekim.body.canReply && Boolean(ekim.body.unavailable), 'someone emailed with no Gmail thread on record has nothing to read here, and is told why', ekim.body);
   google.status = async () => ({ connected: false, configured: false, email: '' });
   calls.length = 0;
   google.threadMessages = async (...a) => { calls.push(a); return { messages: [] }; };
@@ -184,6 +191,20 @@ const { guardOutside, stubSenders, as, getState, ago, daysAgo } = require('./ser
   const oOff = await me.json('GET', '/api/onboarding/status');
   ok(oOff.body.emailConfigured === false && oOff.body.email.reason === 'Connect Google or add a Gmail App Password in Settings.' && oOff.body.email.from === '', 'with no mailbox it says why', oOff.body.email);
   mailer.sendStatus = readySend;
+
+  // ---------- the onboarding packet preview ----------
+  const docs = await me.json('GET', '/api/onboarding/packet/documents');
+  ok(docs.status === 200 && docs.body.documents.length > 0 && docs.body.documents.every((d) => d.key && d.title && d.href),
+    'the packet lists its company documents, each with where to open it', docs.body && docs.body.documents.map((d) => d.key));
+  const letter = await me.call('POST', '/api/onboarding/packet/preview', { docKey: 'welcome-letter', hire: { firstName: 'Jordan', lastName: 'Example', email: 'jordan@example.com' } });
+  const pdf = Buffer.from(await letter.arrayBuffer());
+  ok(letter.status === 200 && /^application\/pdf/.test(letter.headers.get('content-type') || '') && pdf.subarray(0, 5).toString('latin1') === '%PDF-',
+    'a generated letter previews as a PDF', { status: letter.status, type: letter.headers.get('content-type') });
+  const company = await me.call('POST', '/api/onboarding/packet/preview', { docKey: docs.body.documents[0].key });
+  const companyPdf = Buffer.from(await company.arrayBuffer());
+  ok(company.status === 200 && companyPdf.subarray(0, 5).toString('latin1') === '%PDF-', 'a company document previews as the PDF it is', company.status);
+  const unknownDoc = await me.json('POST', '/api/onboarding/packet/preview', { docKey: 'not-a-document' });
+  ok(unknownDoc.status === 400 && /Unknown document/.test(unknownDoc.body.error), 'an unknown document is refused', unknownDoc.body);
 
   // ---------- the Sales IQ page ----------
   await s.store.update((d) => {

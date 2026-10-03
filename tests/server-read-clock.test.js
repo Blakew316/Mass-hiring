@@ -5,7 +5,8 @@
 //   - a queue pause runs out;
 //   - an emailed person becomes due a follow-up once enough days pass;
 //   - yesterday's sends leave the 24-hour count (email and text);
-//   - a warning banner is put away after a day.
+//   - a warning banner is put away after a day;
+//   - an open stops counting as "in the last two weeks" on the Texting list.
 //
 // The clock is moved by replacing the global Date with one running ahead of
 // the real one, in this process (which is also the server's); nothing is
@@ -37,6 +38,8 @@ const HOUR = 60 * MIN;
       // Emailed 2 days and 22 hours ago: due a follow-up in two hours (default 3 days).
       { id: 'f1', name: 'Fran Followup', email: 'fran@example.com', status: 'emailed', lastEmailedAt: new Date(Date.now() - (3 * 24 - 2) * HOUR).toISOString(), addedAt: daysAgo(10), source: 'csv' },
       { id: 'f2', name: 'Gus Recent', email: 'gus@example.com', status: 'emailed', lastEmailedAt: daysAgo(1), addedAt: daysAgo(10), source: 'csv' },
+      // Opened the email 13 days and 22.5 hours ago: "in the last two weeks" for 90 more minutes.
+      { id: 'o1', name: 'Ola Opened', email: 'ola@example.com', phone: '(617) 555-2950', role: 'Account Executive', status: 'emailed', lastEmailedAt: daysAgo(20), openedAt: new Date(Date.now() - (14 * 24 * 60 - 90) * MIN).toISOString(), followUpCount: 2, addedAt: daysAgo(30), source: 'csv' },
     ];
     // A warning from 23 hours ago: a banner for one more hour.
     d.events = [{ id: 'warn1', ts: new Date(Date.now() - 23 * HOUR).toISOString(), type: 'error', message: 'Gmail refused a send yesterday.', candidateId: null }];
@@ -60,6 +63,7 @@ const HOUR = 60 * MIN;
   ok(S0.texting.queue.relay.online === true, 'the relay that just checked in is online');
   ok(S0.queue.pausedUntil && S0.queue.pauseKind === 'rate', 'the email queue is paused');
   ok(!S0.followUp.dueIds.includes('f1'), 'nobody is due a follow-up yet', S0.followUp.dueIds);
+  ok(/^opened your email in the last two weeks/.test(S0.texting.priority.order.o1 && S0.texting.priority.order.o1.reason), 'the Texting list says she opened the email in the last two weeks', S0.texting.priority.order.o1);
   ok(S0.queue.sentToday === 1 && S0.texting.queue.sentToday === 1, 'one email and one text in the last 24 hours');
   ok(S0.lastError === 'Gmail refused a send yesterday.', 'the warning is up');
   ok((await getState(s, t0.tag)).status === 304, 'unchanged a moment later: 304');
@@ -99,6 +103,8 @@ const HOUR = 60 * MIN;
     advance(60 * MIN);
     const b4 = await step('two hours later');
     ok(b4.followUp.dueIds.includes('f1') && !b4.followUp.dueIds.includes('f2'), 'once three days have passed she is due a follow-up', b4.followUp.dueIds);
+    const o1 = b4.texting.priority.order.o1;
+    ok(o1 && /^opened your email(?! in the last two weeks)/.test(o1.reason), 'and two weeks after an open, the Texting list no longer calls it recent', o1);
     ok((await getState(s, tag)).status === 304, 'and then it holds still');
   } finally {
     global.Date = RealDate;

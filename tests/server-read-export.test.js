@@ -86,7 +86,10 @@ function parseCsv(text) {
   const rb = await B.call('GET', '/api/candidates/export');
   const tb = (await bytes(rb)).toString('utf8');
   ok(rb.status === 200 && tb === '﻿First Name,Last Name,Email,Phone,Location,Role,Company,Status,Notes,Source,Added,Last emailed,Last texted,Last reply,Booked\r\n', 'an empty list exports just the header', JSON.stringify(tb));
-  ok(rb.headers.get('content-disposition') === `attachment; filename="Team-n-code-Co-candidates-${today}.csv"`, 'the file name keeps only plain letters and numbers of the team name', rb.headers.get('content-disposition'));
+  // How accented letters are spelled in the name is not pinned (today they are
+  // dropped: "Team-n-code-Co"); that the name is safe to save is.
+  const m = /^attachment; filename="([A-Za-z0-9-]+)-candidates-(\d{4}-\d{2}-\d{2})\.csv"$/.exec(rb.headers.get('content-disposition') || '');
+  ok(m && m[2] === today && /^Team-/.test(m[1]) && /-Co$/.test(m[1]), 'a team name with accents and symbols still gives a plain, safe file name for the team and the day', rb.headers.get('content-disposition'));
 
   ok(sent.count() === 0, 'nothing was sent', sent);
   ok(refused.length === 0, 'nothing reached outside this machine', refused);

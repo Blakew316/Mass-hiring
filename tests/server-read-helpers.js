@@ -8,8 +8,11 @@
 //    what was asked of them so a test can say "nothing was sent";
 //  - a second (third...) team made the way the app makes one, and requests
 //    signed in as it;
+//  - another instance of the app: a separate process on the same storage,
+//    as Netlify runs several copies of the function at once (elsewhere());
+//  - a snapshot of every stored file, to tell whether anything was written;
 //  - small builders for made-up candidates (example.com, 555 numbers).
-const { R } = require('./helpers');
+const { R, ROOT } = require('./helpers');
 
 const ADMIN = 'test-password';   // the APP_PASSWORD startApp() sets by default
 
@@ -90,7 +93,56 @@ async function getState(client, tag) {
   return { status: r.status, tag: r.headers.get('etag') || '', cache: r.headers.get('cache-control') || '', text, body: r.status === 200 && text ? JSON.parse(text) : null };
 }
 
+// Run `fn` in a separate Node process on the same storage: another instance
+// of the deployed function, as far as the app under test can tell (Netlify
+// runs several at once, all reading and writing the one store). `fn` is an
+// async function, called as fn(modules, arg) inside `teamId`'s context; it
+// must not use anything from the test's own scope — pass data through `arg`
+// (JSON). What it returns comes back as JSON. The process refuses every fetch,
+// so nothing it does can reach outside this machine.
+function elsewhere(teamId, fn, arg = null) {
+  const { execFile } = require('child_process');
+  const src = `
+    const path = require('path');
+    const R = (p) => path.join(${JSON.stringify(ROOT)}, p);
+    global.fetch = async (u) => { throw new Error('the other instance refused an outside call to ' + u); };
+    const mods = {
+      R,
+      tenant: require(R('lib/tenant.js')),
+      storage: require(R('lib/storage.js')),
+      store: require(R('lib/store.js')),
+      teams: require(R('lib/teams.js')),
+      textQueue: require(R('lib/text-queue.js')),
+      salesiq: require(R('lib/salesiq.js')),
+      onboarding: require(R('lib/onboarding.js')),
+      backups: require(R('lib/backups.js')),
+    };
+    Promise.resolve()
+      .then(() => mods.tenant.run(${JSON.stringify(teamId)}, () => (${fn.toString()})(mods, ${JSON.stringify(arg)})))
+      .then((v) => { process.stdout.write(JSON.stringify(v === undefined ? null : v)); process.exit(0); },
+        (e) => { process.stderr.write(String((e && e.stack) || e)); process.exit(1); });
+  `;
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ['-e', src], { env: process.env, timeout: 30000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`the other instance failed: ${stderr || err.message}`));
+      try { resolve(stdout ? JSON.parse(stdout) : null); } catch (e) { reject(e); }
+    });
+  });
+}
+
+// Every stored file under ROOT/data with its size and modification time, to
+// tell whether anything at all was written.
+function dataSnapshot() {
+  const fs = require('fs');
+  const path = require('path');
+  const dir = R('data');
+  let files = [];
+  try { files = fs.readdirSync(dir, { recursive: true }); } catch { return ''; }
+  return files.map(String).filter((f) => /\.(json|bin)$/.test(f)).sort()
+    .map((f) => { const st = fs.statSync(path.join(dir, f)); return `${f}:${st.size}:${st.mtimeMs}`; }).join('|');
+}
+
 const ago = (minutes) => new Date(Date.now() - minutes * 60000).toISOString();
 const daysAgo = (d) => new Date(Date.now() - d * 864e5).toISOString();
 
-module.exports = { ADMIN, guardOutside, stubSenders, as, addTeam, inTeam, getState, ago, daysAgo };
+module.exports = { ADMIN, guardOutside, stubSenders, as, addTeam, inTeam, getState, elsewhere, dataSnapshot, ago, daysAgo };

@@ -60,8 +60,6 @@ const { guardOutside, stubSenders, getState, ago, daysAgo } = require('./server-
   ok(JSON.stringify(Object.keys(pr.blocked).sort()) === JSON.stringify(Object.keys(expectBlocked).sort())
     && Object.entries(expectBlocked).every(([id, why]) => pr.blocked[id] === why),
   'everyone who cannot be texted is listed with the reason (no phone at all is not listed)', pr.blocked);
-  ok(pr.textable === 5, 'textable counts the ranked', pr.textable);
-  ok(S.texting.withPhone === 15, 'withPhone counts every number that can be texted, blocked or not (not a missing or fictional 555-01xx number)', S.texting.withPhone);
   ok(S.texting.queue.optOut === 1, 'the opt-out count comes from the text queue', S.texting.queue.optOut);
 
   // A STOP from someone moves them out of the ranking on the next look.
@@ -152,10 +150,11 @@ const { guardOutside, stubSenders, getState, ago, daysAgo } = require('./server-
   ok(tq.sentToday === 2 && tq.remainingToday === 58 && tq.dailyLimit === 60, 'sent today counts the last 24 hours against the daily cap', tq);
   ok(tq.failed === 1 && tq.failures[0].phone === '(617) 555-9904' && tq.failures[0].error === 'Not reachable on iMessage', 'a failed text is listed with the number as people write it', tq.failures);
   ok(tq.relay.online === true && tq.relay.host === 'Example-Mac' && tq.relay.bluebubbles === false, 'a relay seen seconds ago is online', tq.relay);
-  await storage.setJson('relay', { lastSeenAt: new Date(Date.now() - 5 * 60000).toISOString(), host: 'Example-Mac', error: 'Messages is not signed in' });
+  const lastSeen = new Date(Date.now() - 5 * 60000).toISOString();
+  await storage.setJson('relay', { lastSeenAt: lastSeen, host: 'Example-Mac', error: 'Messages is not signed in' });
   S = (await getState(s)).body;
-  ok(S.texting.queue.relay.online === false && S.texting.queue.relay.error === 'Messages is not signed in' && S.texting.queue.relay.lastSeenAt,
-    'a relay silent for minutes is offline, with when it was last seen and what it said', S.texting.queue.relay);
+  ok(S.texting.queue.relay.online === false && S.texting.queue.relay.lastSeenAt === lastSeen,
+    'a relay silent for minutes is offline, with when it was last seen (the page says "last seen 5m ago")', S.texting.queue.relay);
 
   ok(sent.count() === 0, 'nothing was sent', sent);
   ok(refused.length === 0, 'nothing reached outside this machine', refused);

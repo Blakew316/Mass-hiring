@@ -106,7 +106,7 @@ const { guardOutside, stubSenders, addTeam, inTeam, getState, ago, daysAgo } = r
     s.relayToken = r.body.token;
   }, (b) => b.texting.tokenSet === true);
   const relay = (path, body) => fetch(`${s.base}${path}`, { method: 'POST', headers: { authorization: `Bearer ${s.relayToken}`, 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
-  const hello = () => relay('/api/relay/hello', { host: 'Example-Mac', version: '1.0.0', backend: 'applescript', bluebubbles: false });
+  const hello = (bluebubbles = true) => relay('/api/relay/hello', { host: 'Example-Mac', version: '1.0.0', backend: 'applescript', bluebubbles });
   await changed('the relay coming online', async () => {
     const r = await hello();
     if (r.status !== 200) throw new Error(`hello failed ${r.status}`);
@@ -122,10 +122,14 @@ const { guardOutside, stubSenders, addTeam, inTeam, getState, ago, daysAgo } = r
   const seen2 = (await storage.getJson('relay')).lastSeenAt;
   const afterHello2 = await getState(s, tag);
   ok(seen2 !== seen1 && afterHello2.status === 304, 'nor does the next one, though its last-seen time moved', { seen1, seen2, status: afterHello2.status });
+  // What the Texting page's chip says about the Mac ("Example-Mac online ·
+  // Messages not answering") does change the tag.
+  await changed('the relay reporting Messages not answering', async () => {
+    const r = await hello(false);
+    if (r.status !== 200) throw new Error(`hello failed ${r.status}`);
+  }, (b) => b.texting.queue.relay.online === true && b.texting.queue.relay.bluebubbles === false);
   await changed('the relay going quiet', () => storage.updateJson('relay', (cur) => ({ ...cur, lastSeenAt: new Date(Date.now() - 5 * 60000).toISOString() })),
     (b) => b.texting.queue.relay.online === false && Boolean(b.texting.queue.relay.lastSeenAt));
-  await changed('the relay reporting a problem', () => storage.updateJson('relay', (cur) => ({ ...cur, error: 'Messages is not signed in' })),
-    (b) => b.texting.queue.relay.error === 'Messages is not signed in');
 
   // ---------- two teams ----------
   const B = await addTeam(s, { name: 'Team Blue', pin: '4826' });

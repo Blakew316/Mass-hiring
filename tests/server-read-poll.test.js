@@ -19,7 +19,17 @@ const { guardOutside, stubSenders, addTeam, inTeam, daysAgo } = require('./serve
   });
 
   const browser = await launch();
-  const { ctx, page, errors } = await openPage(browser, s);
+  // The page itself asks only this server; anything else it would load (the
+  // web font) is refused, so the test never depends on, or reaches, the
+  // outside world.
+  const hermetic = {
+    newContext: async (opts) => {
+      const c = await browser.newContext(opts);
+      await c.route((url) => !/^(localhost|127\.0\.0\.1)$/.test(url.hostname), (route) => route.abort());
+      return c;
+    },
+  };
+  const { ctx, page, errors } = await openPage(hermetic, s);
   const poll = async () => {
     const [resp] = await Promise.all([
       page.waitForResponse((r) => new URL(r.url()).pathname === '/api/state', { timeout: 15000 }),

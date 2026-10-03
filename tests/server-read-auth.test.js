@@ -41,6 +41,7 @@ const { guardOutside, stubSenders, addTeam, as, getState, ago, daysAgo } = requi
     ['GET', '/api/onboarding/status'],
     ['GET', '/api/onboarding/saved'],
     ['GET', '/api/onboarding/hires'],
+    ['GET', '/api/onboarding/hires/REF-1/files/offer-letter'],
     ['GET', '/api/onboarding/packet/documents'],
     ['GET', '/api/iq/state'],
     ['GET', '/api/candidates/export'],
@@ -59,6 +60,8 @@ const { guardOutside, stubSenders, addTeam, as, getState, ago, daysAgo } = requi
   }
   const tagged = await getState(anon, signedIn.tag);
   ok(tagged.status === 401, 'signed out with the current state tag: 401, not 304', tagged.status);
+  const head = await anon.call('HEAD', '/api/state');
+  ok(head.status === 401 && head.headers.get('etag') !== signedIn.tag, 'signed out, asking only for the headers is 401 too, and never hands out the state\'s tag', head.status);
   for (const url of ['/API/state', '/Api/State', '/api//state', '/api/state/', '/api/state//']) {
     const r = await anon.json('GET', url);
     ok(r.status !== 200 && r.status !== 304 && !leak.test(r.text), `signed out: ${url} gives nothing`, { status: r.status });

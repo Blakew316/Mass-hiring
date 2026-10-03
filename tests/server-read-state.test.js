@@ -164,7 +164,7 @@ const SERVER_ONLY = ['messageId', 'threadId', 'sheetRow', 'city', 'altEmails', '
   ok(c.textCount === 3, 'textCount counts the whole thread, tapbacks included', c.textCount);
   ok(c.textLast && c.textLast.dir === 'in' && c.textLast.ts === t1 && c.textLast.text === `Yes please ${long}`.slice(0, 120),
     'textLast is the last real message (a tapback is skipped), cut to 120 characters', c.textLast);
-  ok(c.textLastIn && c.textLastIn.ts === t1 && c.textLastIn.text.length === 120 && !('dir' in c.textLastIn), 'textLastIn is the newest thing they wrote, cut to 120', c.textLastIn);
+  ok(c.textLastIn && c.textLastIn.ts === t1 && c.textLastIn.text === `Yes please ${long}`.slice(0, 120), 'textLastIn is the newest thing they wrote, cut to 120', c.textLastIn);
   ok(c.emailReplies === 2, 'emailReplies counts real replies, not a bounce', c.emailReplies);
   ok(c.emailBounced === true, 'emailBounced is set when any reply was a bounce');
   ok(c.emailLast && c.emailLast.ts === t3 && c.emailLast.text === long.slice(0, 160),
@@ -186,7 +186,8 @@ const SERVER_ONLY = ['messageId', 'threadId', 'sheetRow', 'city', 'altEmails', '
   ok(bn.emailBounced === true && bn.emailReplies === 0 && bn.emailLast === null, 'a bounce alone is bounced, with no reply to show', bn);
 
   // ---------- stats ----------
-  ok(JSON.stringify(S.stats) === JSON.stringify({ total: 11, new: 1, emailed: 4, replied: 2, booked: 1, declined: 1, bounced: 1 }),
+  const wantStats = { total: 11, new: 1, emailed: 4, replied: 2, booked: 1, declined: 1, bounced: 1 };
+  ok(Object.keys(S.stats).length === Object.keys(wantStats).length && Object.entries(wantStats).every(([k, n]) => S.stats[k] === n),
     'stats count each status, and an unknown status only in the total', S.stats);
 
   // ---------- the feed ----------
