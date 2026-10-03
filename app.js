@@ -1680,67 +1680,74 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
     seen.applied += 1;
   }
 
-  if (touched.size) {
-    // One write for the whole batch: the candidates and their feed lines
-    // together. Each feed line used to be a read and a write of the whole
-    // list of its own — half a dozen for one busy batch. And a batch that
-    // brings nothing new (receipts already recorded, a reply already in the
-    // thread, which a relay reports again after a restart) writes nothing.
-    await store.update((fresh) => {
-      let changed = false;
-      for (const patch of touched.values()) {
-        // The mutator can run again after a write conflict: start clean.
-        patch.fresh = [];
-        patch.firstRead = false;
-        const c = fresh.candidates.find((x) => x.id === patch.id);
-        if (!c) continue;
-        const before = JSON.stringify(c);
-        // Messages accepts a send and only then marks it failed, so this can
-        // arrive after we already recorded "sent" — it has to be able to undo
-        // that, which the usual forward-only rule would not allow. A receipt
-        // that already proved delivery still wins.
-        if (patch.undelivered && (TEXT_RANK[c.textStatus || ''] || 0) <= TEXT_RANK.sent) c.textStatus = 'not-imessage';
-        if (patch.delivered) { c.textDeliveredAt = c.textDeliveredAt || patch.delivered; advanceText(c, 'delivered'); }
-        if (patch.read) { patch.firstRead = !c.textReadAt; c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
-        for (const m of patch.machine || []) store.addToThread(c, 'in', m.text, m.ts, { kind: m.kind });
-        // Only a message this thread has never held is news. A relay reports
-        // the same line again (a restart, a second Mac, a re-read window), and
-        // each repeat used to mark the conversation unread again, add another
-        // feed line and send another notification to the phone.
-        for (const r of patch.replies) if (store.addToThread(c, 'in', r.text, r.ts)) patch.fresh.push(r);
-        if (patch.fresh.length) {
-          const latest = patch.fresh[patch.fresh.length - 1].ts;
-          c.textRepliedAt = c.textRepliedAt || latest;
-          advanceText(c, 'replied');
-          // Cleared when the thread is opened, so the bell survives a reload
-          // and agrees with itself across devices.
-          c.textUnread = true;
-          // A text reply is the same pipeline signal as an email reply.
-          if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
-          c.repliedAt = c.repliedAt || latest;
-          // STOP only counts when it is a new message: a repeat of an old one
-          // must not undo someone putting them back on the list by hand.
-          if (patch.fresh.some((r) => phone.optedOut(r.text))) c.status = 'declined';
-        }
-        // The feed: once per new message, never per report.
-        patch.who = c.name || phone.display(phone.normalize(c.phone));
-        // The first read only; a receipt reported again says nothing new.
-        if (patch.read && patch.firstRead && !patch.fresh.length) {
-          store.pushEvent(fresh, 'text-read', `${patch.who} read your text.`, c.id, patch.read);
-        }
-        for (const r of patch.fresh) {
-          // STOP is the one reply that changes what you may legally do next, and
-          // as a plain "replied" line it read exactly like someone saying yes.
-          if (phone.optedOut(r.text)) {
-            store.pushEvent(fresh, 'text-optout', `${patch.who} replied STOP — blocked from texting.`, c.id, r.ts);
-          } else {
-            store.pushEvent(fresh, 'text-replied', `${patch.who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts);
-          }
-        }
-        if (JSON.stringify(c) !== before) changed = true;
+  // One write for the whole batch: the candidates and their feed lines
+  // together. Each feed line used to be a read and a write of the whole list
+  // of its own — half a dozen for one busy batch. And a batch that brings
+  // nothing new (receipts already recorded, a reply already in the thread,
+  // which a relay reports again after a restart) writes nothing: that is
+  // found out first on copies of just the people in it, laid over the shared
+  // copy, without loading the list at all.
+  const apply = (fresh) => {
+    let changed = false;
+    for (const patch of touched.values()) {
+      // The mutator can run again after a write conflict: start clean.
+      patch.fresh = [];
+      patch.firstRead = false;
+      const c = fresh.candidates.find((x) => x.id === patch.id);
+      if (!c) continue;
+      const before = JSON.stringify(c);
+      // Messages accepts a send and only then marks it failed, so this can
+      // arrive after we already recorded "sent" — it has to be able to undo
+      // that, which the usual forward-only rule would not allow. A receipt
+      // that already proved delivery still wins.
+      if (patch.undelivered && (TEXT_RANK[c.textStatus || ''] || 0) <= TEXT_RANK.sent) c.textStatus = 'not-imessage';
+      if (patch.delivered) { c.textDeliveredAt = c.textDeliveredAt || patch.delivered; advanceText(c, 'delivered'); }
+      if (patch.read) { patch.firstRead = !c.textReadAt; c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
+      for (const m of patch.machine || []) store.addToThread(c, 'in', m.text, m.ts, { kind: m.kind });
+      // Only a message this thread has never held is news. A relay reports
+      // the same line again (a restart, a second Mac, a re-read window), and
+      // each repeat used to mark the conversation unread again, add another
+      // feed line and send another notification to the phone.
+      for (const r of patch.replies) if (store.addToThread(c, 'in', r.text, r.ts)) patch.fresh.push(r);
+      if (patch.fresh.length) {
+        const latest = patch.fresh[patch.fresh.length - 1].ts;
+        c.textRepliedAt = c.textRepliedAt || latest;
+        advanceText(c, 'replied');
+        // Cleared when the thread is opened, so the bell survives a reload
+        // and agrees with itself across devices.
+        c.textUnread = true;
+        // A text reply is the same pipeline signal as an email reply.
+        if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
+        c.repliedAt = c.repliedAt || latest;
+        // STOP only counts when it is a new message: a repeat of an old one
+        // must not undo someone putting them back on the list by hand.
+        if (patch.fresh.some((r) => phone.optedOut(r.text))) c.status = 'declined';
       }
-      if (!changed) return false;
-    });
+      // The feed: once per new message, never per report.
+      patch.who = c.name || phone.display(phone.normalize(c.phone));
+      // The first read only; a receipt reported again says nothing new.
+      if (patch.read && patch.firstRead && !patch.fresh.length) {
+        store.pushEvent(fresh, 'text-read', `${patch.who} read your text.`, c.id, patch.read);
+      }
+      for (const r of patch.fresh) {
+        // STOP is the one reply that changes what you may legally do next, and
+        // as a plain "replied" line it read exactly like someone saying yes.
+        if (phone.optedOut(r.text)) {
+          store.pushEvent(fresh, 'text-optout', `${patch.who} replied STOP — blocked from texting.`, c.id, r.ts);
+        } else {
+          store.pushEvent(fresh, 'text-replied', `${patch.who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts);
+        }
+      }
+      if (JSON.stringify(c) !== before) changed = true;
+    }
+    return changed;
+  };
+  if (touched.size) {
+    const trial = {
+      candidates: db.candidates.map((c) => (touched.has(c.id) ? structuredClone(c) : c)),
+      events: db.events.slice(),
+    };
+    if (apply(trial)) await store.update((fresh) => { if (!apply(fresh)) return false; });
   }
 
   // Anyone who asked us to stop is blocked at the queue, not just on their record.
