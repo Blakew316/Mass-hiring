@@ -25,7 +25,11 @@ function people() {
 }
 
 // Every list the page has been sent, held weakly: alive only while the page
-// itself still holds on to it.
+// itself still holds on to it. A state with the list in it (a server from
+// before the compact list); otherwise each copy of the list the page makes
+// from what the server sends (public/wire.js: the whole list, or a copy
+// patched with the buckets that changed), since the state no longer carries
+// one.
 function watchLists() {
   window.__lists = [];
   const json = Response.prototype.json;
@@ -36,6 +40,18 @@ function watchLists() {
     } catch { /* not a state */ }
     return v;
   };
+  let wire;
+  Object.defineProperty(window, 'Wire', {
+    configurable: true,
+    get: () => wire,
+    set: (w) => {
+      for (const name of ['fromFull', 'applyDelta']) {
+        const made = w[name];
+        w[name] = async (...args) => { const copy = await made(...args); window.__lists.push(new WeakRef(copy.cands)); return copy; };
+      }
+      wire = w;
+    },
+  });
 }
 
 (async () => {

@@ -27,7 +27,7 @@
  * the app is byte for byte the app it was before.
  */
 
-const BUILD = '9be6924e31';
+const BUILD = '96755dab30';
 const SHELL = `shell-${BUILD}`;
 const ASSETS = 'assets-v1';
 // v2: Inter from this site. fonts-v1 held Google's copies of it, which
@@ -42,6 +42,7 @@ const PRECACHE = [
   '/index.html',
   '/styles.css',
   '/mobile.css',
+  '/wire.js',
   '/app.js',
   '/icons.js',
   '/xlsx-lite.js',

@@ -30,9 +30,12 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
   google.recentInboundThreads = async () => new Set();
   require(path.join(ROOT, 'lib/mailer.js')).sendStatus = async () => ({ ready: true, from: 'Blake Woodruff <blake@wholesalepayments.com>', via: 'gmail-api', reason: '' });
   const app = require(path.join(ROOT, 'app.js'));
-  // The function gzips any text answer over 1 KB for a browser that accepts it.
+  // The function gzips any text answer over 1 KB for a browser that accepts it,
+  // and keeps the last couple of whole compact lists compressed under their
+  // tag (netlify/src/api.mjs).
   const express = require(path.join(ROOT, 'node_modules/express'));
   const api = express();
+  const zipped = new Map();
   api.use((req, res, next) => {
     const send = res.send.bind(res);
     res.send = (body) => {
@@ -40,6 +43,15 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
       if (buf && buf.length > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '') && /json|text|javascript/.test(String(res.get('content-type') || 'application/json'))) {
         if (!res.get('content-type')) res.type('application/json');
         res.set('content-encoding', 'gzip'); res.append('vary', 'Accept-Encoding'); res.removeHeader('content-length');
+        const tag = res.statusCode === 200 ? String(res.get('etag') || '') : '';
+        if (/^W\/"c2-/.test(tag)) {
+          const hit = zipped.get(tag);
+          if (hit && hit.size === buf.length) return send(hit.body);
+          const z = zlib.gzipSync(buf);
+          zipped.set(tag, { size: buf.length, body: z });
+          while (zipped.size > 2) zipped.delete(zipped.keys().next().value);
+          return send(z);
+        }
         return send(zlib.gzipSync(buf));
       }
       return send(body);

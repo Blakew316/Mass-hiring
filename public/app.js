@@ -198,6 +198,15 @@
   let pickedTeamId = '';       // the chip currently chosen on the sign-in screen
 
   const LAST_TEAM_KEY = 'lastTeam';
+  // Whether this browser was signed in when it last looked. index.html asks
+  // for the state and the list before anything else only when it was: a
+  // signed-out page would be told 401 twice for nothing, and the list can be
+  // megabytes. Only a hint — the server decides, and a stale one costs two
+  // refusals, once.
+  const SIGNED_IN_KEY = 'wp-signed-in';
+  function signedInHint(on) {
+    try { if (on) localStorage.setItem(SIGNED_IN_KEY, '1'); else localStorage.removeItem(SIGNED_IN_KEY); } catch { /* no storage: no early asking */ }
+  }
   // Another admin may have made or renamed a team since this page loaded, and
   // the delete list has to mean something. Refreshed when Settings is looked
   // at, not on the 30-second poll, which must stay one request.
@@ -208,6 +217,7 @@
     const previous = currentTeam && currentTeam.id;
     const changed = previous !== (team && team.id);
     currentTeam = team || null;
+    signedInHint(Boolean(currentTeam));
     // Nothing kept from one team's list may answer for another's.
     if (changed) { listVersion += 1; stateVersion += 1; }
     if (currentTeam) { try { localStorage.setItem(LAST_TEAM_KEY, currentTeam.id); } catch {} }
@@ -333,6 +343,8 @@
 
   function showLogin() {
     stateTag = '';
+    dropEarly();
+    signedInHint(false);
     // The Sales IQ page stops looking, and puts away any sheet it had open:
     // its sheets sit above everything, the sign-in screen included.
     if (window.SalesIQ) window.SalesIQ.deactivate();
@@ -432,6 +444,12 @@
     stateVersion += 1;
     forgetKept();
     appliedAskedAt = 0;
+    // The kept copy of the list, and what this page laid over it, are the
+    // team's being left.
+    dropList();
+    overlays.clear();
+    wantOrder = false;
+    verifyWait = VERIFY_MS;
     selected = new Set();
     filter = 'all';
     search = '';
@@ -547,6 +565,14 @@
   // The 30-second poll. The server tags the state, so an unchanged poll comes
   // back 304 with no body — nothing to parse, and nothing to re-render, which
   // is the whole point: most polls change nothing and should cost nothing.
+  //
+  // The state comes without the list (/api/state?v=2). The page keeps its
+  // own copy of the list (public/wire.js) and, when the state says the list
+  // has moved on, asks only for the part of it that changed; the list, the
+  // texting order and who is due a follow-up are then put back into the
+  // state exactly as the server used to send them, so nothing else on the
+  // page knows the difference. A server too old to know any of this sends the
+  // state with the list in it, as it always did, and that is used as it is.
   let stateTag = '';
   // When the newest state on screen was asked for. An answer to a request
   // that set off before it is older than what is shown, and is dropped.
@@ -557,40 +583,138 @@
   let appliedAskedAt = 0;
   const pageClock = () => performance.now();
   const teamIdNow = () => (currentTeam ? currentTeam.id : '');
+
+  // ---- asking, with a deadline ----
+  // A request that never answers (a phone between networks, a proxy holding
+  // the line) must not hold up everything queued behind it, so each has a
+  // deadline that covers reading the body too: generous for the state and the
+  // whole list, which can be megabytes on a slow line, shorter for a sync,
+  // which is a few kilobytes.
+  const STATE_MS = 90000;
+  const FULL_MS = 90000;
+  const SYNC_MS = 20000;
+  const authFailed = () => { showLogin(); const e = new Error('Please sign in.'); e.authFailed = true; return e; };
+  // { status, tag, body } — body only for a 200. `early` is one of the
+  // requests index.html started while the page loaded, used in place of
+  // asking again.
+  async function fetchJson(url, { method = 'GET', headers = {}, body, ms }, early = null) {
+    const ctl = early ? early.ctl : new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms);
+    try {
+      const res = await (early ? early.res : fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json', ...headers } : headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: ctl.signal,
+      }));
+      return { status: res.status, tag: res.headers.get('ETag') || '', body: res.status === 200 ? await res.json() : null };
+    } catch (err) {
+      const e = new Error(ctl.signal.aborted ? 'The server took too long to answer.' : 'Cannot reach the server.');
+      e.network = true;
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // ---- what index.html asked for while the page loaded ----
+  // The session, the state and the whole list, all at once and before the
+  // scripts had even arrived. Each is used at most once, by the first thing
+  // that would have asked for it, and only for the team it turns out to be
+  // for; anything else about it (signed out, a failure, another team) and it
+  // is simply asked for again.
+  const early = window.__early || {};
+  window.__early = null;
+  function takeEarly(name) {
+    const e = early[name];
+    early[name] = null;
+    return e || null;
+  }
+  // Signed out, the answers are of no use, and the list may be megabytes.
+  function dropEarly() {
+    for (const name of Object.keys(early)) { const e = takeEarly(name); if (e) e.ctl.abort(); }
+  }
+
+  // The state, as a 304, or a 200 with its tag and body, and when it was
+  // asked for (on pageClock).
+  async function readState(tag, team) {
+    const e = !tag && takeEarly('state');
+    if (e) {
+      try {
+        const r = await fetchJson(null, { ms: STATE_MS }, e);
+        if (r.status === 200 && r.body && r.body.team && r.body.team.id === team) return { ...r, askedAt: e.at };
+      } catch { /* asked again below */ }
+    }
+    const askedAt = pageClock();
+    const r = await fetchJson('/api/state?v=2', { headers: tag ? { 'If-None-Match': tag } : {}, ms: STATE_MS });
+    return { ...r, askedAt };
+  }
+
   // The order below matters, and each step is where it is for a reason.
   async function refresh() {
     // Who asked, and when, before anything can change under the request:
     // a status picked while it is out is laid over its answer (the answer
     // may predate it), and an answer for a team this page has since left is
     // not this page's to show.
-    const askedAt = pageClock();
     const askedTeam = teamIdNow();
-    const res = await fetch('/api/state', {
-      headers: stateTag ? { 'If-None-Match': stateTag } : {},
-    });
+    const got = await readState(stateTag, askedTeam);
     // Answered, therefore in touch: a 304 is as current as a 200, it just has
     // nothing new to say.
-    if (res.status === 304) { lastSyncAt = Date.now(); return false; }
-    if (res.status === 401) { showLogin(); const e = new Error('Please sign in.'); e.authFailed = true; throw e; }
-    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    if (got.status === 304) { lastSyncAt = Date.now(); return false; }
+    if (got.status === 401) throw authFailed();
+    if (got.status !== 200) throw new Error(`Request failed (${got.status})`);
     lastSyncAt = Date.now();
-    const tag = res.headers.get('ETag') || '';
     // The tag is remembered only once this version is actually on screen. Saved
     // first, a body cut off in transit or a drawing error left the page asking
     // "anything newer than this?", being told no, and showing the old list —
     // an import that never appeared — until something else changed.
     const had = stateTag;
     stateTag = '';
-    const fresh = await res.json();
+    let fresh = got.body;
+    let tag = got.tag;
+    let askedAt = got.askedAt;
+    let copy = null;
+    let agreed = true;
+    if (fresh && fresh.cands) {
+      // Bring the copy of the list up to the version this state is for. If
+      // the list has moved on again in between (somebody saved a moment
+      // later), the state is asked for again, so the two on screen agree; a
+      // few tries, then the newest of each, and the next poll asks again.
+      // The list is the team the state is for: the session's, which can
+      // differ from the team on screen (signed in as another team in
+      // another tab), and the page then moves to it, as it always did.
+      for (let tries = 0; ; tries++) {
+        copy = await syncList(fresh.cands);
+        if (copy.v === fresh.cands.v && copy.t === fresh.cands.t) break;
+        if (tries >= 3) { agreed = false; break; }
+        const again = await readState('', askedTeam);
+        if (again.status === 401) throw authFailed();
+        if (again.status !== 200 || !again.body || !again.body.cands) { agreed = false; break; }
+        fresh = again.body; tag = again.tag; askedAt = again.askedAt;
+      }
+    }
     // Reading a list this size holds the page for a moment; let a tap or a
     // keystroke that came in meanwhile through before it is drawn.
     await new Promise((r) => setTimeout(r, 0));
     // Signed out, or into another team, while it was on its way: not ours.
-    if (!signedIn || teamIdNow() !== askedTeam) return false;
+    // Nor is a list that is not the state's own team's.
+    if (!signedIn || teamIdNow() !== askedTeam || (copy && copy.t !== fresh.cands.t)) return false;
     // Older than what is already on screen (a slow answer overtaken by a
     // later one): what is shown stands, and so does the tag it came with.
     if (askedAt < appliedAskedAt) { if (!stateTag) stateTag = had; return false; }
     appliedAskedAt = askedAt;
+    // What this page laid over the last state comes off before the next one
+    // lands, and goes back on below only where it still holds.
+    liftOverlays();
+    if (copy) {
+      fresh.candidates = copy.cands;
+      const side = sideLists(copy);
+      fresh.texting.priority = side.priority;
+      fresh.followUp.dueIds = side.dueIds;
+    } else {
+      // A server that sends the list itself: no copy is kept beside it.
+      dropList();
+    }
     state = fresh;
     listVersion += 1;
     stateVersion += 1;
@@ -612,8 +736,203 @@
     // Back from a sign-in with Sales IQ on screen: it looks again.
     if (currentView === 'salesiq' && window.SalesIQ) window.SalesIQ.activate();
     if (currentView === 'onboarding' && window.Onboarding) window.Onboarding.activate();
-    stateTag = tag;
+    stateTag = agreed ? tag : '';
     return true;
+  }
+
+  // ---------------- The kept copy of the list ----------------
+  // One team's list as of one version (see public/wire.js), never changed in
+  // place: a sync makes a new copy, and one that fails any check against the
+  // server's digests is never kept — the whole list is fetched instead. One
+  // sync at a time, in the order asked.
+  let list = null;
+  let listEpoch = 0;                 // moves on sign-out: a sync on its way then is not kept
+  let listQueue = Promise.resolve();
+  // Buckets whose copy this page no longer trusts (a save it showed before
+  // the server took it, and the server refused): the next sync asks for them
+  // whatever their digests say.
+  const distrust = new Set();
+  // Set when the texting order put together here did not come out as the
+  // server's: from then on it is asked for outright.
+  let wantOrder = false;
+
+  function dropList() {
+    list = null;
+    listEpoch += 1;
+    distrust.clear();
+    sideMemo = null;
+    clearTimeout(verifyTimer);
+    verifyTimer = 0;
+  }
+
+  function syncList(cands) {
+    const run = listQueue.then(() => bringListUp(cands));
+    listQueue = run.catch(() => {});
+    return run;
+  }
+
+  // The copy brought up to `cands` (the state's word on the list). Whatever
+  // the server answers is the session's own team's list, and is what is
+  // kept; refresh() draws it only under a state of the same team.
+  async function bringListUp(cands) {
+    const team = cands.t;
+    const epoch = listEpoch;
+    // Signed out (or into another team) while it was on its way: handed
+    // back for refresh() to drop, never kept.
+    const keep = (copy) => {
+      if (epoch === listEpoch) list = copy;
+      return copy;
+    };
+    if (list && list.t !== team) dropList();
+    if (list && !distrust.size && !(wantOrder && !list.ro)) {
+      if (list.v === cands.v) return list;
+      // A new version with the same people, order and digests (a ten-minute
+      // window that moved nobody): nothing to ask for.
+      if (Wire.sameAs(list, cands)) return keep(Wire.adopt(list, cands));
+    }
+    if (!list || list.dup || !Wire.canDigest()) return wholeList(team, keep);
+    const asked = new Set(distrust);
+    // A network error or a timeout is said as one — the next poll tries
+    // again — rather than fetching the whole list over a connection that has
+    // just failed to carry a few kilobytes.
+    const r = await fetchJson('/api/candidates/sync?v=2', { method: 'POST', body: { ...Wire.syncBody(list, distrust), ...(wantOrder ? { ro: 1 } : {}) }, ms: SYNC_MS });
+    if (r.status === 401) throw authFailed();
+    if (r.status !== 200 || !r.body) throw new Error(`Request failed (${r.status})`);
+    const msg = r.body;
+    let next;
+    try {
+      if (msg.same) {
+        if (!Wire.sameAs(list, msg)) { const e = new Error('The list update was refused: it says nothing changed, but this copy is not the server\'s.'); e.refused = true; throw e; }
+        next = Wire.adopt(list, msg);
+      } else if (msg.ch) next = await Wire.applyDelta(list, msg);
+      else next = await Wire.fromFull(msg);
+    } catch (err) {
+      if (!err.refused) throw err;
+      return wholeList(team, keep);
+    }
+    for (const b of asked) distrust.delete(b);
+    keep(next);
+    if (!msg.same) scheduleVerify();
+    return next;
+  }
+
+  async function wholeList(team, keep) {
+    const e = takeEarly('list');
+    let r = null;
+    if (e && !wantOrder) {
+      try {
+        r = await fetchJson(null, { ms: FULL_MS }, e);
+        if (r.status !== 200 || !r.body || r.body.t !== team) r = null;
+      } catch { r = null; }
+    }
+    if (!r) r = await fetchJson(`/api/candidates?v=2${wantOrder ? '&ro=1' : ''}`, { ms: FULL_MS });
+    if (r.status === 401) throw authFailed();
+    if (r.status !== 200 || !r.body) throw new Error(`Request failed (${r.status})`);
+    const copy = await Wire.fromFull(r.body);
+    distrust.clear();
+    keep(copy);
+    scheduleVerify(true);
+    return copy;
+  }
+
+  // The texting order and the follow-up list for a copy, put together the
+  // way the server used to send them, and kept while the copy's rows are the
+  // same ones (a new version of the same rows gives the same answer).
+  let sideMemo = null;
+  function sideLists(copy) {
+    if (sideMemo && sideMemo.sides === copy.sides && sideMemo.ids === copy.ids && sideMemo.ro === copy.ro) return sideMemo;
+    const ranked = Wire.rankOf(copy);
+    sideMemo = { sides: copy.sides, ids: copy.ids, ro: copy.ro, priority: Wire.priorityOf(copy, ranked), dueIds: Wire.dueIdsOf(copy) };
+    // Ties in the order are broken here as the server breaks them. Should one
+    // ever come out differently (the server says so when it knows: ro), the
+    // order is asked for outright from then on.
+    if (!copy.ro && Wire.canDigest()) {
+      Wire.rankDigest(copy, ranked).then((d) => {
+        if (d === copy.rn || wantOrder || copy !== list) return;
+        wantOrder = true;
+        stateTag = '';
+        refreshSoon();
+      }).catch(() => {});
+    }
+    return sideMemo;
+  }
+
+  // ---- the whole copy, checked when there is time ----
+  // A sync checks the buckets it changes; the rest of the copy is checked
+  // against the server's digests now and then, in moments the page has
+  // nothing else to do: first which rows are in which bucket, then — in
+  // later moments, as many buckets at a time as fit — their text and digest.
+  // A bucket that does not come out as the server has it is asked for again
+  // (distrust), and the next check waits twice as long, so a fault that keeps
+  // coming back costs a little more time between tries rather than a loop.
+  const VERIFY_MS = 5 * 60000;
+  const VERIFY_MAX = 60 * 60000;
+  let verifyWait = VERIFY_MS;
+  let verifyTimer = 0;
+  const idle = (fn) => (window.requestIdleCallback
+    ? requestIdleCallback(fn, { timeout: 10000 })
+    : setTimeout(() => fn({ timeRemaining: () => 8, didTimeout: true }), 50));
+  function scheduleVerify(soon = false) {
+    if (verifyTimer || !Wire.canDigest()) return;
+    verifyTimer = setTimeout(() => idle(() => checkIndex(list)), soon ? 10000 : verifyWait);
+  }
+  function checkIndex(copy) {
+    if (!copy || copy !== list || document.hidden) { verifyTimer = 0; if (list) scheduleVerify(); return; }
+    const groups = Array.from({ length: copy.nb }, () => []);
+    for (let i = 0; i < copy.n; i++) groups[copy.bk[i]].push(i);
+    idle((deadline) => checkBuckets(copy, groups, 0, [], deadline));
+  }
+  async function checkBuckets(copy, groups, from, bad, deadline) {
+    if (copy !== list) { verifyTimer = 0; scheduleVerify(); return; }
+    const texts = [];
+    let b = from;
+    // The page's own edits come off for the reading, and go straight back on.
+    withOverlaysLifted(() => {
+      while (b < copy.nb && (!texts.length || deadline.timeRemaining() > 2)) {
+        texts.push([b, groups[b].map((i) => Wire.rowText(copy.f, copy.k, copy.cands[i], copy.sides[i])).join('')]);
+        b += 1;
+      }
+    });
+    try {
+      for (const [at, text] of texts) if (await Wire.digest(text, Wire.DIGEST) !== copy.d[at]) bad.push(at);
+    } catch { verifyTimer = 0; return; }
+    if (b < copy.nb) { idle((d) => checkBuckets(copy, groups, b, bad, d)); return; }
+    verifyTimer = 0;
+    if (copy !== list) { scheduleVerify(); return; }
+    if (!bad.length) { verifyWait = VERIFY_MS; return; }
+    for (const at of bad) distrust.add(at);
+    verifyWait = Math.min(verifyWait * 2, VERIFY_MAX);
+    stateTag = '';
+    refreshSoon();
+    scheduleVerify();
+  }
+
+  // ---- this page's edits, laid over the list ----
+  // A status picked here, a conversation read here: shown at once, on the
+  // very objects the list is drawn from, before the server has them. They are
+  // lifted off before each new state lands and laid back on (applyLocallyRead,
+  // applyPendingStatus) only where they still hold. Left on, a copy patched
+  // bucket by bucket would keep them on everyone whose bucket did not change:
+  // a conversation shown read here would stay read even while the server
+  // still has it unread — the "seen" call lost on a bad connection — and the
+  // page would never tell it again.
+  const overlays = new Map();        // person -> Map(field -> [had it, value before])
+  function overlay(c, field, value) {
+    let m = overlays.get(c);
+    if (!m) { m = new Map(); overlays.set(c, m); }
+    if (!m.has(field)) m.set(field, [Object.prototype.hasOwnProperty.call(c, field), c[field]]);
+    c[field] = value;
+  }
+  function liftOverlays() {
+    for (const [c, m] of overlays) {
+      for (const [field, [had, was]] of m) { if (had) c[field] = was; else delete c[field]; }
+    }
+    overlays.clear();
+  }
+  function withOverlaysLifted(fn) {
+    const now = [];
+    for (const [c, m] of overlays) for (const [field, [had, was]] of m) { now.push([c, field, c[field]]); if (had) c[field] = was; else delete c[field]; }
+    try { return fn(); } finally { for (const [c, field, v] of now) c[field] = v; }
   }
 
   // ---------------- Connection ----------------
@@ -2614,8 +2933,10 @@
         }
         // What is on screen may not be what the server holds any more (it may
         // have taken an earlier pick, or none): the next look asks for the
-        // whole state rather than being told nothing changed.
+        // whole state rather than being told nothing changed, and for this
+        // person's part of the list whatever its digest says.
         stateTag = '';
+        if (list) distrust.add(Wire.bucketOf(id, list.nb));
         oops(err);
         refreshSoon();
       });
@@ -2631,7 +2952,7 @@
       if (typeof s[prev] === 'number') s[prev] -= 1;
       if (typeof s[next] === 'number') s[next] += 1;
     }
-    c.status = next;
+    overlay(c, 'status', next);
   }
 
   // Every menu on screen for this person — a row, an open profile, a tile's
@@ -5133,7 +5454,7 @@
       if (!c) continue;
       const seen = ts || lastInTs(c, ch);
       locallyRead.set(`${c.id}:${ch}`, seen);
-      c[flag] = false;
+      overlay(c, flag, false);
       items.push(seen ? { id: c.id, ts: seen } : { id: c.id });
     }
     if (!items.length) return Promise.resolve();
@@ -5165,7 +5486,7 @@
       if (!c || !c[UNREAD_FLAG[ch]]) { locallyRead.delete(key); continue; }
       // Something newer than what was read: that is news.
       if (seen && tsNum(lastInTs(c, ch)) > tsNum(seen) + 1000) { locallyRead.delete(key); continue; }
-      c[UNREAD_FLAG[ch]] = false;
+      overlay(c, UNREAD_FLAG[ch], false);
       changed = true;
       if (Date.now() - (seenToldAt.get(key) || 0) > 20000) again[ch].push(seen ? { id, ts: seen } : { id });
     }
@@ -6829,8 +7150,20 @@
   }
 
   (async () => {
+    // The session, as index.html asked for it while the page loaded; asked
+    // again if that answer failed.
+    const authStatus = async () => {
+      const e = takeEarly('auth');
+      if (e) {
+        try {
+          const r = await fetchJson(null, { ms: STATE_MS }, e);
+          if (r.status === 200 && r.body) return r.body;
+        } catch { /* asked again below */ }
+      }
+      return api('/api/auth/status');
+    };
     const boot = async () => {
-      const a = await api('/api/auth/status');
+      const a = await authStatus();
       if (a.setupRequired) { $('#setupScreen').hidden = false; return; }
       knownTeams = a.teams || [];
       numericPins = Boolean(a.numericPins);

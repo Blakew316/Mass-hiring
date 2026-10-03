@@ -40,6 +40,7 @@ const PRECACHE = [
   '/index.html',
   '/styles.css',
   '/mobile.css',
+  '/wire.js',
   '/app.js',
   '/icons.js',
   '/xlsx-lite.js',

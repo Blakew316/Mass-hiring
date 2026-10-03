@@ -92,7 +92,7 @@ async function handle(request, url, context) {
   let sent = size;
   if (size > COMPRESS_OVER && /\bgzip\b/i.test(headers['accept-encoding'] || '')
       && !out.has('content-encoding') && /json|text|javascript/i.test(out.get('content-type') || '')) {
-    respBody = gzipSync(respBody);
+    respBody = compress(respBody, size, result.statusCode === 200 ? out.get('etag') : null);
     sent = respBody.length;
     out.set('content-encoding', 'gzip');
     out.delete('content-length');
@@ -111,6 +111,27 @@ async function handle(request, url, context) {
 }
 
 const NULL_BODY = new Set([101, 204, 205, 304]);
+
+// The whole compact list (GET /api/candidates?v=2, or a sync answered with
+// all of it) is the same bytes for every page that asks for one version of
+// it, and compressing its 6 MB took ~150 ms of every such answer. Its tag
+// names the team and the version (app.js fullListTag), so the last couple
+// are kept compressed under it — checked against the size too, so a tag
+// could only ever reuse a body of the same length it was made from.
+const LIST_TAG = /^W\/"c2-/;
+const zipped = new Map();          // tag -> { size, body }
+function compress(text, size, tag) {
+  const keep = Boolean(tag && LIST_TAG.test(tag));
+  const hit = keep ? zipped.get(tag) : null;
+  if (hit && hit.size === size) return hit.body;
+  const body = gzipSync(text);
+  if (keep) {
+    zipped.delete(tag);
+    zipped.set(tag, { size, body });
+    while (zipped.size > 2) zipped.delete(zipped.keys().next().value);
+  }
+  return body;
+}
 
 const COMPRESS_OVER = 1024;
 
