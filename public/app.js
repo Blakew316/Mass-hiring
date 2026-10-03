@@ -550,7 +550,12 @@
   let stateTag = '';
   // When the newest state on screen was asked for. An answer to a request
   // that set off before it is older than what is shown, and is dropped.
+  // Timed on the page's own clock, which only goes forward: Date.now() is the
+  // device's clock, and a phone putting its clock back (by hand, or a network
+  // time correction) would have had every answer after it dropped as older,
+  // the page frozen until the clock caught up again.
   let appliedAskedAt = 0;
+  const pageClock = () => performance.now();
   const teamIdNow = () => (currentTeam ? currentTeam.id : '');
   // The order below matters, and each step is where it is for a reason.
   async function refresh() {
@@ -558,7 +563,7 @@
     // a status picked while it is out is laid over its answer (the answer
     // may predate it), and an answer for a team this page has since left is
     // not this page's to show.
-    const askedAt = Date.now();
+    const askedAt = pageClock();
     const askedTeam = teamIdNow();
     const res = await fetch('/api/state', {
       headers: stateTag ? { 'If-None-Match': stateTag } : {},
@@ -2593,7 +2598,8 @@
     api(`/api/candidates/${id}`, { method: 'PATCH', body: { status } })
       .then(() => {
         const p = pendingStatus.get(id);
-        if (p && p.seq === seq) p.savedAt = Date.now();
+        // On the clock refresh() times its requests by (applyPendingStatus).
+        if (p && p.seq === seq) p.savedAt = pageClock();
         refreshSoon();
       })
       .catch((err) => {
