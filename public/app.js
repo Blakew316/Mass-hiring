@@ -31,6 +31,71 @@
   let pendingImport = null;    // {headers, rows, mapping, source}
   let composeIds = [];
 
+  // At 33,000 people every list and count drawn from the candidates is worth
+  // keeping rather than working out again on every render, and a kept answer
+  // is only as good as what it is keyed on. The rule: listVersion goes up
+  // whenever anything in state.candidates may have changed — a new state, a
+  // conversation read here, a status picked here and its revert, signing out
+  // or changing team — and stateVersion goes up with every new state and on
+  // signing out or changing team. Whatever is kept keys on the version it
+  // reads, plus the identity of any other part of the state it reads
+  // (state.salesiq, state.onboarding, state.texting.priority). A bump too
+  // many only costs a rebuild; a missing one shows a list that is out of
+  // date, so anything that changes a candidate in place bumps.
+  let listVersion = 0;
+  let stateVersion = 0;
+  const bumpList = () => { listVersion += 1; };
+
+  // Whatever is kept holds on to the copy of the list it was made from (its
+  // keys name it, and its rows are that copy's people), and one copy of
+  // 33,000 people is tens of megabytes. Kept until next asked for, the
+  // answers of a page last drawn an hour ago kept that hour-old copy alive
+  // beside the current one — a copy for each page visited between polls,
+  // five times the memory a phone needed before, and every collection of it
+  // slower. A new state puts every kept answer out of date anyway (both
+  // versions move), so each new state, and signing out, lets go of them all:
+  // forgetKept(). Anything kept outside kept() registers here how to let go.
+  const forgetters = [];
+  const forgetWithState = (fn) => { forgetters.push(fn); };
+  function forgetKept() { for (const fn of forgetters) fn(); }
+
+  // A value worked out from the state, kept until one of its keys changes.
+  // `keysOf` names what it depends on (versions, side objects, a query); the
+  // keys are compared one by one, by identity.
+  function kept(keysOf, build) {
+    let keys = null;
+    let value;
+    forgetWithState(() => { keys = null; value = undefined; });
+    return () => {
+      const now = keysOf();
+      if (!keys || now.length !== keys.length || now.some((k, i) => k !== keys[i])) {
+        value = build();
+        keys = now;
+      }
+      return value;
+    };
+  }
+
+  // Date.prototype.toLocale*String builds a new Intl.DateTimeFormat on every
+  // call, which is nearly all it costs; the minute tick, a page of rows and a
+  // conversation each ask for dozens. One formatter per set of options
+  // instead, made the first time it is used, giving the same answer for a
+  // date that is not one ("Invalid Date") as toLocaleString does.
+  function dateFormat(locales, options) {
+    let f = null;
+    return (when) => {
+      const t = when instanceof Date ? when.getTime() : new Date(when).getTime();
+      if (!Number.isFinite(t)) return 'Invalid Date';
+      if (!f) f = new Intl.DateTimeFormat(locales, options);
+      return f.format(t);
+    };
+  }
+  const clockTime = dateFormat([], { hour: 'numeric', minute: '2-digit' });
+  const weekdayShort = dateFormat([], { weekday: 'short' });
+  const monthDay = dateFormat([], { month: 'short', day: 'numeric' });
+  // What toLocaleString() with no options writes: the date and the time.
+  const fullStamp = dateFormat(undefined, { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+
   const STATUS = {
     new:      { label: 'Not contacted', cls: 'tint-navy' },
     emailed:  { label: 'Emailed',       cls: 'tint-blue' },
@@ -143,6 +208,8 @@
     const previous = currentTeam && currentTeam.id;
     const changed = previous !== (team && team.id);
     currentTeam = team || null;
+    // Nothing kept from one team's list may answer for another's.
+    if (changed) { listVersion += 1; stateVersion += 1; }
     if (currentTeam) { try { localStorage.setItem(LAST_TEAM_KEY, currentTeam.id); } catch {} }
     // Anything kept per team has to be re-read when the team changes, or the
     // new team inherits the old one's view of things.
@@ -361,6 +428,10 @@
   function resetClientState() {
     state = null;
     stateTag = '';
+    listVersion += 1;
+    stateVersion += 1;
+    forgetKept();
+    appliedAskedAt = 0;
     selected = new Set();
     filter = 'all';
     search = '';
@@ -380,7 +451,31 @@
     openThreadId = null;
     openMailId = null;
     threadLoading = false;
+    mailLoading = false;
+    thread = null;
+    mail = null;
+    mailShownSig = '';
+    // On a laptop each conversation column shows beside its list the whole
+    // time, so the last conversation opened — its messages, the name over
+    // them and a reply box addressed to that person — stayed on screen into
+    // the next team's session. Put them away with everything else.
+    $('#threadLive').hidden = true;
+    $('#threadEmpty').hidden = false;
+    $('#mailLive').hidden = true;
+    $('#mailEmpty').hidden = false;
+    for (const sel of ['#threadBody', '#threadName', '#threadSub', '#threadAvatar', '#threadNative', '#threadNote',
+      '#mailBody', '#mailName', '#mailSub', '#mailAvatar', '#mailNative', '#mailNote']) {
+      const el = $(sel);
+      if (el) el.innerHTML = '';
+    }
+    $('#threadInput').value = '';
+    $('#mailInput').value = '';
+    $('#mailGmail').hidden = true;
+    try { syncThreadStack(false); } catch { /* not declared yet: nothing open */ }
     try { resetUnreadMemory(); } catch { /* not declared yet: nothing kept */ }
+    // Status changes still waiting on the server belong to the old team, and
+    // so does a refresh that was about to go out for them.
+    try { pendingStatus.clear(); clearTimeout(soonTimer); soonTimer = 0; } catch { /* not declared yet: nothing waiting */ }
     for (const k of Object.keys(thumbs)) delete thumbs[k];
     for (const k of Object.keys(scrollMemory)) delete scrollMemory[k];
     // Unsaved edits and the template shown belong to the team they were made
@@ -453,7 +548,23 @@
   // back 304 with no body — nothing to parse, and nothing to re-render, which
   // is the whole point: most polls change nothing and should cost nothing.
   let stateTag = '';
+  // When the newest state on screen was asked for. An answer to a request
+  // that set off before it is older than what is shown, and is dropped.
+  // Timed on the page's own clock, which only goes forward: Date.now() is the
+  // device's clock, and a phone putting its clock back (by hand, or a network
+  // time correction) would have had every answer after it dropped as older,
+  // the page frozen until the clock caught up again.
+  let appliedAskedAt = 0;
+  const pageClock = () => performance.now();
+  const teamIdNow = () => (currentTeam ? currentTeam.id : '');
+  // The order below matters, and each step is where it is for a reason.
   async function refresh() {
+    // Who asked, and when, before anything can change under the request:
+    // a status picked while it is out is laid over its answer (the answer
+    // may predate it), and an answer for a team this page has since left is
+    // not this page's to show.
+    const askedAt = pageClock();
+    const askedTeam = teamIdNow();
     const res = await fetch('/api/state', {
       headers: stateTag ? { 'If-None-Match': stateTag } : {},
     });
@@ -468,13 +579,34 @@
     // first, a body cut off in transit or a drawing error left the page asking
     // "anything newer than this?", being told no, and showing the old list —
     // an import that never appeared — until something else changed.
+    const had = stateTag;
     stateTag = '';
-    state = await res.json();
+    const fresh = await res.json();
+    // Reading a list this size holds the page for a moment; let a tap or a
+    // keystroke that came in meanwhile through before it is drawn.
+    await new Promise((r) => setTimeout(r, 0));
+    // Signed out, or into another team, while it was on its way: not ours.
+    if (!signedIn || teamIdNow() !== askedTeam) return false;
+    // Older than what is already on screen (a slow answer overtaken by a
+    // later one): what is shown stands, and so does the tag it came with.
+    if (askedAt < appliedAskedAt) { if (!stateTag) stateTag = had; return false; }
+    appliedAskedAt = askedAt;
+    state = fresh;
+    listVersion += 1;
+    stateVersion += 1;
+    // Nothing kept from the last state answers for this one, and keeping it
+    // would keep the last copy of the list alive too.
+    forgetKept();
     authRequired = Boolean(state.auth && state.auth.required);
     setTeam(state.team);
     // A conversation read on this screen stays read, whatever an answer that
     // set off before the tap (or a "seen" call lost on a bad connection) says.
     applyLocallyRead();
+    // And a status picked here stays picked until the server has said so.
+    applyPendingStatus(askedAt);
+    // Someone removed on another device cannot stay selected: a selection
+    // counts people, and acts on them.
+    pruneSelection();
     renderAll();
     refreshProfile();
     // Back from a sign-in with Sales IQ on screen: it looks again.
@@ -533,7 +665,7 @@
     // button somebody presses three times.
     document.documentElement.classList.toggle('is-offline', lost);
     const when = lastSyncAt
-      ? new Date(lastSyncAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      ? clockTime(lastSyncAt)
       : '';
     $$('.conn-lost').forEach((el) => {
       el.hidden = !lost;
@@ -621,9 +753,15 @@
     $$('.nav-group').forEach((b) => b.classList.toggle('active', b.dataset.group === group));
     rememberInGroup(view);
     placeTabHighlight();
+    // Settings asks for its Sales IQ card on every visit (the code starts
+    // covered each time); asked before Settings is drawn, so that drawing it
+    // does not ask a second time for a team it has no answer for yet.
+    if (view === 'settings') loadSalesiq();
     // Anything that fell behind while you were on another page is drawn now,
-    // rather than on every poll for six pages at once.
+    // rather than on every poll for six pages at once; and the "5m ago"s on a
+    // page that was not, which the minute tick only keeps moving on screen.
     if (staleViews.has(view)) renderView(view);
+    else tickAgo($(`#view-${view}`));
     // Sales IQ keeps its own list (public/salesiq.js), and looks for changes
     // only while it is the page on screen.
     if (window.SalesIQ) { if (view === 'salesiq') window.SalesIQ.activate(); else window.SalesIQ.deactivate(); }
@@ -635,13 +773,12 @@
     if (view === 'onboarding' && !currentTeam && offlineBoot && window.Onboarding && lastTeam()) window.Onboarding.showCached(lastTeam());
     // The editors moved to Settings; Email and Texting are conversations only.
     if (view === 'settings') {
-      renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls();
+      renderTemplatePreview(); loadRelayToken(); placeAccountControls();
     }
-    if (view === 'texting') renderTexting();
     // Back on a page whose thread column shows the whole time (anything wider
     // than a phone): the conversation it holds may have moved on meanwhile.
     if (state && !phoneQuery.matches) {
-      const c = (id) => (state.candidates || []).find((x) => x.id === id);
+      const c = candById;
       if (view === 'texting' && openThreadId && !threadLoading) openThread(openThreadId, { quiet: true });
       if (view === 'template' && openMailId && !mailLoading && c(openMailId) && mailSig(c(openMailId)) !== mailShownSig) openMail(openMailId, { quiet: true });
     }
@@ -829,47 +966,57 @@
   }
 
   // ---------------- Dashboard ----------------
-  function renderDashboard() {
-    const s = state.stats;
-    const all = state.candidates;
-    const textCount = (fn) => all.filter(fn).length;
-    // "Sent" is everyone we tried to text, which has to include the numbers that
-    // turned out to have no iMessage account — we sent to them, it failed. Left
-    // out of the total, "No iMessage" was a percentage of something it was not
-    // part of, and could read over 100%; and "Delivered 100%" quietly hid every
-    // failure.
-    const t = {
-      sent: textCount((c) => ['sent', 'delivered', 'read', 'replied', 'not-imessage'].includes(c.textStatus)),
-      delivered: textCount((c) => ['delivered', 'read', 'replied'].includes(c.textStatus)),
-      read: textCount((c) => ['read', 'replied'].includes(c.textStatus)),
-      replied: textCount((c) => c.textStatus === 'replied'),
-      dead: textCount((c) => c.textStatus === 'not-imessage'),
-    };
-    // The email funnel, counted the way the texting one already was: how many
-    // people ever reached each stage, so every row is a subset of the one above
-    // it. Counting the *current status* instead mixed two different questions —
-    // somebody who opened and then replied has status "replied", so they landed
-    // in Opened but not in Sent, and the funnel read 200%.
-    const e = {
-      // status is included as well as the timestamp: an older or imported record
-      // can carry the stage without the date, and leaving those out would make
-      // Sent smaller than the rows beneath it.
-      sent: textCount((c) => Boolean(c.lastEmailedAt) || c.emailBounced
-        || c.status === 'bounced' || c.status === 'emailed'),
-      opened: textCount((c) => Boolean(c.openedAt)),
-      replied: textCount((c) => c.emailReplies > 0 || Boolean(c.lastReplyAt)),
+  // Every number the Dashboard counts from the list, in one pass over it (it
+  // was thirteen), kept until the list changes.
+  //
+  // "Sent" is everyone we tried to text, which has to include the numbers that
+  // turned out to have no iMessage account — we sent to them, it failed. Left
+  // out of the total, "No iMessage" was a percentage of something it was not
+  // part of, and could read over 100%; and "Delivered 100%" quietly hid every
+  // failure.
+  //
+  // The email funnel is counted the way the texting one already was: how many
+  // people ever reached each stage, so every row is a subset of the one above
+  // it. Counting the *current status* instead mixed two different questions —
+  // somebody who opened and then replied has status "replied", so they landed
+  // in Opened but not in Sent, and the funnel read 200%.
+  const TEXT_SENT = new Set(['sent', 'delivered', 'read', 'replied', 'not-imessage']);
+  const TEXT_DELIVERED = new Set(['delivered', 'read', 'replied']);
+  const dashboardCounts = kept(() => [listVersion, state && state.candidates], () => {
+    const t = { sent: 0, delivered: 0, read: 0, replied: 0, dead: 0 };
+    const e = { sent: 0, opened: 0, replied: 0, booked: 0, bounced: 0 };
+    let contacted = 0;
+    let repliedEither = 0;
+    for (const c of state.candidates) {
+      const ts = c.textStatus;
+      if (TEXT_SENT.has(ts)) t.sent += 1;
+      if (TEXT_DELIVERED.has(ts)) t.delivered += 1;
+      if (ts === 'read' || ts === 'replied') t.read += 1;
+      if (ts === 'replied') t.replied += 1;
+      if (ts === 'not-imessage') t.dead += 1;
+      // status is included as well as the timestamp: an older or imported
+      // record can carry the stage without the date, and leaving those out
+      // would make Sent smaller than the rows beneath it.
+      if (c.lastEmailedAt || c.emailBounced || c.status === 'bounced' || c.status === 'emailed') e.sent += 1;
+      if (c.openedAt) e.opened += 1;
+      const emailReplied = c.emailReplies > 0 || Boolean(c.lastReplyAt);
+      if (emailReplied) e.replied += 1;
       // Scoped to people who were emailed: a booking that came from a text
       // belongs in the texting story, not this one.
-      booked: textCount((c) => Boolean(c.bookedAt) && Boolean(c.lastEmailedAt)),
-      bounced: textCount((c) => c.emailBounced || c.status === 'bounced'),
-    };
-    const contacted = textCount((c) => Boolean(c.lastEmailedAt) || Boolean(c.lastTextedAt));
+      if (c.bookedAt && c.lastEmailedAt) e.booked += 1;
+      if (c.emailBounced || c.status === 'bounced') e.bounced += 1;
+      if (c.lastEmailedAt || c.lastTextedAt) contacted += 1;
+      // Everyone who ever answered, on either channel. The status-only count
+      // dropped anyone who replied and then booked, while the split beside it
+      // still counted them — so the smaller half could exceed the whole.
+      if (emailReplied || ts === 'replied' || c.textRepliedAt || c.status === 'replied') repliedEither += 1;
+    }
+    return { t, e, contacted, repliedEither };
+  });
 
-    // Everyone who ever answered, on either channel. The status-only count
-    // dropped anyone who replied and then booked, while the split beside it
-    // still counted them — so the smaller half could exceed the whole.
-    const repliedEither = textCount((c) => c.emailReplies > 0 || Boolean(c.lastReplyAt)
-      || c.textStatus === 'replied' || Boolean(c.textRepliedAt) || c.status === 'replied');
+  function renderDashboard() {
+    const s = state.stats;
+    const { t, e, contacted, repliedEither } = dashboardCounts();
 
     // Three and a half thousand candidates reads as 3514 without this, which
     // is a number you have to count the digits of.
@@ -942,26 +1089,39 @@
     return `<button type="button" class="today-cell tracker-cell" data-seg='${esc(JSON.stringify(patch))}' title="${esc(title)}">
       <div class="today-n">${n.toLocaleString()}</div><div class="today-label">${esc(label)}</div></button>`;
   }
+  // Each list counted in one pass, and only when the state brings a new one.
+  const trackerCounts = kept(() => [stateVersion, state && state.salesiq, state && state.onboarding], () => {
+    const iq = { all: 0, added: 0, invited: 0, completed: 0, tiers: {} };
+    for (const x of Object.values((state.salesiq && state.salesiq.byEmail) || {})) {
+      iq.all += 1;
+      if (x.status === 'added' || x.status === 'invited' || x.status === 'completed') iq[x.status] += 1;
+      if (x.status === 'completed') iq.tiers[x.tierKey] = (iq.tiers[x.tierKey] || 0) + 1;
+    }
+    const onb = { onPipeline: 0, pipeline: 0, sent: 0, signed: 0 };
+    for (const o of Object.values((state.onboarding && state.onboarding.byEmail) || {})) {
+      if (o.onPipeline) onb.onPipeline += 1;
+      const stage = onbStage(o);
+      if (stage) onb[stage] += 1;
+    }
+    return { iq, onb };
+  });
   function renderTrackers() {
-    const iq = Object.values((state.salesiq && state.salesiq.byEmail) || {});
-    const iqN = (st) => iq.filter((x) => x.status === st).length;
+    const { iq, onb } = trackerCounts();
     $('#iqTrackerGrid').innerHTML = [
-      trackerCell(iq.length, 'On Sales IQ', { iq: 'any' }, 'Everyone on the Sales IQ list — show them on Candidates'),
-      trackerCell(iqN('added'), 'Not sent', { iq: 'added' }, 'On the list, questionnaire not sent yet'),
-      trackerCell(iqN('invited'), 'Awaiting results', { iq: 'invited' }, 'Sent the questionnaire — waiting on their answers'),
-      trackerCell(iqN('completed'), 'Completed', { iq: 'completed' }, 'Finished the questionnaire'),
+      trackerCell(iq.all, 'On Sales IQ', { iq: 'any' }, 'Everyone on the Sales IQ list — show them on Candidates'),
+      trackerCell(iq.added, 'Not sent', { iq: 'added' }, 'On the list, questionnaire not sent yet'),
+      trackerCell(iq.invited, 'Awaiting results', { iq: 'invited' }, 'Sent the questionnaire — waiting on their answers'),
+      trackerCell(iq.completed, 'Completed', { iq: 'completed' }, 'Finished the questionnaire'),
     ].join('');
     $('#iqTrackerTiers').innerHTML = IQ_TIERS.map(([key, label, color]) => {
-      const n = iq.filter((x) => x.status === 'completed' && x.tierKey === key).length;
+      const n = iq.tiers[key] || 0;
       return n ? `<button type="button" class="tier-pill" data-seg='${esc(JSON.stringify({ iq: key }))}'><span class="tier-dot" style="background:${color}"></span>${esc(label)} <b>${n.toLocaleString()}</b></button>` : '';
     }).join('');
-    const onb = Object.values((state.onboarding && state.onboarding.byEmail) || {});
-    const stageN = (st) => onb.filter((o) => onbStage(o) === st).length;
     $('#onbTrackerGrid').innerHTML = [
-      trackerCell(onb.filter((o) => o.onPipeline).length, 'On the pipeline', { onb: 'any' }, 'Everyone added to Onboarding docs — show them on Candidates'),
-      trackerCell(stageN('pipeline'), 'Packet not sent', { onb: 'pipeline' }, 'On the pipeline, packet not sent yet'),
-      trackerCell(stageN('sent'), 'Awaiting signature', { onb: 'sent' }, 'Packet sent — waiting on their signature'),
-      trackerCell(stageN('signed'), 'Signed', { onb: 'signed' }, 'Signed and returned their paperwork'),
+      trackerCell(onb.onPipeline, 'On the pipeline', { onb: 'any' }, 'Everyone added to Onboarding docs — show them on Candidates'),
+      trackerCell(onb.pipeline, 'Packet not sent', { onb: 'pipeline' }, 'On the pipeline, packet not sent yet'),
+      trackerCell(onb.sent, 'Awaiting signature', { onb: 'sent' }, 'Packet sent — waiting on their signature'),
+      trackerCell(onb.signed, 'Signed', { onb: 'signed' }, 'Signed and returned their paperwork'),
     ].join('');
   }
   $('#trackerRow').addEventListener('click', (e) => {
@@ -982,9 +1142,25 @@
   // so the candidate list stays the shape it has always been.
   // Also by their id here, for someone whose address there is not this one.
   function iqOf(c) {
-    const x = (state && state.salesiq) || {};
-    const by = x.byEmail || {};
-    return by[String((c && c.email) || '').trim().toLowerCase()] || by[(x.byCrm || {})[c && c.id]] || null;
+    return sideRecord(state && state.salesiq, c);
+  }
+  // The two small maps (Sales IQ's and Onboarding docs'), as Maps: an object
+  // looked up with a freshly lowercased string for each of 33,000 people was
+  // most of what a count of them cost. Made once per map the state brings.
+  const sideMapsMade = new WeakMap();
+  function sideMaps(x) {
+    if (!x) return null;
+    let m = sideMapsMade.get(x);
+    if (!m) {
+      m = { byEmail: new Map(Object.entries(x.byEmail || {})), byCrm: new Map(Object.entries(x.byCrm || {})) };
+      sideMapsMade.set(x, m);
+    }
+    return m;
+  }
+  function sideRecord(x, c) {
+    const m = sideMaps(x);
+    if (!m) return null;
+    return m.byEmail.get(String((c && c.email) || '').trim().toLowerCase()) || m.byEmail.get(m.byCrm.get(c && c.id)) || null;
   }
   // Nobody at Wholesale Payments goes to Sales IQ or Onboarding docs.
   const OWN_COMPANY_EMAIL = /@(?:[a-z0-9-]+\.)*wholesalepayments\.com$/i;
@@ -1046,9 +1222,7 @@
   // Whether someone has been sent their onboarding packet, and whether it has
   // come back signed — by address, from the state, as with Sales IQ.
   function onbOf(c) {
-    const x = (state && state.onboarding) || {};
-    const by = x.byEmail || {};
-    return by[String((c && c.email) || '').trim().toLowerCase()] || by[(x.byCrm || {})[c && c.id]] || null;
+    return sideRecord(state && state.onboarding, c);
   }
   // How far along: '' (not there), on the pipeline, packet sent, signed.
   const onbStage = (o) => (!o ? '' : o.signedAt ? 'signed' : o.sentAt ? 'sent' : o.onPipeline ? 'pipeline' : '');
@@ -1081,7 +1255,7 @@
   }
 
   // ---------------- Stat tiles → detail views ----------------
-  const fmtWhen = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const fmtWhen = dateFormat([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   function candRow(c, metaHtml, sideHtml = '', extraHtml = '') {
     const name = c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email;
     const detail = [c.role, c.company].filter(Boolean).join(' @ ');
@@ -1154,13 +1328,13 @@
       if (sync.syncEnabled) {
         actions.innerHTML = `<button class="btn" id="syncNowBtn">${icon('calendar', 14)} Sync now</button><span>${sync.lastSyncAt ? `Last synced ${timeAgo(sync.lastSyncAt)}` : 'Not synced yet'}${sync.error ? ` · <span style="color:var(--red)">${esc(sync.error)}</span>` : ''}</span>`;
         rows = items.map((i) => {
-          const c = i.candidateId ? state.candidates.find((x) => x.id === i.candidateId) : null;
+          const c = i.candidateId ? candById(i.candidateId) : null;
           const who = c ? (c.name || c.email) : (i.inviteeName || i.inviteeEmail || 'Unknown invitee');
           const detail = c ? [c.role, c.company].filter(Boolean).join(' @ ') : 'not in your candidate list';
           return `<li class="tile-row">
             <span class="avatar tint-green">${esc(initials(c || { name: who, email: i.inviteeEmail }))}</span>
             <div class="tile-main">
-              <div class="tile-when">${esc(fmtWhen(i.start))}${i.end ? ` – ${new Date(i.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}${startsSoon(i.start)}</div>
+              <div class="tile-when">${esc(fmtWhen(i.start))}${i.end ? ` – ${clockTime(i.end)}` : ''}${startsSoon(i.start)}</div>
               <div class="tile-name">${esc(who)} <span class="muted small">· ${esc(i.name)}</span></div>
               <div class="tile-email">${esc(i.inviteeEmail || (c && c.email) || '')}${detail ? ` · ${esc(detail)}` : ''}</div>
             </div>
@@ -1245,7 +1419,7 @@
   });
   $('#tileList').addEventListener('change', (e) => {
     if (!e.target.classList.contains('tile-status')) return;
-    api(`/api/candidates/${e.target.dataset.id}`, { method: 'PATCH', body: { status: e.target.value } }).then(refresh).catch(oops);
+    setStatus(e.target.dataset.id, e.target.value);
   });
   $('#tileActions').addEventListener('click', async (e) => {
     if (!e.target.closest('#syncNowBtn')) return;
@@ -1260,14 +1434,17 @@
     try {
       const r = await api('/api/calendly/sync', { method: 'POST' });
       if (r.newBookings > 0) { await refresh(); toast(`${r.newBookings} new interview${r.newBookings === 1 ? '' : 's'} booked.`); }
-      else if (r.ok) refresh().catch(() => {});
+      // A sync that changed nothing has nothing to show, and looking anyway
+      // fetched the whole state every five minutes for it. A server that does
+      // not say (one from before it could) is looked at, as it always was.
+      else if (r.ok && r.changed !== false) refresh().catch(() => {});
     } catch {}
   }
 
-  // Everyone still at "Not contacted".
-  function uncontactedIds() {
-    return state.candidates.filter((c) => c.status === 'new').map((c) => c.id);
-  }
+  // Everyone still at "Not contacted", kept until the list changes. (The
+  // Email page's button counts them after every new state, from any page.)
+  const uncontactedIds = kept(() => [listVersion, state && state.candidates],
+    () => state.candidates.filter((c) => c.status === 'new').map((c) => c.id));
 
   // The two channels as funnels, drawn against the same scale so the shapes can
   // be compared at a glance. Texting is the one that can show delivered and
@@ -1419,7 +1596,7 @@
   // Where tapping an update takes you: the conversation it is about, or the
   // person. Nowhere, if they have since been removed.
   function feedTarget(ev) {
-    if (!ev.candidateId || !(state.candidates || []).some((c) => c.id === ev.candidateId)) return '';
+    if (!ev.candidateId || !candById(ev.candidateId)) return '';
     if (ev.type === 'replied') return 'email';
     if (ev.type === 'text-replied' || ev.type === 'text-optout' || ev.type === 'text-read') return 'text';
     return 'profile';
@@ -1427,7 +1604,7 @@
   document.addEventListener('click', (e) => {
     const row = e.target.closest('[data-feed-open]');
     if (!row) return;
-    const c = (state.candidates || []).find((x) => x.id === row.dataset.feedOpen);
+    const c = candById(row.dataset.feedOpen);
     if (!c) return;
     if (row.dataset.feedTo === 'email') { show('template'); openMail(c.id); }
     else if (row.dataset.feedTo === 'text') { show('texting'); openThread(c.id); }
@@ -1436,12 +1613,19 @@
 
   // "just now" has to become "5m ago" without waiting for something else to
   // change: an unchanged poll draws nothing, so the times are kept moving here.
-  setInterval(() => {
-    if (document.hidden) return;
-    $$('[data-ago]').forEach((el) => {
+  // Only the ones that can be seen — the page on screen and the bell's panel
+  // when it is open; a page is brought up to date as it is shown (show()).
+  function tickAgo(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-ago]').forEach((el) => {
       const t = timeAgo(el.dataset.ago);
       if (el.textContent !== t) el.textContent = t;
     });
+  }
+  setInterval(() => {
+    if (document.hidden) return;
+    tickAgo($('.view.active'));
+    if (!$('#bellPanel').hidden) tickAgo($('#bellPanel'));
   }, 60000);
 
   function renderTextToday(t) {
@@ -1481,7 +1665,7 @@
     const clock = (iso) => {
       const d = new Date(iso);
       const sameDay = d.toDateString() === new Date().toDateString();
-      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + (sameDay ? '' : ` ${d.toLocaleDateString([], { weekday: 'short' })}`);
+      return clockTime(d) + (sameDay ? '' : ` ${weekdayShort(d)}`);
     };
     const remainingToday = Number.isFinite(q.remainingToday) ? q.remainingToday : Math.max(0, (q.dailyLimit || 0) - (q.sentToday || 0));
     if (q.active) {
@@ -1562,12 +1746,13 @@
     $('#followUpDueBadge').textContent = due ? `${due} due` : 'nobody due';
   }
 
+  const shortDay = dateFormat('en-US', { month: 'short', day: 'numeric' });
   function timeAgo(ts) {
     const sec = (Date.now() - new Date(ts).getTime()) / 1000;
     if (sec < 60) return 'just now';
     if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
     if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
-    return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return shortDay(ts);
   }
 
   // ---------------- Candidates ----------------
@@ -1575,46 +1760,142 @@
   // person reading the list, so compare them loosely.
   const roleKey = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
+  // Everyone's place in the list, by id, for the many places that start from
+  // an id (the first of any two with one id, as .find() would have it).
+  const candPos = kept(() => [listVersion, state && state.candidates], () => {
+    const m = new Map();
+    ((state && state.candidates) || []).forEach((c, i) => { if (!m.has(c.id)) m.set(c.id, i); });
+    return m;
+  });
+  const candById = (id) => {
+    if (!state || !state.candidates) return null;
+    const i = candPos().get(id);
+    return i === undefined ? null : state.candidates[i];
+  };
+
+  // Strings compared the way localeCompare compares them, without making a
+  // new collator for every pair.
+  const collator = new Intl.Collator();
+
+  // ---- the index ----
+  // What the filters, the pills and the menus ask of each person, worked out
+  // once per version of the list in one pass: where they are with Sales IQ and
+  // Onboarding docs, the number a text would go to, their role as compared,
+  // their industry — and every count the pills and the menus show. Rendering
+  // the page used to walk all 33,000 people some twenty-five times to count
+  // them, on every render.
+  const IQ_TIER_KEYS = new Set(['elite', 'strong', 'develop', 'notready']);
+  const candIndex = kept(
+    () => [listVersion, state && state.candidates, state && state.salesiq, state && state.onboarding],
+    () => {
+      const all = (state && state.candidates) || [];
+      const n = all.length;
+      const idx = {
+        n, pos: candPos(), iq: new Array(n), stage: new Array(n), phone: new Array(n), role: new Array(n), industry: new Array(n),
+        status: {}, roles: new Map(), noRole: 0, byIndustry: {}, noNumber: 0,
+        iqN: { any: 0, none: 0, added: 0, invited: 0, completed: 0, elite: 0, strong: 0, develop: 0, notready: 0 },
+        onbN: { any: 0, none: 0, pipeline: 0, sent: 0, signed: 0 },
+      };
+      for (let i = 0; i < n; i++) {
+        const c = all[i];
+        idx.status[c.status] = (idx.status[c.status] || 0) + 1;
+        const key = roleKey(c.role);
+        idx.role[i] = key;
+        if (key) {
+          const entry = idx.roles.get(key);
+          if (entry) entry.n += 1;
+          else idx.roles.set(key, { label: String(c.role).trim(), n: 1 });
+        } else idx.noRole += 1;
+        const ind = c.industry || 'other';
+        idx.industry[i] = ind;
+        idx.byIndustry[ind] = (idx.byIndustry[ind] || 0) + 1;
+        const ph = textPhoneOf(c);
+        idx.phone[i] = ph;
+        if (!ph) idx.noNumber += 1;
+        // Counted the way iqMatch() and onbMatch() decide them.
+        const s = iqOf(c);
+        idx.iq[i] = s;
+        if (!s) idx.iqN.none += 1;
+        else {
+          idx.iqN.any += 1;
+          if (s.status === 'added' || s.status === 'invited' || s.status === 'completed') idx.iqN[s.status] += 1;
+          if (s.status === 'completed' && IQ_TIER_KEYS.has(s.tierKey)) idx.iqN[s.tierKey] += 1;
+        }
+        const stage = onbStage(onbOf(c));
+        idx.stage[i] = stage;
+        if (!stage) idx.onbN.none += 1;
+        else { idx.onbN.any += 1; idx.onbN[stage] += 1; }
+      }
+      return idx;
+    },
+  );
+
+  // ---- search ----
+  // What a search looks through, made the first time somebody searches this
+  // version of the list (and warmed when the box is focused) rather than
+  // lowercased afresh for every person on every keystroke. One string per
+  // person: the fields, lowercased, joined by a character nobody types, so a
+  // match is still a match within one field.
+  const SEARCH_FIELDS = ['name', 'firstName', 'lastName', 'email', 'role', 'company', 'pastRoles', 'phone', 'location'];
+  // A US number is stored and typed with and without the leading 1, so drop
+  // it from both sides before comparing — otherwise "+1 617 235 0003" is
+  // longer than the number it is looking for and matches nothing.
+  const phoneTail = (d) => (d.length === 11 && d[0] === '1' ? d.slice(1) : d);
+  const searchIndex = kept(() => [listVersion, state && state.candidates], () => {
+    const all = (state && state.candidates) || [];
+    const hay = new Array(all.length);
+    const digits = new Array(all.length);
+    for (let i = 0; i < all.length; i++) {
+      const c = all[i];
+      hay[i] = SEARCH_FIELDS.map((f) => String(c[f] || '').toLowerCase()).join('\u0001');
+      digits[i] = phoneTail(String(c.phone || '').replace(/\D/g, ''));
+    }
+    return { hay, digits };
+  });
+
+  // Who the filters and the search let through, in the list's own order.
+  // Kept for this version of the list and this exact question, so paging,
+  // ticking and the redraw after a status change do not filter 33,000 again.
+  let visibleKept = { keys: null, rows: [] };
+  forgetWithState(() => { visibleKept = { keys: null, rows: [] }; });
   function visibleCandidates() {
+    const pri = state.texting && state.texting.priority;
+    const keys = [listVersion, state.candidates, state.salesiq, state.onboarding, pri,
+      filter, roleFilter, industryFilter, addedFilter, textedFilter, rankFilter, iqFilter, onbFilter, search];
+    if (visibleKept.keys && keys.every((k, i) => k === visibleKept.keys[i])) return visibleKept.rows;
+    const idx = candIndex();
+    const all = state.candidates;
     const q = search.toLowerCase().trim();
     // A number is written a dozen ways — (617) 235-0001, 617.235.0001,
     // +1 617 235 0001 — and nobody types it back the way it was stored, so a
     // literal substring match found almost nothing. Once the query looks like a
     // number, compare digits to digits as well.
-    // A US number is stored and typed with and without the leading 1, so drop
-    // it from both sides before comparing — otherwise "+1 617 235 0003" is
-    // longer than the number it is looking for and matches nothing.
-    const tail = (d) => (d.length === 11 && d[0] === '1' ? d.slice(1) : d);
-    const qDigits = tail(q.replace(/\D/g, ''));
+    const qDigits = phoneTail(q.replace(/\D/g, ''));
     const byDigits = qDigits.length >= 3 && /^[\d\s().+-]+$/.test(q);
-    return state.candidates.filter((c) => {
-      if (filter !== 'all' && c.status !== filter) return false;
-      if (roleFilter === '__none' && roleKey(c.role)) return false;
-      if (!matchesFilters(c)) return false;
-      if (!q) return true;
-      if (byDigits && tail(String(c.phone || '').replace(/\D/g, '')).includes(qDigits)) return true;
-      return [c.name, c.firstName, c.lastName, c.email, c.role, c.company, c.pastRoles, c.phone, c.location]
-        .some((f) => String(f || '').toLowerCase().includes(q));
-    });
+    const found = q ? searchIndex() : null;
+    const rows = [];
+    for (let i = 0; i < all.length; i++) {
+      const c = all[i];
+      if (filter !== 'all' && c.status !== filter) continue;
+      if (roleFilter === '__none' && idx.role[i]) continue;
+      if (!matchesFilters(c, i, idx)) continue;
+      if (q && !(byDigits && found.digits[i].includes(qDigits)) && !found.hay[i].includes(q)) continue;
+      rows.push(c);
+    }
+    visibleKept = { keys, rows };
+    return rows;
   }
 
   // Every role people currently hold, most common first, with how many hold it.
   function renderRoleFilter() {
     const sel = $('#roleFilter');
     if (!sel) return;
-    const counts = new Map();
-    for (const c of state.candidates) {
-      const key = roleKey(c.role);
-      if (!key) continue;
-      const entry = counts.get(key) || { label: String(c.role).trim(), n: 0 };
-      entry.n += 1;
-      counts.set(key, entry);
-    }
-    const roles = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].label.localeCompare(b[1].label));
-    const missing = state.candidates.filter((c) => !roleKey(c.role)).length;
+    const idx = candIndex();
+    const roles = [...idx.roles.entries()].sort((a, b) => b[1].n - a[1].n || collator.compare(a[1].label, b[1].label));
+    const missing = idx.noRole;
     // That role is gone from the list. "No role on file" is not a role, so it
     // stays chosen while anybody still has no role, whatever a refresh brings.
-    if (roleFilter === '__none' ? !missing : roleFilter && !counts.has(roleFilter)) roleFilter = '';
+    if (roleFilter === '__none' ? !missing : roleFilter && !idx.roles.has(roleFilter)) roleFilter = '';
     setOptions(sel, `<option value="">All roles (${state.candidates.length})</option>`
       + roles.map(([key, r]) => `<option value="${esc(key)}">${esc(r.label)} (${r.n})</option>`).join('')
       + (missing ? `<option value="__none">No role on file (${missing})</option>` : ''), roleFilter);
@@ -1639,15 +1920,17 @@
   const daysSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / DAY : Infinity);
   const industryLabel = (code) => ((state.industries || {})[code] || 'Other');
 
-  function matchesFilters(c) {
-    if (industryFilter && (c.industry || 'other') !== industryFilter) return false;
-    if (roleFilter && roleFilter !== '__none' && roleKey(c.role) !== roleFilter) return false;
+  // `i` is their place in the list, and `idx` the index (candIndex()) that
+  // already knows the rest about them.
+  function matchesFilters(c, i, idx) {
+    if (industryFilter && idx.industry[i] !== industryFilter) return false;
+    if (roleFilter && roleFilter !== '__none' && idx.role[i] !== roleFilter) return false;
 
     if (addedFilter === 'old') { if (daysSince(c.addedAt) <= 90) return false; }
     else if (addedFilter && daysSince(c.addedAt) > Number(addedFilter)) return false;
 
     if (textedFilter) {
-      const textable = Boolean(textPhoneOf(c));
+      const textable = Boolean(idx.phone[i]);
       if (textedFilter === 'nonumber') { if (textable) return false; }
       else if (textedFilter === 'never') { if (c.lastTextedAt) return false; }
       else if (textedFilter === 'ready') { if (!textPriorityOf(c.id)) return false; }
@@ -1660,8 +1943,8 @@
       if (rankFilter === 'unranked') { if (pri) return false; }
       else if (!pri || pri.rank > Number(rankFilter)) return false;
     }
-    if (iqFilter && !iqMatch(c, iqFilter)) return false;
-    if (onbFilter && !onbMatch(c, onbFilter)) return false;
+    if (iqFilter && !iqMatch(idx.iq[i], iqFilter)) return false;
+    if (onbFilter && !onbMatch(idx.stage[i], onbFilter)) return false;
     return true;
   }
 
@@ -1676,16 +1959,16 @@
     ['any', 'In Onboarding docs'], ['none', 'Not in Onboarding docs'], ['pipeline', 'Docs · packet not sent'],
     ['sent', 'Docs sent · awaiting signature'], ['signed', 'Docs signed'],
   ];
-  function iqMatch(c, v) {
-    const s = iqOf(c);
+  // `s` is someone's Sales IQ record (iqOf), `stage` their Onboarding stage
+  // (onbStage). The index counts every choice the same way.
+  function iqMatch(s, v) {
     if (v === 'none') return !s;
     if (!s) return false;
     if (v === 'any') return true;
     if (['added', 'invited', 'completed'].includes(v)) return s.status === v;
     return s.status === 'completed' && s.tierKey === v;
   }
-  function onbMatch(c, v) {
-    const stage = onbStage(onbOf(c));
+  function onbMatch(stage, v) {
     if (v === 'none') return !stage;
     if (v === 'any') return Boolean(stage);
     return stage === v;
@@ -1739,13 +2022,22 @@
   // Ticking thirty boxes and then narrowing the list used to throw the lot away
   // without a word. Keep whoever is still on screen — so nothing hidden can be
   // emailed or texted either — and say how many fell outside.
-  function narrowSelection() {
+  // A search narrows the list as much as any menu does, so it narrows the
+  // selection too (`what` names it in the note).
+  function narrowSelection(what = 'filter') {
     if (!selected.size) return;
     const before = selected.size;
     const visible = new Set(visibleCandidates().map((c) => c.id));
     for (const id of [...selected]) if (!visible.has(id)) selected.delete(id);
     const gone = before - selected.size;
-    if (gone) toast(`${gone} selected ${gone === 1 ? 'person' : 'people'} fell outside this filter and ${gone === 1 ? 'is' : 'are'} no longer selected.`);
+    if (gone) toast(`${gone} selected ${gone === 1 ? 'person' : 'people'} fell outside this ${what} and ${gone === 1 ? 'is' : 'are'} no longer selected.`);
+  }
+
+  // Someone removed on another device is not there to email or text, and a
+  // selection that still counted them said "3 selected" over two people.
+  function pruneSelection() {
+    if (!selected.size || !state) return;
+    for (const id of [...selected]) if (!candById(id)) selected.delete(id);
   }
 
   function syncFilterControls() {
@@ -1775,23 +2067,26 @@
     $('#pagerNext').disabled = page >= pageCount - 1;
   }
 
+  const rankedCount = kept(() => [stateVersion, state && state.texting && state.texting.priority],
+    () => Object.keys(((state.texting && state.texting.priority) || {}).order || {}).length);
+
   function renderViews() {
     const all = state.candidates || [];
     if (!all.length) { drawOnce($('#candViews'), ''); $('#candCount').textContent = ''; return; }
-    const pri = (state.texting && state.texting.priority) || { order: {} };
-    const ranked = Object.keys(pri.order || {}).length;
-    const count = (fn) => all.filter(fn).length;
+    const idx = candIndex();
+    const ranked = rankedCount();
+    const byStatus = (k) => idx.status[k] || 0;
 
     const views = [
       { label: 'Everyone', n: all.length, patch: {} },
       { label: 'Best to text next', n: Math.min(ranked, 50), patch: { rank: '50', sort: 'texting' } },
-      { label: 'Replied', n: count((c) => c.status === 'replied'), patch: { status: 'replied' } },
-      { label: 'Not contacted', n: count((c) => c.status === 'new'), patch: { status: 'new' } },
-      { label: 'Booked', n: count((c) => c.status === 'booked'), patch: { status: 'booked' } },
-      { label: 'Needs a number', n: count((c) => !textPhoneOf(c)), patch: { texted: 'nonumber' } },
-      { label: 'Sales IQ done', n: count((c) => iqMatch(c, 'completed')), patch: { iq: 'completed' } },
-      { label: 'Docs awaiting signature', n: count((c) => onbMatch(c, 'sent')), patch: { onb: 'sent' } },
-      { label: 'Docs signed', n: count((c) => onbMatch(c, 'signed')), patch: { onb: 'signed' } },
+      { label: 'Replied', n: byStatus('replied'), patch: { status: 'replied' } },
+      { label: 'Not contacted', n: byStatus('new'), patch: { status: 'new' } },
+      { label: 'Booked', n: byStatus('booked'), patch: { status: 'booked' } },
+      { label: 'Needs a number', n: idx.noNumber, patch: { texted: 'nonumber' } },
+      { label: 'Sales IQ done', n: idx.iqN.completed, patch: { iq: 'completed' } },
+      { label: 'Docs awaiting signature', n: idx.onbN.sent, patch: { onb: 'sent' } },
+      { label: 'Docs signed', n: idx.onbN.signed, patch: { onb: 'signed' } },
     ].filter((v) => v.n > 0);
 
     // Which pill, if any, describes exactly what is on screen right now.
@@ -1813,21 +2108,19 @@
     drawOnce($('#candViews'), pills);
 
     // The industry menu mirrors what actually exists in the list.
-    const byIndustry = {};
-    for (const c of all) { const k = c.industry || 'other'; byIndustry[k] = (byIndustry[k] || 0) + 1; }
-    setOptions($('#industryFilter'), '<option value="">Any industry</option>' + Object.entries(byIndustry)
+    setOptions($('#industryFilter'), '<option value="">Any industry</option>' + Object.entries(idx.byIndustry)
       .sort((x, y) => y[1] - x[1])
       .map(([code, n]) => `<option value="${esc(code)}">${esc(industryLabel(code))} (${n})</option>`).join(''), industryFilter);
 
     // Sales IQ and Onboarding docs, each option with how many it would show.
     setOptions($('#iqFilter'), '<option value="">Sales IQ: any</option>' + IQ_FILTERS
-      .map(([k, label]) => `<option value="${k}">${esc(label)} (${count((c) => iqMatch(c, k)).toLocaleString()})</option>`).join(''), iqFilter);
+      .map(([k, label]) => `<option value="${k}">${esc(label)} (${(idx.iqN[k] || 0).toLocaleString()})</option>`).join(''), iqFilter);
     setOptions($('#onbFilter'), '<option value="">Onboarding: any</option>' + ONB_FILTERS
-      .map(([k, label]) => `<option value="${k}">${esc(label)} (${count((c) => onbMatch(c, k)).toLocaleString()})</option>`).join(''), onbFilter);
+      .map(([k, label]) => `<option value="${k}">${esc(label)} (${(idx.onbN[k] || 0).toLocaleString()})</option>`).join(''), onbFilter);
 
     // And the stage menu carries its counts, so picking one is informed.
     setOptions($('#stageFilter'), `<option value="all">Any stage (${all.length.toLocaleString()})</option>` + Object.entries(STATUS)
-      .map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)} (${count((c) => c.status === k).toLocaleString()})</option>`).join(''), filter || 'all');
+      .map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)} (${byStatus(k).toLocaleString()})</option>`).join(''), filter || 'all');
   }
 
   function renderActiveFilters() {
@@ -1874,24 +2167,39 @@
     $(id).addEventListener('change', (e) => { set(e.target.value); narrowSelection(); renderCandidates(); });
   }
 
-  function renderCandidates() {
-    renderViews();
-    let rows = visibleCandidates();
-    const ranking = sortBy === 'texting';
-    if (sortBy === 'newest') rows = [...rows].sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')));
-    else if (sortBy === 'name') rows = [...rows].sort((a, b) => String(a.name || a.email).localeCompare(String(b.name || b.email)));
-    if (ranking) {
+  // The rows in the order chosen, kept with the answer they sort: paging
+  // through a list sorted by name sorted it again for every page. Each key
+  // is worked out once per person rather than twice per comparison, and the
+  // sort is stable, so ties keep the list's own order as they always did.
+  let sortedKept = { from: null, by: '', rows: [] };
+  forgetWithState(() => { sortedKept = { from: null, by: '', rows: [] }; });
+  function sortedCandidates() {
+    const rows = visibleCandidates();
+    if (sortedKept.from === rows && sortedKept.by === sortBy) return sortedKept.rows;
+    const byKey = (key, compare) => rows.map((c) => ({ c, k: key(c) })).sort(compare).map((x) => x.c);
+    let out = rows;
+    if (sortBy === 'newest') out = byKey((c) => String(c.addedAt || ''), (a, b) => collator.compare(b.k, a.k));
+    else if (sortBy === 'name') out = byKey((c) => String(c.name || c.email), (a, b) => collator.compare(a.k, b.k));
+    else if (sortBy === 'texting') {
       // Ranked people first in their own order, then everyone who cannot be
       // texted — they are still listed, because "why is this person not here"
       // is the first question the order raises.
-      rows = [...rows].sort((a, b) => {
-        const pa = textPriorityOf(a.id); const pb = textPriorityOf(b.id);
+      out = byKey((c) => textPriorityOf(c.id), (a, b) => {
+        const pa = a.k; const pb = b.k;
         if (pa && pb) return pa.rank - pb.rank;
         if (pa) return -1;
         if (pb) return 1;
         return 0;
       });
     }
+    sortedKept = { from: rows, by: sortBy, rows: out };
+    return out;
+  }
+
+  function renderCandidates() {
+    renderViews();
+    const rows = sortedCandidates();
+    const ranking = sortBy === 'texting';
     $('#rankHead').hidden = !ranking;
 
     // Changing what is being asked for starts again at the first page; paging
@@ -1959,12 +2267,29 @@
   const selectedCandidates = () => state.candidates.filter((c) => selected.has(c.id));
   const selectedTextable = () => selectedCandidates().filter((c) => textPhoneOf(c));
 
+  // Every number the bar shows, in one pass over the people ticked rather
+  // than three over everyone.
+  function selectionCounts() {
+    const idx = candIndex();
+    const out = { textable: 0, iq: 0, onb: 0 };
+    for (const id of selected) {
+      const i = idx.pos.get(id);
+      if (i === undefined) continue;
+      if (idx.phone[i]) out.textable += 1;
+      if (canPipe(state.candidates[i])) {
+        if (!idx.iq[i]) out.iq += 1;
+        if (!idx.stage[i]) out.onb += 1;
+      }
+    }
+    return out;
+  }
+
   function updateSendButton() {
     const bar = $('#selectionBar');
     const n = selected.size;
     bar.hidden = n === 0;
     if (!n) return;
-    const textable = selectedTextable().length;
+    const { textable, iq: iqN, onb: onbN } = selectionCounts();
     $('#selCount').textContent = `${n} selected`;
     $('#selEmailBtn').innerHTML = `${icon('mail', 15)} Email ${n}`;
     $('#selTextBtn').innerHTML = `${icon('bubble', 15)} Text ${textable}`;
@@ -1973,8 +2298,6 @@
     $('#selNote').textContent = textable === 0
       ? 'None of these have a phone number yet'
       : (textable < n ? `${n - textable} of them have no number` : '');
-    const iqN = selectedCandidates().filter((c) => canPipe(c) && !iqOf(c)).length;
-    const onbN = selectedCandidates().filter((c) => canPipe(c) && !onbStage(onbOf(c))).length;
     $('#selIqBtn').innerHTML = `${icon('clipboard', 15)} Add ${iqN} to Sales IQ`;
     $('#selIqBtn').disabled = iqN === 0;
     $('#selIqBtn').title = iqN ? 'Put them on the Sales IQ list — send the questionnaire when you are ready' : 'Everyone selected is on Sales IQ already (or has no email)';
@@ -2048,7 +2371,7 @@
   }
   $('#candLinks').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-link]');
-    const c = b && state.candidates.find((x) => x.id === linksFor);
+    const c = b && candById(linksFor);
     if (!c) return;
     const act = b.dataset.link;
     const goes = ['iq-open', 'onb-open', 'onb-signed'].includes(act);
@@ -2083,7 +2406,7 @@
     const tr = e.target.closest('tr');
     if (!tr) return;
     const id = tr.dataset.id;
-    const cand = state.candidates.find((c) => c.id === id);
+    const cand = candById(id);
     if (e.target.classList.contains('row-check')) {
       e.target.checked ? selected.add(id) : selected.delete(id);
       updateSendButton();
@@ -2106,7 +2429,7 @@
     const tr = e.target.closest('tr.cand-row');
     if (!tr || e.target !== tr) return;
     e.preventDefault();
-    const cand = state.candidates.find((c) => c.id === tr.dataset.id);
+    const cand = candById(tr.dataset.id);
     if (cand) openProfile(cand);
   });
 
@@ -2136,7 +2459,7 @@
   // one place — a card on a wide screen, a sheet on a phone. The list stays
   // just the list.
   let profileId = null;
-  const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const fmtDate = dateFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   function profileRow(label, value) {
     return value ? `<div class="profile-row"><dt>${esc(label)}</dt><dd>${value}</dd></div>` : '';
   }
@@ -2151,7 +2474,7 @@
   function renderProfile(c) {
     profileId = c.id;
     const name = c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email || '—';
-    const i = Math.max(0, state.candidates.findIndex((x) => x.id === c.id));
+    const i = candPos().get(c.id) || 0;
     const av = $('#profAvatar');
     av.className = `avatar profile-avatar ${AVATAR_TINTS[i % AVATAR_TINTS.length]}`;
     av.textContent = initials(c);
@@ -2203,7 +2526,7 @@
   // moves with them, and closes if the person has gone.
   function refreshProfile() {
     if (!profileId || $('#profileModal').hidden) return;
-    const c = state.candidates.find((x) => x.id === profileId);
+    const c = candById(profileId);
     if (!c) { closeModal($('#profileModal')); return; }
     // Never under someone choosing a status.
     if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#profileModal .status-ctl')) return;
@@ -2212,7 +2535,7 @@
   $('#profileModal').addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
     if (!b || !b.closest('#profActs, #profContact, #profActivity')) return;
-    const c = state.candidates.find((x) => x.id === profileId);
+    const c = candById(profileId);
     if (!c) return;
     const act = b.dataset.act;
     closeModal($('#profileModal'));
@@ -2223,15 +2546,15 @@
   });
   $('#profileModal').addEventListener('change', (e) => {
     if (!e.target.classList.contains('status-select')) return;
-    api(`/api/candidates/${profileId}`, { method: 'PATCH', body: { status: e.target.value } }).then(refresh).catch(oops);
+    setStatus(profileId, e.target.value);
   });
   $('#profEdit').addEventListener('click', () => {
-    const c = state.candidates.find((x) => x.id === profileId);
+    const c = candById(profileId);
     closeModal($('#profileModal'));
     if (c) openCandidate(c);
   });
   $('#profRemove').addEventListener('click', () => {
-    const c = state.candidates.find((x) => x.id === profileId);
+    const c = candById(profileId);
     if (!c) return;
     if (!confirm(`Remove ${c.name || c.email} from the list?`)) return;
     closeModal($('#profileModal'));
@@ -2243,18 +2566,152 @@
   $('#candidateRows').addEventListener('change', (e) => {
     if (!e.target.classList.contains('status-select')) return;
     const id = e.target.closest('tr').dataset.id;
-    api(`/api/candidates/${id}`, { method: 'PATCH', body: { status: e.target.value } }).then(refresh).catch(oops);
+    setStatus(id, e.target.value);
   });
 
+  // ---- a status picked here ----
+  // From a row, a profile or a tile's list. The page says the new status at
+  // once — every menu showing that person, the counts, the lists — and then
+  // tells the server. Waiting for the server first, and then for the whole
+  // state to come back, made every pick take seconds on a phone. If the
+  // server refuses, everything is put back as it was and the page says why:
+  // the row, the phone's status pill and an open profile alike. Until a
+  // state asked for after the save has come back, each new state has the
+  // pick laid over it (applyPendingStatus), so a poll that set off before the
+  // pick cannot flip it back.
+  const pendingStatus = new Map();   // id -> { status, prev, seq, savedAt }
+  let statusSeq = 0;
+
+  function setStatus(id, status) {
+    const c = candById(id);
+    if (!c || !STATUS[status]) {
+      api(`/api/candidates/${id}`, { method: 'PATCH', body: { status } }).then(() => refreshSoon()).catch(oops);
+      return;
+    }
+    if (c.status === status) return;
+    const seq = ++statusSeq;
+    const prev = c.status;
+    pendingStatus.set(id, { status, prev, seq, savedAt: 0 });
+    putStatus(c, status);
+    listChanged();
+    showStatus(id, status);
+    api(`/api/candidates/${id}`, { method: 'PATCH', body: { status } })
+      .then(() => {
+        const p = pendingStatus.get(id);
+        // On the clock refresh() times its requests by (applyPendingStatus).
+        if (p && p.seq === seq) p.savedAt = pageClock();
+        refreshSoon();
+      })
+      .catch((err) => {
+        const p = pendingStatus.get(id);
+        // A later pick for the same person is on its way and decides it.
+        if (p && p.seq === seq) {
+          pendingStatus.delete(id);
+          const now = candById(id);
+          if (now) putStatus(now, prev);
+          listChanged();
+          showStatus(id, prev);
+        }
+        // What is on screen may not be what the server holds any more (it may
+        // have taken an earlier pick, or none): the next look asks for the
+        // whole state rather than being told nothing changed.
+        stateTag = '';
+        oops(err);
+        refreshSoon();
+      });
+  }
+
+  // A status changed in place, with the Dashboard's per-status totals kept
+  // in step (they come from the server, which has not counted it yet).
+  function putStatus(c, next) {
+    const prev = c.status;
+    if (prev === next) return;
+    const s = state && state.stats;
+    if (s) {
+      if (typeof s[prev] === 'number') s[prev] -= 1;
+      if (typeof s[next] === 'number') s[next] += 1;
+    }
+    c.status = next;
+  }
+
+  // Every menu on screen for this person — a row, an open profile, a tile's
+  // list — set to `status`, with its colour and the phone's pill over it.
+  function showStatus(id, status) {
+    const st = STATUS[status] || STATUS.new;
+    $$(`.status-select[data-id="${CSS.escape(String(id))}"]`).forEach((sel) => {
+      if (sel.value !== status) sel.value = status;
+      for (const v of Object.values(STATUS)) sel.classList.toggle(v.cls, v === st);
+      const face = sel.parentElement && sel.parentElement.querySelector('.status-face');
+      if (face) { face.textContent = st.label; face.className = `status-face m-only ${st.cls}`; }
+    });
+  }
+
+  // Something in the list changed here rather than in a new state: every
+  // page drawn from the list is out of date, the one on screen is drawn
+  // again now, and so are the counts that show from every page.
+  function listChanged() {
+    bumpList();
+    if (!state) return;
+    for (const v of Object.keys(VIEW_RENDERERS)) staleViews.add(v);
+    renderView(currentView);
+    renderEmailAllButtons();
+    refreshProfile();
+  }
+
+  // Laid over each new state, after the unread flags (see refresh()). A pick
+  // whose save has been answered, and which this state was asked for after,
+  // is in the state already: let go of it. Any other is laid back on top.
+  function applyPendingStatus(askedAt) {
+    if (!pendingStatus.size || !state) return;
+    let changed = false;
+    for (const [id, p] of [...pendingStatus]) {
+      const c = candById(id);
+      if (!c || (p.savedAt && p.savedAt <= askedAt)) { pendingStatus.delete(id); continue; }
+      if (c.status !== p.status) { putStatus(c, p.status); changed = true; }
+    }
+    if (changed) bumpList();
+  }
+
+  // Several clicks in a row (statuses picked down a list) each want to see
+  // the server's view afterwards — the texting order, who is due a
+  // follow-up. One look a moment after the first of them answers serves all
+  // that have answered by then; a later one asks for its own.
+  let soonTimer = 0;
+  function refreshSoon(ms = 300) {
+    if (soonTimer) return;
+    soonTimer = setTimeout(() => {
+      soonTimer = 0;
+      if (signedIn) refresh().catch(() => {});
+    }, ms);
+  }
+
+  // The boxes on screen and the page's own box, set to the selection where
+  // they are: ticking or clearing used to draw the whole list again to do it.
+  function syncTicks() {
+    $$('#candidateRows tr[data-id]').forEach((tr) => {
+      const box = tr.querySelector('.row-check');
+      if (box) box.checked = selected.has(tr.dataset.id);
+    });
+    $('#checkAll').checked = pageRows.length > 0 && pageRows.every((c) => selected.has(c.id));
+    updateSendButton();
+  }
   $('#checkAll').addEventListener('change', (e) => {
     // The page you can see. Ticking one box to act on 3,500 unseen people is
     // not something to do by accident.
     pageRows.forEach((c) => (e.target.checked ? selected.add(c.id) : selected.delete(c.id)));
-    renderCandidates();
+    syncTicks();
   });
   // 3,514 rows filtered and rebuilt on every keystroke was ~86 ms a character.
-  const searchRender = debounce(renderCandidates, 120);
+  // A search hides people as surely as a filter does, so it lets go of any
+  // of them who were ticked, the way the menus do.
+  const searchRender = debounce(() => { narrowSelection('search'); renderCandidates(); }, 120);
   $('#searchInput').addEventListener('input', (e) => { search = e.target.value; searchRender(); });
+  // What the search looks through is made the first time it is needed; the
+  // moment the box is focused is a good time to have that done already.
+  $('#searchInput').addEventListener('focus', () => {
+    const warm = () => { if (state && state.candidates) searchIndex(); };
+    if (window.requestIdleCallback) requestIdleCallback(warm, { timeout: 500 }); else setTimeout(warm, 50);
+  });
   // Folding the filters away on a phone. The button says how many are in
   // force, so a list that is filtered never looks like a list that is short.
   $('#filtersToggle').addEventListener('click', () => {
@@ -2268,8 +2725,15 @@
     syncFilterControls(); renderCandidates();
   });
   $('#roleFilter').addEventListener('change', (e) => { roleFilter = e.target.value; narrowSelection(); renderCandidates(); });
-  $('#pagerPrev').addEventListener('click', () => { page -= 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
-  $('#pagerNext').addEventListener('click', () => { page += 1; renderCandidates(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  // Back to the top of the new page, on whatever scrolls: the window on a
+  // laptop, but on a phone the page lives inside .main, and scrolling the
+  // window there did nothing — Next left you at the bottom of the new page.
+  function toTopOfPage() {
+    const inner = mainEl && getComputedStyle(mainEl).overflowY !== 'visible' && mainEl.scrollHeight > mainEl.clientHeight;
+    (inner ? mainEl : window).scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  $('#pagerPrev').addEventListener('click', () => { page -= 1; renderCandidates(); toTopOfPage(); });
+  $('#pagerNext').addEventListener('click', () => { page += 1; renderCandidates(); toTopOfPage(); });
   $('#sortBy').addEventListener('change', (e) => { sortBy = e.target.value; renderCandidates(); });
   $('#stageFilter').addEventListener('change', (e) => {
     filter = e.target.value;
@@ -2283,7 +2747,7 @@
     // which needs the window to stay open while it sends — to run last.
     openTextCompose(selectedTextable().map((c) => c.id), { thenEmail: [...selected] });
   });
-  $('#selClearBtn').addEventListener('click', () => { selected.clear(); renderCandidates(); });
+  $('#selClearBtn').addEventListener('click', () => { selected.clear(); syncTicks(); });
   $('#selIqBtn').addEventListener('click', () => addSelectionTo('iq'));
   $('#selOnbBtn').addEventListener('click', () => addSelectionTo('onb'));
   $('#emailAllBtn').addEventListener('click', () => openCompose(uncontactedIds()));
@@ -2388,7 +2852,7 @@
     composeIds = ids;
     composeFollowUp = followUp;
     cancelSend = false;
-    const cands = ids.map((id) => state.candidates.find((c) => c.id === id)).filter(Boolean);
+    const cands = ids.map(candById).filter(Boolean);
     $('#composeTitle').textContent = followUp
       ? (cands.length === 1 ? `Follow up with ${cands[0].name || cands[0].email}` : `Follow up with ${cands.length} people`)
       : (cands.length === 1 ? `Email ${cands[0].name || cands[0].email}` : `Email ${cands.length} candidates personally`);
@@ -3232,7 +3696,7 @@
       state.candidates.slice(0, 50).map((c) =>
         `<option value="${c.id}">${esc(c.name || c.email)}</option>`).join('');
     if ([...sel.options].some((o) => o.value === current)) sel.value = current;
-    const cand = state.candidates.find((c) => c.id === sel.value) || SAMPLE;
+    const cand = candById(sel.value) || SAMPLE;
     $('#pvSubject').textContent = fillSubject($('#tplSubject').value, cand);
     $('#pvFrom').textContent = senderLine() || 'your work email (set up in Settings)';
     const bodyHtml = esc(fillClient($('#tplBody').value, cand)).split('\n').join('<br>');
@@ -3409,6 +3873,7 @@
   // The list is copied to a separate backup every day by the server. From
   // here: a spreadsheet of everyone, a copy on demand, and "restore missing",
   // which only ever adds back people who are not on the list now.
+  const backupWhen = dateFormat([], { dateStyle: 'medium', timeStyle: 'short' });
   function renderBackups() {
     if (!state) return;
     const list = state.backups || [];
@@ -3418,7 +3883,7 @@
     $('#backupSummary').textContent = newest
       ? `${n.toLocaleString()} candidates on your list. They are saved on the server as you work, and copied to a separate backup every day. ${list.length === 1 ? 'One backup so far' : `${list.length} backups kept`} — the newest 20 are always kept.`
       : `${n.toLocaleString()} candidates on your list. They are saved on the server as you work; the first daily backup is made within the next few minutes, or press Back up now.`;
-    const html = list.map((b) => `<li><span class="when">${esc(new Date(b.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}</span>` +
+    const html = list.map((b) => `<li><span class="when">${esc(backupWhen(b.at))}</span>` +
       `<span class="muted">${Number(b.count || 0).toLocaleString()} candidates · ${b.reason === 'daily' ? 'daily' : 'made by hand'}</span>` +
       `<button class="btn-link" data-restore="${esc(b.key)}">Restore missing</button></li>`).join('');
     const ul = $('#backupList');
@@ -3720,7 +4185,7 @@
   function renderFollowUpPreview() {
     if (!state) return;
     const sel = $('#previewCandidate');
-    const cand = state.candidates.find((c) => c.id === sel.value) || state.candidates.find((c) => c.status === 'emailed') || SAMPLE;
+    const cand = candById(sel.value) || state.candidates.find((c) => c.status === 'emailed') || SAMPLE;
     $('#fuPvSubject').textContent = fillSubject($('#fuSubject').value, cand);
     $('#fuPvBody').innerHTML = esc(fillClient($('#fuBody').value, cand)).split('\n').join('<br>');
     const fu = state.followUp || { days: 3, max: 2 };
@@ -3814,7 +4279,7 @@
   }
 
   function renderTextComposePreview() {
-    const who = state.candidates.find((c) => c.id === textComposeIds[0]) || {};
+    const who = candById(textComposeIds[0]) || {};
     const first = who.firstName || (who.name || '').split(' ')[0] || 'there';
     const body = ($('#textComposeBody').value || '')
       .replace(/\{\{\s*firstName\s*\}\}/g, first)
@@ -4001,9 +4466,22 @@
       + one('mail', mail, 'Mail', 'mail', `Email ${name} from your phone’s Mail app`, 'No email address on file')
       + '</div>';
   }
-  const textableIds = () => state.candidates
+  // Kept until the list changes: the Texting page's header counts them every
+  // time it is drawn.
+  const textableIds = kept(() => [listVersion, state && state.candidates], () => state.candidates
     .filter((c) => textPhoneOf(c) && !c.lastTextedAt && c.status !== 'declined' && c.status !== 'booked')
-    .map((c) => c.id);
+    .map((c) => c.id));
+
+  // How many conversations are unread on each channel, counted once per
+  // version of the list for the bell, the tabs, the switches and the app icon.
+  const unreadTally = kept(() => [listVersion, state && state.candidates], () => {
+    const n = { text: 0, email: 0 };
+    for (const c of (state && state.candidates) || []) {
+      if (c.textUnread) n.text += 1;
+      if (c.emailUnread) n.email += 1;
+    }
+    return n;
+  });
 
   function textCell(c) {
     const phone = textPhoneOf(c);
@@ -4017,7 +4495,7 @@
     const st = TEXT_STATUS[c.textStatus];
     if (!st) return `<span class="text-pip"><i class="dot"></i>${esc(prettyPhone(phone))}</span>`;
     const when = c.textRepliedAt || c.textReadAt || c.textDeliveredAt || c.lastTextedAt;
-    return `<span class="text-pip ${st.cls}" title="${esc(prettyPhone(phone))}${when ? ` · ${new Date(when).toLocaleString()}` : ''}">
+    return `<span class="text-pip ${st.cls}" title="${esc(prettyPhone(phone))}${when ? ` · ${fullStamp(when)}` : ''}">
       <i class="dot"></i>${st.label}</span>`;
   }
 
@@ -4078,6 +4556,26 @@
     }, { passive: true });
   }
 
+  // What a list last drew: which answer, how many of its rows from the top,
+  // and whether the open conversation was tacked on below them (convPage).
+  const drawnAs = (all, rows, shown) => ({ all, n: Math.min(shown, all.length), extra: rows.length > Math.min(shown, all.length) });
+
+  // Grown by scrolling, a list adds the next rows under the ones it has
+  // rather than drawing every row again. Not when it is no longer the answer
+  // it drew, nor when the open conversation was tacked on below (it has to
+  // move into its place): then the caller draws it whole. Returns whether
+  // it was done here.
+  function appendRows(el, drawn, all, shown, row) {
+    if (!drawn || drawn.all !== all || drawn.extra) return false;
+    const to = Math.min(shown, all.length);
+    if (to <= drawn.n) return true;
+    const more = el.querySelector('.conv-more');
+    if (more) more.remove();
+    el.insertAdjacentHTML('beforeend', all.slice(drawn.n, to).map(row).join('') + moreRow(all.length - to));
+    drawn.n = to;
+    return true;
+  }
+
   // Search looks through every conversation on the channel, whatever filter
   // is showing: somebody who has not replied is still somebody you can look
   // up, and on Email's Replied tab they used to be impossible to find. A
@@ -4095,19 +4593,43 @@
     };
   }
 
-  function conversations() {
+  // Kept for this version of the list, this search and this tab: the list is
+  // drawn after every poll, grows as it is scrolled, and is asked whether
+  // there is more, each time over every conversation there is.
+  const conversations = kept(() => [listVersion, state && state.candidates, convSearch, convFilter], () => {
     const all = (state.candidates || []).filter((c) => c.textCount > 0);
     const match = convMatcher(convSearch);
     return all
       .filter((c) => (match ? match(c, (c.textLast || {}).text) : convFilter === 'unread' ? c.textUnread : true))
-      .sort((a, b) => String((b.textLast || {}).ts || '').localeCompare(String((a.textLast || {}).ts || '')));
+      .map((c) => ({ c, k: String((c.textLast || {}).ts || '') }))
+      .sort((a, b) => collator.compare(b.k, a.k))
+      .map((x) => x.c);
+  });
+
+  const unreadCount = () => unreadTally().text;
+
+  function convRow(c) {
+    const last = c.textLast || {};
+    const who = c.name || textPhoneOf(c) || 'Unknown';
+    return `<li><button class="conv${c.id === openThreadId ? ' on' : ''}${c.textUnread ? ' unread' : ''}" data-conv="${esc(c.id)}">
+            <span class="avatar">${esc(convInitials(c.name, c.phone))}</span>
+            <span class="conv-main">
+              <span class="conv-top"><span class="conv-name">${esc(who)}</span><span class="conv-when"${last.ts ? ` data-ago="${esc(last.ts)}"` : ''}>${last.ts ? timeAgo(last.ts) : ''}</span><span class="conv-chev">${icon('chevron', 12)}</span></span>
+              <span class="conv-last">${last.dir === 'out' ? '<span class="conv-you">You:</span> ' : ''}${esc(last.text || '')}</span>
+            </span>
+            ${c.textUnread ? '<span class="conv-dot" aria-label="unread"></span>' : ''}
+          </button></li>`;
   }
 
-  const unreadCount = () => (state.candidates || []).filter((c) => c.textUnread).length;
-
+  // What the list last drew, so that growing it only adds the new rows under
+  // the ones already there (see growOnScroll).
+  let convDrawn = null;
+  forgetWithState(() => { convDrawn = null; });
   let convShown = CONV_PAGE;
-  function renderConvList() {
+  function renderConvList({ more = false } = {}) {
     const all = conversations();
+    const el = $('#convList');
+    if (more && appendRows(el, convDrawn, all, convShown, convRow)) return;
     const rows = convPage(all, convShown, openThreadId);
     const n = unreadCount();
     $('#convUnreadN').textContent = n || '';
@@ -4116,21 +4638,10 @@
     // While a search is running it covers every conversation, so the filter
     // steps back rather than looking as if it still applied.
     $('#view-texting .conv-col').classList.toggle('is-searching', Boolean(convSearch.trim()));
-    const el = $('#convList');
     keepingScroll(el, () => { el.innerHTML = rows.length
-      ? rows.map((c) => {
-          const last = c.textLast || {};
-          const who = c.name || textPhoneOf(c) || 'Unknown';
-          return `<li><button class="conv${c.id === openThreadId ? ' on' : ''}${c.textUnread ? ' unread' : ''}" data-conv="${esc(c.id)}">
-            <span class="avatar">${esc(convInitials(c.name, c.phone))}</span>
-            <span class="conv-main">
-              <span class="conv-top"><span class="conv-name">${esc(who)}</span><span class="conv-when"${last.ts ? ` data-ago="${esc(last.ts)}"` : ''}>${last.ts ? timeAgo(last.ts) : ''}</span><span class="conv-chev">${icon('chevron', 12)}</span></span>
-              <span class="conv-last">${last.dir === 'out' ? '<span class="conv-you">You:</span> ' : ''}${esc(last.text || '')}</span>
-            </span>
-            ${c.textUnread ? '<span class="conv-dot" aria-label="unread"></span>' : ''}
-          </button></li>`;
-        }).join('') + moreRow(all.length - rows.length)
+      ? rows.map(convRow).join('') + moreRow(all.length - rows.length)
       : `<li class="conv-none">${convSearch.trim() ? `No results for “${esc(convSearch.trim())}”.` : convFilter === 'unread' ? 'Nothing unread.' : 'No conversations yet. Texts you send show up here.'}</li>`; });
+    convDrawn = drawnAs(all, rows, convShown);
   }
 
   // `quiet` means this is the background refresh of a conversation already on
@@ -4175,7 +4686,7 @@
     threadLoading = false;
     renderThread();
     if (markSeen) {
-      const c = (state.candidates || []).find((x) => x.id === id);
+      const c = candById(id);
       if (c && c.textUnread) {
         // Read up to the newest message this screen now shows, so one that
         // lands a moment later is still news.
@@ -4192,7 +4703,7 @@
     $('#threadName').textContent = thread.name || thread.phone || 'Unknown';
     const bits = [thread.phone, thread.role, thread.company].filter(Boolean);
     $('#threadSub').textContent = bits.join(' · ');
-    const tc = (state.candidates || []).find((x) => x.id === openThreadId) || {};
+    const tc = candById(openThreadId) || {};
     $('#threadNative').innerHTML = nativeActs({ phone: thread.phone || tc.phone, email: tc.email, name: thread.name || tc.name }, { size: 30, labels: false });
 
     // Anything still queued for the Mac is shown as a pending bubble, so a
@@ -4233,21 +4744,30 @@
     const d = new Date(ts);
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
-    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const time = clockTime(d);
     if (sameDay) return `Today ${time}`;
     const yday = new Date(now); yday.setDate(now.getDate() - 1);
     if (d.toDateString() === yday.toDateString()) return `Yesterday ${time}`;
-    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+    return `${monthDay(d)} ${time}`;
   }
 
+  // A text is on its way. Disabling the button stopped a second tap, but not
+  // a second press of Enter: the box still held the words until the first
+  // answer came back, so they went twice. Nothing more is sent until it has.
+  let replySending = false;
   async function sendReply() {
     const box = $('#threadInput');
     const body = box.value.trim();
-    if (!body || !openThreadId) return;
+    if (replySending || !body || !openThreadId) return;
+    replySending = true;
     $('#threadSend').disabled = true;
     try {
       const to = openThreadId;
-      await api('/api/texts/reply', { method: 'POST', body: { id: to, body } });
+      try {
+        await api('/api/texts/reply', { method: 'POST', body: { id: to, body } });
+      } finally {
+        replySending = false;
+      }
       saveDraft('text', to, '');
       if (openThreadId === to) { box.value = ''; box.style.height = ''; }
       // Show it immediately rather than waiting for the next poll.
@@ -4314,7 +4834,8 @@
   let mailLoading = false;
   let mailSeq = 0;
 
-  function mailboxes() {
+  // Kept the way the Texting list is (see conversations()).
+  const mailboxes = kept(() => [listVersion, state && state.candidates, mailSearch, mailFilter], () => {
     const all = (state.candidates || []).filter((c) => c.lastEmailedAt || c.emailReplies);
     const match = convMatcher(mailSearch);
     const when = (c) => (c.emailLast && c.emailLast.ts) || c.lastReplyAt || c.lastEmailedAt || '';
@@ -4322,27 +4843,18 @@
       .filter((c) => (match
         ? match(c, `${(c.emailLast || {}).text || ''} ${c.lastSubject || ''}`)
         : mailFilter === 'unread' ? c.emailUnread : mailFilter === 'replied' ? c.emailReplies > 0 : true))
-      .sort((a, b) => String(when(b)).localeCompare(String(when(a))));
-  }
+      .map((c) => ({ c, k: String(when(c)) }))
+      .sort((a, b) => collator.compare(b.k, a.k))
+      .map((x) => x.c);
+  });
 
-  const mailUnreadCount = () => (state.candidates || []).filter((c) => c.emailUnread).length;
+  const mailUnreadCount = () => unreadTally().email;
 
-  let mailShown = CONV_PAGE;
-  function renderMailList() {
-    const all = mailboxes();
-    const rows = convPage(all, mailShown, openMailId);
-    const n = mailUnreadCount();
-    $('#mailUnreadN').textContent = n || '';
-    $('#mailUnreadN').hidden = !n;
-    $$('[data-mail-tab]').forEach((b) => b.classList.toggle('on', b.dataset.mailTab === mailFilter));
-    $('#view-template .conv-col').classList.toggle('is-searching', Boolean(mailSearch.trim()));
-    const el = $('#mailList');
-    keepingScroll(el, () => { el.innerHTML = rows.length
-      ? rows.map((c) => {
-          const last = c.emailLast;
-          const ts = (last && last.ts) || c.lastReplyAt || c.lastEmailedAt || '';
-          const preview = last ? last.text : c.lastSubject || 'Sent, no reply yet';
-          return `<li><button class="conv${c.id === openMailId ? ' on' : ''}${c.emailUnread ? ' unread' : ''}" data-mail="${esc(c.id)}">
+  function mailRow(c) {
+    const last = c.emailLast;
+    const ts = (last && last.ts) || c.lastReplyAt || c.lastEmailedAt || '';
+    const preview = last ? last.text : c.lastSubject || 'Sent, no reply yet';
+    return `<li><button class="conv${c.id === openMailId ? ' on' : ''}${c.emailUnread ? ' unread' : ''}" data-mail="${esc(c.id)}">
             <span class="avatar">${esc(convInitials(c.name, c.email))}</span>
             <span class="conv-main">
               <span class="conv-top"><span class="conv-name">${esc(c.name || c.email || 'Unknown')}</span>${c.emailBounced && !c.emailReplies ? '<span class="conv-flag" title="Bounced">!</span>' : ''}<span class="conv-when"${ts ? ` data-ago="${esc(ts)}"` : ''}>${ts ? timeAgo(ts) : ''}</span><span class="conv-chev">${icon('chevron', 12)}</span></span>
@@ -4350,8 +4862,25 @@
             </span>
             ${c.emailUnread ? '<span class="conv-dot" aria-label="unread"></span>' : ''}
           </button></li>`;
-        }).join('') + moreRow(all.length - rows.length)
+  }
+
+  let mailDrawn = null;
+  forgetWithState(() => { mailDrawn = null; });
+  let mailShown = CONV_PAGE;
+  function renderMailList({ more = false } = {}) {
+    const all = mailboxes();
+    const el = $('#mailList');
+    if (more && appendRows(el, mailDrawn, all, mailShown, mailRow)) return;
+    const rows = convPage(all, mailShown, openMailId);
+    const n = mailUnreadCount();
+    $('#mailUnreadN').textContent = n || '';
+    $('#mailUnreadN').hidden = !n;
+    $$('[data-mail-tab]').forEach((b) => b.classList.toggle('on', b.dataset.mailTab === mailFilter));
+    $('#view-template .conv-col').classList.toggle('is-searching', Boolean(mailSearch.trim()));
+    keepingScroll(el, () => { el.innerHTML = rows.length
+      ? rows.map(mailRow).join('') + moreRow(all.length - rows.length)
       : `<li class="conv-none">${mailSearch.trim() ? `No results for “${esc(mailSearch.trim())}”.` : mailFilter === 'unread' ? 'Nothing unread.' : mailFilter === 'replied' ? 'Nobody has replied by email yet.' : 'Nothing emailed yet.'}</li>`; });
+    mailDrawn = drawnAs(all, rows, mailShown);
   }
 
   async function openMail(id, { markSeen = true, quiet = false } = {}) {
@@ -4379,7 +4908,7 @@
     if (seq !== mailSeq || id !== openMailId) return;
     mail = got;
     mailLoading = false;
-    const mc = (state.candidates || []).find((x) => x.id === id);
+    const mc = candById(id);
     mailShownSig = mc ? mailSig(mc) : '';
     renderMail();
     if (markSeen && mc && mc.emailUnread) {
@@ -4398,7 +4927,7 @@
     $('#mailAvatar').textContent = convInitials(mail.name, mail.email);
     $('#mailName').textContent = mail.name || mail.email || 'Unknown';
     $('#mailSub').textContent = [mail.email, mail.role, mail.company].filter(Boolean).join(' · ');
-    const mc = (state.candidates || []).find((x) => x.id === openMailId) || {};
+    const mc = candById(openMailId) || {};
     $('#mailNative').innerHTML = nativeActs({ phone: mc.phone, email: mail.email || mc.email, name: mail.name || mc.name }, { size: 30, labels: false });
     const gm = $('#mailGmail');
     gm.hidden = !mail.gmailUrl;
@@ -4439,14 +4968,22 @@
       : '';
   }
 
+  // As for texts: a second Cmd/Ctrl-Enter while the first email is still on
+  // its way sent it again, because only the button was disabled.
+  let mailSending = false;
   async function sendMailReply() {
     const box = $('#mailInput');
     const body = box.value.trim();
-    if (!body || !openMailId) return;
+    if (mailSending || !body || !openMailId) return;
+    mailSending = true;
     $('#mailSend').disabled = true;
     try {
       const to = openMailId;
-      await api('/api/emails/reply', { method: 'POST', body: { id: to, body } });
+      try {
+        await api('/api/emails/reply', { method: 'POST', body: { id: to, body } });
+      } finally {
+        mailSending = false;
+      }
       saveDraft('email', to, '');
       if (openMailId === to) { box.value = ''; box.style.height = ''; }
       toast('Reply sent.');
@@ -4473,7 +5010,7 @@
       if (mailShown >= mailboxes().length) return false;
       mailShown += CONV_PAGE;
       return true;
-    }, renderMailList);
+    }, () => renderMailList({ more: true }));
     $('#mailCompose').addEventListener('submit', (e) => { e.preventDefault(); sendMailReply(); });
     // An email is long-form, so Enter makes a paragraph and Cmd/Ctrl-Enter sends.
     $('#mailInput').addEventListener('keydown', (e) => {
@@ -4486,7 +5023,7 @@
     });
     // Who this is: their card, with everything that can be done for them —
     // not the edit form, which put the keyboard up over the conversation.
-    $('#mailOpenCandidate').addEventListener('click', () => { const c = openMailId && state.candidates.find((x) => x.id === openMailId); if (c) openProfile(c); });
+    $('#mailOpenCandidate').addEventListener('click', () => { const c = openMailId && candById(openMailId); if (c) openProfile(c); });
   }
 
   // ---------------- Light and dark ----------------
@@ -4600,6 +5137,9 @@
       items.push(seen ? { id: c.id, ts: seen } : { id: c.id });
     }
     if (!items.length) return Promise.resolve();
+    // A flag changed in place: every unread count and list kept from the
+    // list is out of date.
+    bumpList();
     renderUnread();
     return tellSeen(ch, items);
   }
@@ -4614,20 +5154,22 @@
   // Laid over each fresh copy of the state, before anything is drawn.
   function applyLocallyRead() {
     if (!state || !locallyRead.size) return;
-    const byId = new Map((state.candidates || []).map((c) => [c.id, c]));
     const again = { text: [], email: [] };
+    let changed = false;
     for (const [key, seen] of [...locallyRead]) {
       const at = key.lastIndexOf(':');
       const id = key.slice(0, at);
       const ch = key.slice(at + 1);
-      const c = byId.get(id);
+      const c = candById(id);
       // Gone, or read on the server too: nothing left to hold.
       if (!c || !c[UNREAD_FLAG[ch]]) { locallyRead.delete(key); continue; }
       // Something newer than what was read: that is news.
       if (seen && tsNum(lastInTs(c, ch)) > tsNum(seen) + 1000) { locallyRead.delete(key); continue; }
       c[UNREAD_FLAG[ch]] = false;
+      changed = true;
       if (Date.now() - (seenToldAt.get(key) || 0) > 20000) again[ch].push(seen ? { id, ts: seen } : { id });
     }
+    if (changed) bumpList();
     for (const ch of ['text', 'email']) if (again[ch].length) tellSeen(ch, again[ch]);
   }
 
@@ -4662,14 +5204,16 @@
     } catch { /* not supported here */ }
   }
 
-  function unreadKeys() {
+  // Kept until the list changes: the bell is drawn after every new state and
+  // every conversation read.
+  const unreadKeys = kept(() => [listVersion, state && state.candidates], () => {
     const out = [];
     for (const c of state.candidates || []) {
       if (c.textUnread) out.push(`${c.id}:text:${lastInTs(c, 'text')}`);
       if (c.emailUnread) out.push(`${c.id}:email:${lastInTs(c, 'email')}`);
     }
     return out;
-  }
+  });
 
   function renderBell() {
     const n = allUnread();
@@ -4705,7 +5249,8 @@
   // unread flags as well as the last message, so everything the badge counts
   // is listed and can be read or cleared from here.
   const BELL_EARLIER_DAYS = 7;
-  function bellItems() {
+  // Kept until the list changes, unread and read apart, each newest first.
+  const bellItems = kept(() => [listVersion, state && state.candidates], () => {
     const out = [];
     for (const c of state.candidates || []) {
       const tin = c.textLastIn || (c.textLast && c.textLast.dir === 'in' ? c.textLast : null);
@@ -4716,17 +5261,11 @@
         out.push({ c, ch: 'email', ts: c.emailLast ? c.emailLast.ts : c.lastReplyAt, text: c.emailLast ? c.emailLast.text : 'New email reply', unread: Boolean(c.emailUnread), who: c.name || c.email || 'Unknown' });
       }
     }
-    return out.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
-  }
+    const sorted = out.map((i) => ({ i, k: String(i.ts || '') })).sort((a, b) => collator.compare(b.k, a.k)).map((x) => x.i);
+    return { unread: sorted.filter((i) => i.unread), read: sorted.filter((i) => !i.unread) };
+  });
 
-  function renderBellPanel() {
-    const items = bellItems();
-    const unread = items.filter((i) => i.unread);
-    // Earlier is the last week's, and only a handful: the same old replies
-    // sitting under the new ones every time read as the same news again.
-    const since = Date.now() - BELL_EARLIER_DAYS * 86400000;
-    const recent = items.filter((i) => !i.unread && tsNum(i.ts) >= since).slice(0, 5);
-    const row = (i) => `<button class="bell-row${i.unread ? ' new' : ''}" data-bell-open="${esc(i.c.id)}" data-bell-ch="${i.ch}">
+  const bellRow = (i) => `<button class="bell-row${i.unread ? ' new' : ''}" data-bell-open="${esc(i.c.id)}" data-bell-ch="${i.ch}">
         <span class="avatar">${esc(convInitials(i.c.name, i.ch === 'text' ? i.c.phone : i.c.email))}</span>
         <span class="bell-main">
           <span class="bell-top"><span class="bell-name">${esc(i.who)}</span><span class="bell-when"${i.ts ? ` data-ago="${esc(i.ts)}"` : ''}>${i.ts ? timeAgo(i.ts) : ''}</span></span>
@@ -4734,14 +5273,48 @@
         </span>
         <span class="act-tag ch-${i.ch === 'text' ? 'text' : 'email'}">${i.ch === 'text' ? 'Text' : 'Email'}</span>
       </button>`;
-    $('#bellBody').innerHTML = unread.length || recent.length
-      ? `${unread.length ? `<div class="bell-sec">New</div>${unread.map(row).join('')}` : ''}
-         ${recent.length ? `<div class="bell-sec">Earlier</div>${recent.map(row).join('')}` : ''}`
-      : '<p class="bell-none">No replies yet. When someone writes back — by text or by email — it lands here.</p>';
-    // On an iPhone the Home Screen icon shows the unread count only once the
-    // app may show notifications, which it can only ask for when you tap.
-    if (badgeCanAsk()) $('#bellBody').insertAdjacentHTML('beforeend', '<button type="button" class="bell-badge-ask" id="bellBadgeAsk">Show the unread count on the app icon</button>');
+
+  // Every unread reply at once was thousands of rows and two seconds before
+  // the sheet came up on a phone. It opens on the newest forty and adds the
+  // next forty as it is scrolled (wired in wireMessages()); Mark all read
+  // still reads every one of them.
+  const BELL_PAGE = 40;
+  let bellShown = BELL_PAGE;
+  let bellDrawn = null;   // { items, n }: what the New section last drew
+  forgetWithState(() => { bellDrawn = null; });
+  function renderBellPanel({ more = false } = {}) {
+    const items = bellItems();
+    const body = $('#bellBody');
+    if (more && bellDrawn && bellDrawn.items === items) {
+      const to = Math.min(bellShown, items.unread.length);
+      const last = [...body.querySelectorAll('.bell-row.new')].pop();
+      if (to <= bellDrawn.n) return;
+      if (last) {
+        last.insertAdjacentHTML('afterend', items.unread.slice(bellDrawn.n, to).map(bellRow).join(''));
+        bellDrawn.n = to;
+        return;
+      }
+    }
+    const unread = items.unread.slice(0, bellShown);
+    // Earlier is the last week's, and only a handful: the same old replies
+    // sitting under the new ones every time read as the same news again.
+    const since = Date.now() - BELL_EARLIER_DAYS * 86400000;
+    const recent = [];
+    for (const i of items.read) {
+      if (recent.length >= 5) break;
+      if (tsNum(i.ts) >= since) recent.push(i);
+    }
+    keepingScroll(body, () => {
+      body.innerHTML = unread.length || recent.length
+        ? `${unread.length ? `<div class="bell-sec">New</div>${unread.map(bellRow).join('')}` : ''}
+         ${recent.length ? `<div class="bell-sec">Earlier</div>${recent.map(bellRow).join('')}` : ''}`
+        : '<p class="bell-none">No replies yet. When someone writes back — by text or by email — it lands here.</p>';
+      // On an iPhone the Home Screen icon shows the unread count only once the
+      // app may show notifications, which it can only ask for when you tap.
+      if (badgeCanAsk()) body.insertAdjacentHTML('beforeend', '<button type="button" class="bell-badge-ask" id="bellBadgeAsk">Show the unread count on the app icon</button>');
+    });
     $('#bellClear').hidden = !allUnread();
+    bellDrawn = { items, n: unread.length };
   }
 
   // On a phone the panel is a sheet (mobile.css): it rises over a dimmed page,
@@ -4759,6 +5332,8 @@
     clearTimeout(bellTimer);
     const sheet = window.matchMedia('(max-width: 800px)').matches;
     if (want) {
+      // Opened afresh at the top, with the first forty.
+      bellShown = BELL_PAGE;
       renderBellPanel();
       bellOpener = document.activeElement;
       panel.classList.remove('is-closing');
@@ -4809,7 +5384,12 @@
       if (convShown >= conversations().length) return false;
       convShown += CONV_PAGE;
       return true;
-    }, renderConvList);
+    }, () => renderConvList({ more: true }));
+    growOnScroll($('#bellBody'), () => {
+      if (!state || bellShown >= bellItems().unread.length) return false;
+      bellShown += BELL_PAGE;
+      return true;
+    }, () => renderBellPanel({ more: true }));
     $('#threadCompose').addEventListener('submit', (e) => { e.preventDefault(); sendReply(); });
     // Enter sends and shift-enter makes a new line, the way every messenger
     // works — on a keyboard. A soft keyboard has no shift to hold, so there
@@ -4825,13 +5405,13 @@
       e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
       saveDraft('text', openThreadId, e.target.value);
     });
-    $('#threadOpenCandidate').addEventListener('click', () => { const c = openThreadId && state.candidates.find((x) => x.id === openThreadId); if (c) openProfile(c); });
+    $('#threadOpenCandidate').addEventListener('click', () => { const c = openThreadId && candById(openThreadId); if (c) openProfile(c); });
     // The name and picture at the top of a conversation open the same card.
     document.addEventListener('click', (e) => {
       const who = e.target.closest('[data-thread-profile]');
       if (!who) return;
       const id = who.closest('#view-template') ? openMailId : openThreadId;
-      const c = id && (state.candidates || []).find((x) => x.id === id);
+      const c = id && candById(id);
       if (c) openProfile(c);
     });
 
@@ -4916,16 +5496,25 @@
     })();
   }
 
-  function renderTexting() {
-    const t = state.texting || {};
-    const q = t.queue || {};
+  // The Texting page's own header: Text everyone, and Stop while a send is
+  // running. Drawn with the page (VIEW_RENDERERS), not on every render from
+  // every page — counting who can be texted is a pass over the whole list.
+  function renderTextingHead() {
+    const q = ((state.texting || {}).queue) || {};
     // The funnel strip that used to sit here said exactly what the dashboard's
     // Channels card says, on a page that is now only conversations.
     const n = textableIds().length;
     const btn = $('#textSendAllBtn');
     btn.textContent = n ? `Text ${n} with a number` : 'Nobody left to text';
     btn.disabled = n === 0;
+    $('#textStopBtn').hidden = !q.active;
+  }
 
+  // Texting's half of Settings: the Mac, the default text and the pace.
+  // Drawn with Settings (renderSettingsPage).
+  function renderTextSettings() {
+    const t = state.texting || {};
+    const q = t.queue || {};
     // Is the Mac actually there?
     const r = q.relay || {};
     const chip = $('#relayChip');
@@ -4997,12 +5586,11 @@
     const card = $('#textSendingCard');
     const visible = q.active || q.failed > 0;
     card.hidden = !visible;
-    $('#textStopBtn').hidden = !q.active;
     if (!visible) return;
     const total = q.total || (q.pending + q.sent);
     $('#textSendingFill').style.width = `${total ? Math.round((q.sent / total) * 100) : 100}%`;
     $('#textSendingBadge').textContent = q.active ? `${q.sent} of ${total} sent` : `finished · ${q.sent} sent`;
-    const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const clock = clockTime;
     const parts = [];
     const r = q.relay || {};
     if (q.pending && !r.online) {
@@ -5219,6 +5807,9 @@
     } catch (err) { oops(err); } finally { btn.disabled = false; }
   });
 
+  // Settings itself. Drawn when it is the page on screen, or the next time it
+  // is shown (renderSettingsPage, VIEW_RENDERERS) — not on every new state
+  // from every page.
   function renderSettings() {
     renderBackups();
     renderTeamSettings();
@@ -5281,7 +5872,13 @@
       $('#googleConnectBtn').textContent = 'Connect Google';
       $('#googleDisconnectBtn').hidden = true;
     }
+  }
 
+  // Who the email goes out as, in the sidebar's foot (which a phone shows at
+  // the top of Settings), and the Import page's last sheet. Small, and the
+  // first is in sight from every page on a laptop, so they are drawn with
+  // every new state.
+  function renderAccount() {
     const acct = $('#connPill');
     if (state.sending.ready) {
       const name = (state.settings.fromName || '').trim() || state.sending.from;
@@ -6031,19 +6628,41 @@
   // 3,514 candidates they were 55 of the 61 ms a full render cost, and four of
   // the five were drawing a page nobody was looking at. They run for the view
   // you are on; the others are marked stale and drawn when you arrive.
+  //
+  // Texting's header and Settings — its editors, previews and the attachment
+  // thumbnail (a 432 KB fetch) — are drawn the same way, when their page is
+  // the one on screen, rather than on every render from any page.
   const VIEW_RENDERERS = {
     dashboard: [renderDashboard],
     candidates: [renderRoleFilter, renderCandidates],
     template: [renderMailList],
-    texting: [renderConvList],
+    texting: [renderTextingHead, renderConvList],
+    settings: [renderSettingsPage],
   };
   const staleViews = new Set();
 
   function renderView(view) {
     const fns = VIEW_RENDERERS[view];
-    if (!fns) return;
+    // Nothing to draw from before the first state (or after signing out):
+    // the page stays marked, and is drawn once there is.
+    if (!fns || !state) return;
     staleViews.delete(view);
     for (const fn of fns) fn();
+  }
+
+  function renderSettingsPage() {
+    renderTextSettings();
+    renderSettings();
+    // Only prime the template editor when there are no unsaved edits.
+    if (!templateDirty) {
+      const p = currentPreset('email');
+      $('#tplSubject').value = p ? p.subject : state.template.subject;
+      $('#tplBody').value = p ? p.body : state.template.body;
+    }
+    renderPresetBar('email');
+    renderAttachments();
+    renderTemplatePreview();
+    renderFollowUpEditor();
   }
 
   // The counts beside the nav items are visible from every page, so they are
@@ -6098,7 +6717,6 @@
   function renderAll() {
     renderNotices();
     renderApollo();
-    renderTexting();
     mountTheme();
     mountTeam();
     mountBell();
@@ -6108,7 +6726,7 @@
     renderTeamChip();
     const liveText = threadOnScreen('texting');
     const liveMail = threadOnScreen('template');
-    const byId = (id) => (state.candidates || []).find((x) => x.id === id);
+    const byId = candById;
     const tc = liveText && byId(openThreadId);
     const mc = liveMail && byId(openMailId);
     if (tc && tc.textUnread) markRead('text', [{ c: tc, ts: lastInTs(tc, 'text') }]);
@@ -6129,17 +6747,7 @@
     // An email conversation is read from Gmail, so only when the list says
     // something in it has changed.
     if (mc && !mailLoading && mailSig(mc) !== mailShownSig) openMail(openMailId, { quiet: true });
-    renderSettings();
-    // Only prime the template editor when there are no unsaved edits.
-    if (!templateDirty) {
-      const p = currentPreset('email');
-      $('#tplSubject').value = p ? p.subject : state.template.subject;
-      $('#tplBody').value = p ? p.body : state.template.body;
-    }
-    renderPresetBar('email');
-    renderAttachments();
-    renderTemplatePreview();
-    renderFollowUpEditor();
+    renderAccount();
     for (const v of Object.keys(VIEW_RENDERERS)) staleViews.add(v);
     renderView(currentView);
   }
@@ -6186,11 +6794,15 @@
     });
     window.addEventListener('online', () => poll());
     window.addEventListener('offline', () => { pollFails = Math.max(pollFails, 2); renderConnection(); });
-    checkReplies();
-    setInterval(checkReplies, 60000);
-    syncCalendly();
-    setInterval(syncCalendly, 5 * 60000);
+    // The first look for replies and the first Calendly sync each make the
+    // server read and perhaps rewrite the whole list, and then fetch it all
+    // again. At launch that landed on top of the page's own first load —
+    // the moment it most needs the connection and the server — so they wait
+    // a little, then keep their usual pace.
+    setTimeout(() => { checkReplies(); setInterval(checkReplies, 60000); }, BACKGROUND_DELAY);
+    setTimeout(() => { syncCalendly(); setInterval(syncCalendly, 5 * 60000); }, BACKGROUND_DELAY + 1000);
   }
+  const BACKGROUND_DELAY = 15000;
 
   // Ask the server to look at a few sent threads for replies; new replies
   // flip candidates to "Replied" and appear in the feed.

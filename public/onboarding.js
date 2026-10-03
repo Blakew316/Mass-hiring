@@ -144,9 +144,19 @@ function emailKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+// One Intl.DateTimeFormat for each way a date is written here, made the
+// first time it is needed: toLocaleDateString builds a new one on every
+// call, which is nearly all it costs, and every card writes a date or two.
+function dateFormat(options) {
+  let f = null;
+  return (d) => (f || (f = new Intl.DateTimeFormat(undefined, options))).format(d);
+}
+const shortDateFormat = dateFormat({ month: 'short', day: 'numeric' });
+const signedFormat = dateFormat({ month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
 function shortDate(iso) {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return Number.isNaN(d.getTime()) ? '' : shortDateFormat(d);
 }
 
 // Where each candidate has got to: sent a packet, signed it, or neither.
@@ -767,10 +777,16 @@ function maybeOfferInstall() {
 const DOC_ICON = ICONS.file;
 const HEALTH = { interested: 'Interested — send details', declined: 'Declined' };
 
+// As toLocaleString would write it, "Invalid Date" included.
+function signedWhen(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? 'Invalid Date' : signedFormat(d);
+}
+
 function signedItem(h) {
   const name = `${h.firstName || ''} ${h.lastName || ''}`.trim() || h.email || 'New hire';
   const open = state.openSigned === h.reference;
-  const when = h.signedAt ? new Date(h.signedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : h.signedDate || '';
+  const when = h.signedAt ? signedWhen(h.signedAt) : h.signedDate || '';
   const audit = h.audit || {};
   const files = Array.isArray(h.files) ? h.files : [];
   const docs = files.length
