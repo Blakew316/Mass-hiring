@@ -841,7 +841,10 @@
   // same ones (a new version of the same rows gives the same answer).
   let sideMemo = null;
   function sideLists(copy) {
-    if (sideMemo && sideMemo.sides === copy.sides && sideMemo.ids === copy.ids && sideMemo.ro === copy.ro) return sideMemo;
+    if (sideMemo && sideMemo.ids === copy.ids && sideMemo.ro === copy.ro && sameSides(sideMemo.sides, copy.sides, copy)) {
+      sideMemo.sides = copy.sides;
+      return sideMemo;
+    }
     const ranked = Wire.rankOf(copy);
     sideMemo = { sides: copy.sides, ids: copy.ids, ro: copy.ro, priority: Wire.priorityOf(copy, ranked), dueIds: Wire.dueIdsOf(copy) };
     // Ties in the order are broken here as the server breaks them. Should one
@@ -856,6 +859,17 @@
       }).catch(() => {});
     }
     return sideMemo;
+  }
+  // A sync replaces whole buckets, so most people come back with what rides
+  // beside them unchanged (a status picked, a note): only the rows replaced
+  // are compared, and as the text their digests are taken over.
+  function sameSides(was, now, copy) {
+    if (was === now) return true;
+    if (was.length !== now.length) return false;
+    for (let i = 0; i < now.length; i++) {
+      if (was[i] !== now[i] && Wire.sideText(copy.f, copy.k, was[i]) !== Wire.sideText(copy.f, copy.k, now[i])) return false;
+    }
+    return true;
   }
 
   // ---- the whole copy, checked when there is time ----

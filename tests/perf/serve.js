@@ -32,7 +32,7 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
   const app = require(path.join(ROOT, 'app.js'));
   // The function gzips any text answer over 1 KB for a browser that accepts it,
   // and keeps the last couple of whole compact lists compressed under their
-  // tag (netlify/src/api.mjs).
+  // tag, as brotli for a browser that takes it (netlify/src/api.mjs).
   const express = require(path.join(ROOT, 'node_modules/express'));
   const api = express();
   const zipped = new Map();
@@ -40,19 +40,24 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
     const send = res.send.bind(res);
     res.send = (body) => {
       const buf = typeof body === 'string' ? Buffer.from(body) : Buffer.isBuffer(body) ? body : null;
-      if (buf && buf.length > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '') && /json|text|javascript/.test(String(res.get('content-type') || 'application/json'))) {
+      const accepts = req.headers['accept-encoding'] || '';
+      const tag = res.statusCode === 200 ? String(res.get('etag') || '') : '';
+      const list = /^W\/"c2-/.test(tag);
+      const encoding = list && /\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : null;
+      if (buf && buf.length > 1024 && encoding && /json|text|javascript/.test(String(res.get('content-type') || 'application/json'))) {
         if (!res.get('content-type')) res.type('application/json');
-        res.set('content-encoding', 'gzip'); res.append('vary', 'Accept-Encoding'); res.removeHeader('content-length');
-        const tag = res.statusCode === 200 ? String(res.get('etag') || '') : '';
-        if (/^W\/"c2-/.test(tag)) {
-          const hit = zipped.get(tag);
-          if (hit && hit.size === buf.length) return send(hit.body);
-          const z = zlib.gzipSync(buf);
-          zipped.set(tag, { size: buf.length, body: z });
-          while (zipped.size > 2) zipped.delete(zipped.keys().next().value);
-          return send(z);
-        }
-        return send(zlib.gzipSync(buf));
+        res.set('content-encoding', encoding); res.append('vary', 'Accept-Encoding'); res.removeHeader('content-length');
+        const make = () => (encoding === 'br'
+          ? zlib.brotliCompressSync(buf, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length } })
+          : zlib.gzipSync(buf));
+        if (!list) return send(make());
+        const key = `${encoding} ${tag}`;
+        const hit = zipped.get(key);
+        if (hit && hit.size === buf.length) return send(hit.body);
+        const z = make();
+        zipped.set(key, { size: buf.length, body: z });
+        while (zipped.size > 2) zipped.delete(zipped.keys().next().value);
+        return send(z);
       }
       return send(body);
     };
