@@ -34,6 +34,7 @@ const onboarding = require('./lib/onboarding');
 const onboardingRoutes = require('./lib/onboarding-routes');
 const crypto = require('crypto');
 const { renderEmail, renderText, escapeHtml } = require('./lib/template');
+const { codeVersion } = require('./lib/code-version');
 
 const app = express();
 // Exact-case routes only, so /API/... cannot reach a handler by a path the
@@ -258,19 +259,22 @@ function maskedSettings(s, fromAddress) {
 }
 
 // The text queue's running order, and the reason each person is where they are.
-function textPriority(db, q) {
+// `now` is the moment ages are measured from (see displayNow below).
+function textPriority(db, optOut, now) {
   const ranked = priority.rank(db.candidates, {
     maxFollowUps: followUpSettings(db.settings).max,
-    optOut: (q && q.optOut) || [],
+    optOut,
+    now,
   });
   const order = {};
   // rank and reason only: the score and the fit bucket are what the ranking was
   // computed from, and nothing on the page ever reads them back.
   ranked.forEach((r, i) => { order[r.id] = { rank: i + 1, reason: r.reason }; });
   const blocked = {};
+  const asked = new Set(optOut);
   for (const c of db.candidates) {
     if (order[c.id]) continue;
-    const why = priority.blockedReason(c, { optOut: new Set(((q && q.optOut) || [])) });
+    const why = priority.blockedReason(c, { optOut: asked });
     if (why && why !== 'no phone number') blocked[c.id] = why;
   }
   return { order, blocked, textable: ranked.length };
@@ -298,9 +302,9 @@ function followUpSettings(settings) {
   const max = Math.min(5, Math.max(0, num(settings.maxFollowUps, 2)));
   return { days, max };
 }
-function followUpDueIds(db) {
+function followUpDueIds(db, now = Date.now()) {
   const { days, max } = followUpSettings(db.settings);
-  const cutoff = Date.now() - days * 24 * 3600 * 1000;
+  const cutoff = now - days * 24 * 3600 * 1000;
   return db.candidates
     .filter((c) => c.status === 'emailed' && c.lastEmailedAt && new Date(c.lastEmailedAt).getTime() <= cutoff && (c.followUpCount || 0) < max)
     .map((c) => c.id);
@@ -384,14 +388,102 @@ function publicCandidate(c) {
   return out;
 }
 
+// ---------- the state, and what it costs ----------
+// The browser asks for the state every 30 seconds from every open page, and
+// at 33,000 candidates the answer is some 24 MB of JSON. Three things keep it
+// from costing that every time:
+//  - an unchanged poll is answered 304 without the answer being built at
+//    all. Its tag is made from the stored document's version, the code's own
+//    version, a hash of the lists that depend on the clock, and the small
+//    rest of the state — none of which needs the candidate list rebuilt;
+//  - what depends only on the stored version (the list as the browser gets
+//    it, already as JSON, and the counts) is worked out once per version and
+//    kept beside the shared read-only copy of the document (store.read());
+//  - the lists that depend on the clock are measured from the start of a
+//    ten-minute window (displayNow), so they hold still between polls rather
+//    than moving the tag every few polls with nobody touching anything.
+// The answer is put together from those pieces byte for byte as building it
+// in one go would give it — the same keys, in the same order — so a page left
+// open across a deploy reads it exactly as it always has.
+
+// The clock the dashboard's lists are drawn against: the start of the current
+// ten-minute window. It is for what is shown and nothing else — who is due a
+// follow-up, where someone sits in the texting order and why. Nothing that
+// enforces a limit (the daily caps, the pace, a pause, what enqueueing
+// accepts) reads it; those keep the real time. It is never early: at worst
+// someone shows as due ten minutes after they became due.
+const DISPLAY_WINDOW_MS = 10 * 60 * 1000;
+const displayNow = (t = Date.now()) => t - (t % DISPLAY_WINDOW_MS);
+
+const sha1 = (text) => crypto.createHash('sha1').update(text).digest('base64url');
+
+// What the state needs that depends on nothing but the stored version. Kept
+// beside a shared copy (the WeakMap lets it go with that copy); a private
+// copy gets its own, used once.
+const stateParts = new WeakMap();
+function partsOf(db) {
+  let p = stateParts.get(db);
+  if (p) return p;
+  p = {
+    candidates: null,          // the list as JSON, made the first time an answer needs it
+    stats: stats(db),
+    withPhone: db.candidates.filter((c) => phone.normalize(c.phone)).length,
+    events: feedWindow(db.events),
+    timed: new Map(),          // window and opt-outs -> the clock-dependent lists
+  };
+  if (Object.isFrozen(db)) stateParts.set(db, p);
+  return p;
+}
+function candidatesJson(db, p) {
+  if (p.candidates === null) p.candidates = JSON.stringify(db.candidates.map(publicCandidate));
+  return p.candidates;
+}
+// Who is due a follow-up and the texting order, for one window and one
+// opt-out list, as JSON, with a hash of both for the tag. Worked out once per
+// window: a few hundred milliseconds at this size, then free until the window
+// moves on or the opt-out list changes.
+function timedParts(db, p, now, optOut) {
+  const key = `${now}|${optOut.join(',')}`;
+  let t = p.timed.get(key);
+  if (!t) {
+    const dueIds = JSON.stringify(followUpDueIds(db, now));
+    const order = JSON.stringify(textPriority(db, optOut, now));
+    t = { dueIds, priority: order, hash: sha1(`${dueIds}\n${order}`) };
+    if (p.timed.size >= 2) p.timed.clear();
+    p.timed.set(key, t);
+  }
+  return t;
+}
+
+// Stand-ins for the three big parts while the rest of the answer is turned
+// into JSON; each is then replaced by JSON already made. Random per process,
+// so nothing anybody types into a candidate can be taken for one.
+const PLACE_NONCE = crypto.randomBytes(12).toString('hex');
+const PLACE = { candidates: `@@${PLACE_NONCE}:candidates@@`, dueIds: `@@${PLACE_NONCE}:dueIds@@`, priority: `@@${PLACE_NONCE}:priority@@` };
+function spliceState(json, pieces) {
+  let out = '';
+  let from = 0;
+  for (const [stand, text] of pieces) {
+    const quoted = JSON.stringify(stand);
+    const at = json.indexOf(quoted, from);
+    if (at < 0) throw new Error('The state could not be put together. Please reload.');
+    out += json.slice(from, at) + text;
+    from = at + quoted.length;
+  }
+  return out + json.slice(from);
+}
+
 app.get('/api/state', asyncRoute(async (req, res) => {
-  const db = await store.load();
-  const lastError = db.events.find((e) => e.type === 'error' && Date.now() - new Date(e.ts).getTime() < 24 * 3600 * 1000);
-  // Four independent reads. On Netlify Blobs each one is its own round trip, so
-  // awaiting them in a line made this route as slow as the sum of them; nothing
-  // here depends on anything else here.
-  const [googleStatus, textQ, emailQ, relay, storageBackend, backupList, iq, onb] = await Promise.all([
-    google.status(db.settings),
+  // Independent reads. On Netlify Blobs each one is its own round trip, so
+  // awaiting them in a line made this route as slow as the sum of them. All
+  // of them start at once, the document's included — and the token record
+  // Google's status reads, which needs the document's settings for the rest.
+  // (A read that fails while another is awaited is still answered for: the
+  // empty catch only stops it being reported as unhandled.)
+  const tokens = google.loadTokens();
+  tokens.catch(() => {});
+  const syncRecord = storage.getJson(CALENDLY_SYNC_KEY).catch(() => null);
+  const others = Promise.all([
     textQueue.loadQ(),
     queue.loadQ(),
     storage.getJson('relay').catch(() => null),
@@ -400,12 +492,25 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     salesiq.load().catch(() => salesiq.blank()),
     onboarding.load().catch(() => onboarding.blank()),
   ]);
+  others.catch(() => {});
+  const db = await store.read();
+  const now = Date.now();
+  const lastError = db.events.find((e) => e.type === 'error' && now - new Date(e.ts).getTime() < 24 * 3600 * 1000);
+  const [googleStatus, calendlySync, [textQ, emailQ, relay, storageBackend, backupList, iq, onb]] = await Promise.all([
+    google.status(db.settings, tokens),
+    calendlySyncState(db, syncRecord),
+    others,
+  ]);
   // Derived from the status above rather than fetching it a second time.
   const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
+  const parts = partsOf(db);
+  const timed = timedParts(db, parts, displayNow(now), (textQ && textQ.optOut) || []);
+  // Everything but the three big parts, which stay empty until the tag has
+  // been settled.
   const payload = {
-    candidates: db.candidates.map(publicCandidate),
+    candidates: null,
     industries: priority.INDUSTRY_LABELS,
-    events: feedWindow(db.events),
+    events: parts.events,
     lastError: lastError ? lastError.message : '',
     // So a banner someone has dismissed stays dismissed until a new problem.
     lastErrorId: lastError ? lastError.id : '',
@@ -414,11 +519,11 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     // Whether this team has written its own outreach letter yet, for the
     // setup checklist. A team old enough to predate the flag counts as done.
     templateEdited: !db.settings.templateSeeded,
-    followUp: { template: db.followUp, dueIds: followUpDueIds(db), ...followUpSettings(db.settings) },
+    followUp: { template: db.followUp, dueIds: null, ...followUpSettings(db.settings) },
     settings: maskedSettings(db.settings, sendingNow.from),
     google: googleStatus,
     sending: sendingNow,
-    stats: stats(db),
+    stats: parts.stats,
     baseUrl: google.baseUrl(),
     storage: storageBackend,
     backups: backupList.map((b) => ({ key: b.key, at: b.at, reason: b.reason, count: b.count })),
@@ -430,19 +535,19 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     apollo: { configured: Boolean(db.settings.apolloApiKey), maxPerPull: apollo.MAX_PER_PULL, batch: apollo.ENRICH_BATCH },
     texting: {
       template: db.textTemplate,
-      withPhone: db.candidates.filter((c) => phone.normalize(c.phone)).length,
+      withPhone: parts.withPhone,
       // id -> { rank, score, reason } for everyone worth texting, plus why
       // anyone else is not. Sent as a small map rather than on each candidate
       // so the candidate list stays the same shape it has always been.
-      priority: textPriority(db, textQ),
+      priority: null,
       queue: textQueue.status(textQ, db.settings, relay),
       tokenSet: Boolean(db.settings.relayToken || (tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim())),
     },
     calendly: {
       syncEnabled: Boolean(db.settings.calendlyToken),
       webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
-      lastSyncAt: db.calendlyLastSyncAt || null,
-      error: db.calendlySyncError || '',
+      lastSyncAt: calendlySync.lastSyncAt || null,
+      error: calendlySync.error || '',
     },
     // Where each person stands with the Sales IQ questionnaire, by address,
     // so a candidate row or an interview can say so without the whole list.
@@ -452,27 +557,41 @@ app.get('/api/state', asyncRoute(async (req, res) => {
   };
 
   // The browser asks for this every 30 seconds and most of the time nothing
-  // has changed. The body is byte-stable for a given state, so hashing it lets
-  // an unchanged poll cost 304 bytes instead of megabytes — and the browser,
-  // seeing no new state, skips the re-render too. Weak tag: this is semantic
-  // equality of the payload, not of the bytes on any particular encoding.
-  const body = JSON.stringify(payload);
-  // The Mac says hello every 30 seconds, and that timestamp rode in the hash —
-  // so while the relay was running, which is the normal state, the tag changed
-  // on every poll and the conditional request below could never answer 304.
-  // It is only ever displayed once the relay has *stopped* checking in, and by
-  // then it has stopped moving; what the page actually reacts to is the
-  // `online` flag beside it, which is in the hash and flips when it should.
-  const stable = JSON.stringify(payload, (k, v) => (k === 'lastSeenAt' ? null : v));
-  // The team goes into the hash explicitly. The payload names it too, so two
+  // has changed, so an unchanged poll costs 304 bytes instead of megabytes —
+  // and the browser, seeing no new state, skips the re-render too. Weak tag:
+  // this is semantic equality of the answer, not of any particular encoding.
+  //
+  // Two timestamps are left out of it. The Mac says hello every 30 seconds,
+  // and while the relay was running, which is the normal state, its last-seen
+  // time changed the tag on every poll; it is only ever displayed once the
+  // relay has *stopped* checking in, and what the page reacts to is the
+  // `online` flag beside it, which is in the tag and flips when it should.
+  // The Calendly sync's time is shown only as "synced at", and the sync's own
+  // answer carries it to the page that ran it.
+  const stable = JSON.stringify(payload, (k, v) => (k === 'lastSeenAt' || k === 'lastSyncAt' ? null : v));
+  // The team goes into the tag explicitly. The answer names it too, so two
   // teams could not collide by accident — but a tag that answers 304 for the
   // wrong team would show one team the other's dashboard, and that is not a
-  // thing to leave resting on a field happening to be in the body.
-  const etag = `W/"${crypto.createHash('sha1').update(`${tenant.current() || '-'}:${stable}`).digest('base64url')}"`;
+  // thing to leave resting on a field happening to be in the body. The
+  // stored version stands in for the list (a document with no version, which
+  // only a store without ETags gives, is hashed instead), and the code's
+  // version is there so a deploy that changes the answer's shape never gets a
+  // 304 for an answer built by the old code.
+  const listVersion = store.versionOf(db) || sha1(candidatesJson(db, parts));
+  const etag = `W/"${sha1(`${tenant.current() || '-'}:${codeVersion()}:${listVersion}:${timed.hash}:${stable}`)}"`;
   res.set('ETag', etag);
   // Revalidate every time — never serve this from cache without asking.
   res.set('Cache-Control', 'no-cache, private');
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
+
+  payload.candidates = PLACE.candidates;
+  payload.followUp.dueIds = PLACE.dueIds;
+  payload.texting.priority = PLACE.priority;
+  const body = spliceState(JSON.stringify(payload), [
+    [PLACE.candidates, candidatesJson(db, parts)],
+    [PLACE.dueIds, timed.dueIds],
+    [PLACE.priority, timed.priority],
+  ]);
   return res.type('application/json').send(body);
 }));
 
@@ -503,10 +622,16 @@ const SETTING_REASONS = {
 };
 
 app.post('/api/settings', asyncRoute(async (req, res) => {
-  const sender = (await mailer.sendStatus((await store.load()).settings)).from;
+  const sender = (await mailer.sendStatus((await store.read()).settings)).from;
   let before = null;
   let adjusted = [];
-  const db = await store.update((d) => { before = { ...d.settings }; adjusted = applySettings(d, req.body, sender); });
+  // A save that changes no value writes nothing: Settings saves the whole
+  // form, and every write rewrites the whole list.
+  const db = await store.update((d) => {
+    before = { ...d.settings };
+    adjusted = applySettings(d, req.body, sender);
+    if (SETTINGS_ALLOWED.every((k) => d.settings[k] === before[k])) return false;
+  });
   // A raised daily limit lifts the daily-limit pause at once instead of waiting
   // it out; new mail credentials lift the "not set up" pause.
   const kinds = [];
@@ -625,7 +750,7 @@ app.post('/api/followup/reset', asyncRoute(async (_req, res) => {
 const publicAttachment = ({ id, name, type, size, builtin }) => ({ id, name, type, size, builtin: Boolean(builtin) });
 
 app.post('/api/template/attachments', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const meta = await attachments.add(db, req.body || {});
   let fresh;
   try {
@@ -644,7 +769,7 @@ app.post('/api/template/attachments', asyncRoute(async (req, res) => {
 }));
 
 app.delete('/api/template/attachments/:id', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const meta = attachments.list(db).find((a) => a.id === req.params.id);
   if (!meta) throw new Error('Attachment not found.');
   const fresh = await store.update((d) => { d.template.attachments = attachments.list(d).filter((a) => a.id !== meta.id); });
@@ -668,7 +793,7 @@ app.post('/api/template/attachments/restore-builtin', asyncRoute(async (_req, re
 
 // Thumbnail for the template page (as a data URL, so no binary response handling).
 app.get('/api/template/attachments/:id/preview', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const meta = attachments.list(db).find((a) => a.id === req.params.id);
   if (!meta) throw new Error('Attachment not found.');
   const bytes = await attachments.bytesFor(meta);
@@ -719,9 +844,13 @@ function rowsFromBody(body) {
 }
 
 app.post('/api/import/sheet', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const { rows, via } = await google.fetchSheetRows(req.body.url, db.settings);
-  await store.update((d) => { d.settings.lastSheetUrl = String(req.body.url || '').trim(); });
+  const url = String(req.body.url || '').trim();
+  await store.update((d) => {
+    if (d.settings.lastSheetUrl === url) return false;
+    d.settings.lastSheetUrl = url;
+  });
   res.json({ ...toPreview(rows), via });
 }));
 app.post('/api/import/csv', asyncRoute(async (req, res) => {
@@ -994,7 +1123,7 @@ function summarize(analysis) {
 
 // Dry run: exactly what the import would do, against the list as it is now.
 app.post('/api/import/preview', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
   if (rows.length > MAX_IMPORT_ROWS) throw new Error(`Check at most ${MAX_IMPORT_ROWS.toLocaleString()} rows at a time.`);
   res.json({ ok: true, ...summarize(analyzeImport(db.candidates, rows, req.body.mapping, { lines: req.body.lines, headerless: Boolean(req.body.headerless) })) });
@@ -1047,7 +1176,7 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
 const APOLLO_IDS_PER_REQUEST = 10;
 
 app.post('/api/apollo/search', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   try {
     const found = await apollo.search(db.settings, req.body || {}, { page: req.body && req.body.page });
     res.json({ ok: true, ...found, maxPerPull: apollo.MAX_PER_PULL, perRequest: APOLLO_IDS_PER_REQUEST });
@@ -1058,7 +1187,7 @@ app.post('/api/apollo/search', asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/apollo/import', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const ids = (Array.isArray(req.body && req.body.ids) ? req.body.ids : []).slice(0, APOLLO_IDS_PER_REQUEST);
   if (!ids.length) throw new Error('No Apollo records were selected.');
   const sending = await mailer.sendStatus(db.settings);
@@ -1149,9 +1278,14 @@ app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
     c = db.candidates.find((x) => x.id === req.params.id);
     if (!c) throw new Error('Candidate not found.');
     wasDeclined = c.status === 'declined';
+    // An edit that changes no value writes nothing (the page saves a whole
+    // card at a time, and every write rewrites the whole list).
+    let changed = false;
+    const set = (f, v) => { if (c[f] !== v) { c[f] = v; changed = true; } };
     const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
-    for (const f of fields) if (f in req.body) c[f] = String(req.body[f] ?? '').trim();
-    if (email) c.email = email;
+    for (const f of fields) if (f in req.body) set(f, String(req.body[f] ?? '').trim());
+    if (email) set('email', email);
+    if (!changed) return false;
   });
   // Marking somebody "Not interested" has to stop a text that is already
   // waiting to go out. The ranking reads the status, but the queue does not —
@@ -1180,7 +1314,7 @@ function csvCell(v) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 app.get('/api/candidates/export', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const lines = [EXPORT_COLUMNS.map(([h]) => h).join(',')];
   for (const c of db.candidates) {
     const first = c.firstName || (c.name || '').split(' ')[0] || '';
@@ -1218,7 +1352,7 @@ app.delete('/api/candidates/:id', asyncRoute(async (req, res) => {
 
 // ---------- Personalized preview & send ----------
 app.post('/api/preview', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const c = db.candidates.find((x) => x.id === req.body.candidateId);
   if (!c) throw new Error('Candidate not found.');
   const followUp = Boolean(req.body.followUp);
@@ -1410,7 +1544,7 @@ app.post('/api/relay/hello', asyncRoute(async (req, res) => {
     backend: String(b.backend || 'applescript').slice(0, 20),
     error: String(b.error || '').slice(0, 300),
   }));
-  const db = await store.load();
+  const db = await store.read();
   const l = textQueue.limits(db.settings);
   res.json({ ok: true, pollMs: 5000, helloMs: 30000, limits: { startHour: l.startHour, endHour: l.endHour, dailyLimit: l.dailyLimit } });
 }));
@@ -1422,8 +1556,7 @@ app.post('/api/relay/hello', asyncRoute(async (req, res) => {
 //
 // Deliberately only ever numbers already texted — never the candidate list.
 app.post('/api/relay/handles', asyncRoute(async (_req, res) => {
-  const q = await textQueue.loadQ();
-  const db = await store.load();
+  const [q, db] = await Promise.all([textQueue.loadQ(), store.read()]);
   const handles = new Set();
   for (const e of q.sentLog || []) if (e && e.phone) handles.add(e.phone);
   for (const c of db.candidates) {
@@ -1507,7 +1640,7 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
   // The relay skips this call when it has nothing, but a retry or a future
   // version might not: an empty batch should never read the whole record.
   if (!raw.length) return res.json({ applied: 0, unknown: 0, optOut: 0, tooOld: 0, neverTexted: 0 });
-  const db = await store.load();
+  const db = await store.read();
   const index = byPhone(db);
   const seen = { applied: 0, unknown: 0, optOut: 0, tooOld: 0, neverTexted: 0, replies: [] };
   const optOuts = [];
@@ -1547,43 +1680,74 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
     seen.applied += 1;
   }
 
-  if (touched.size) {
-    await store.update((fresh) => {
-      for (const patch of touched.values()) {
-        // The mutator can run again after a write conflict: start clean.
-        patch.fresh = [];
-        patch.firstRead = false;
-        const c = fresh.candidates.find((x) => x.id === patch.id);
-        if (!c) continue;
-        // Messages accepts a send and only then marks it failed, so this can
-        // arrive after we already recorded "sent" — it has to be able to undo
-        // that, which the usual forward-only rule would not allow. A receipt
-        // that already proved delivery still wins.
-        if (patch.undelivered && (TEXT_RANK[c.textStatus || ''] || 0) <= TEXT_RANK.sent) c.textStatus = 'not-imessage';
-        if (patch.delivered) { c.textDeliveredAt = c.textDeliveredAt || patch.delivered; advanceText(c, 'delivered'); }
-        if (patch.read) { patch.firstRead = !c.textReadAt; c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
-        for (const m of patch.machine || []) store.addToThread(c, 'in', m.text, m.ts, { kind: m.kind });
-        // Only a message this thread has never held is news. A relay reports
-        // the same line again (a restart, a second Mac, a re-read window), and
-        // each repeat used to mark the conversation unread again, add another
-        // feed line and send another notification to the phone.
-        for (const r of patch.replies) if (store.addToThread(c, 'in', r.text, r.ts)) patch.fresh.push(r);
-        if (patch.fresh.length) {
-          const latest = patch.fresh[patch.fresh.length - 1].ts;
-          c.textRepliedAt = c.textRepliedAt || latest;
-          advanceText(c, 'replied');
-          // Cleared when the thread is opened, so the bell survives a reload
-          // and agrees with itself across devices.
-          c.textUnread = true;
-          // A text reply is the same pipeline signal as an email reply.
-          if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
-          c.repliedAt = c.repliedAt || latest;
-          // STOP only counts when it is a new message: a repeat of an old one
-          // must not undo someone putting them back on the list by hand.
-          if (patch.fresh.some((r) => phone.optedOut(r.text))) c.status = 'declined';
+  // One write for the whole batch: the candidates and their feed lines
+  // together. Each feed line used to be a read and a write of the whole list
+  // of its own — half a dozen for one busy batch. And a batch that brings
+  // nothing new (receipts already recorded, a reply already in the thread,
+  // which a relay reports again after a restart) writes nothing: that is
+  // found out first on copies of just the people in it, laid over the shared
+  // copy, without loading the list at all.
+  const apply = (fresh) => {
+    let changed = false;
+    for (const patch of touched.values()) {
+      // The mutator can run again after a write conflict: start clean.
+      patch.fresh = [];
+      patch.firstRead = false;
+      const c = fresh.candidates.find((x) => x.id === patch.id);
+      if (!c) continue;
+      const before = JSON.stringify(c);
+      // Messages accepts a send and only then marks it failed, so this can
+      // arrive after we already recorded "sent" — it has to be able to undo
+      // that, which the usual forward-only rule would not allow. A receipt
+      // that already proved delivery still wins.
+      if (patch.undelivered && (TEXT_RANK[c.textStatus || ''] || 0) <= TEXT_RANK.sent) c.textStatus = 'not-imessage';
+      if (patch.delivered) { c.textDeliveredAt = c.textDeliveredAt || patch.delivered; advanceText(c, 'delivered'); }
+      if (patch.read) { patch.firstRead = !c.textReadAt; c.textReadAt = c.textReadAt || patch.read; advanceText(c, 'read'); }
+      for (const m of patch.machine || []) store.addToThread(c, 'in', m.text, m.ts, { kind: m.kind });
+      // Only a message this thread has never held is news. A relay reports
+      // the same line again (a restart, a second Mac, a re-read window), and
+      // each repeat used to mark the conversation unread again, add another
+      // feed line and send another notification to the phone.
+      for (const r of patch.replies) if (store.addToThread(c, 'in', r.text, r.ts)) patch.fresh.push(r);
+      if (patch.fresh.length) {
+        const latest = patch.fresh[patch.fresh.length - 1].ts;
+        c.textRepliedAt = c.textRepliedAt || latest;
+        advanceText(c, 'replied');
+        // Cleared when the thread is opened, so the bell survives a reload
+        // and agrees with itself across devices.
+        c.textUnread = true;
+        // A text reply is the same pipeline signal as an email reply.
+        if (c.status === 'new' || c.status === 'emailed' || c.status === 'bounced') c.status = 'replied';
+        c.repliedAt = c.repliedAt || latest;
+        // STOP only counts when it is a new message: a repeat of an old one
+        // must not undo someone putting them back on the list by hand.
+        if (patch.fresh.some((r) => phone.optedOut(r.text))) c.status = 'declined';
+      }
+      // The feed: once per new message, never per report.
+      patch.who = c.name || phone.display(phone.normalize(c.phone));
+      // The first read only; a receipt reported again says nothing new.
+      if (patch.read && patch.firstRead && !patch.fresh.length) {
+        store.pushEvent(fresh, 'text-read', `${patch.who} read your text.`, c.id, patch.read);
+      }
+      for (const r of patch.fresh) {
+        // STOP is the one reply that changes what you may legally do next, and
+        // as a plain "replied" line it read exactly like someone saying yes.
+        if (phone.optedOut(r.text)) {
+          store.pushEvent(fresh, 'text-optout', `${patch.who} replied STOP — blocked from texting.`, c.id, r.ts);
+        } else {
+          store.pushEvent(fresh, 'text-replied', `${patch.who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts);
         }
       }
-    });
+      if (JSON.stringify(c) !== before) changed = true;
+    }
+    return changed;
+  };
+  if (touched.size) {
+    const trial = {
+      candidates: db.candidates.map((c) => (touched.has(c.id) ? structuredClone(c) : c)),
+      events: db.events.slice(),
+    };
+    if (apply(trial)) await store.update((fresh) => { if (!apply(fresh)) return false; });
   }
 
   // Anyone who asked us to stop is blocked at the queue, not just on their record.
@@ -1592,26 +1756,11 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
     seen.optOut = optOuts.length;
   }
 
-  // The feed and the phone push: once per new message, never per report.
+  // The phone push: once per new message, never per report.
   for (const patch of touched.values()) {
-    const c = db.candidates.find((x) => x.id === patch.id);
-    if (!c) continue;
-    const who = c.name || phone.display(phone.normalize(c.phone));
     const fresh = patch.fresh || [];
-    // The first read only; a receipt reported again says nothing new.
-    if (patch.read && patch.firstRead && !fresh.length) {
-      await store.addEvent('text-read', `${who} read your text.`, c.id, patch.read).catch(() => {});
-    }
-    for (const r of fresh) {
-      // STOP is the one reply that changes what you may legally do next, and
-      // as a plain "replied" line it read exactly like someone saying yes.
-      if (phone.optedOut(r.text)) {
-        await store.addEvent('text-optout', `${who} replied STOP — blocked from texting.`, c.id, r.ts).catch(() => {});
-      } else {
-        await store.addEvent('text-replied', `${who} replied to your text: “${r.text.slice(0, 140)}”`, c.id, r.ts).catch(() => {});
-      }
-    }
     if (!fresh.length) continue;
+    const who = patch.who;
     // One notification per person per batch: "Hi" / "yes" / "call me at 3"
     // arriving together is one thing to read, not three buzzes.
     const stop = fresh.find((r) => phone.optedOut(r.text));
@@ -1652,7 +1801,7 @@ app.post('/api/texts/template/reset', asyncRoute(async (_req, res) => {
 }));
 
 app.post('/api/texts/preview', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const c = db.candidates.find((x) => x.id === (req.body && req.body.id))
     || db.candidates.find((x) => phone.normalize(x.phone))
     || { name: 'Sam Rivera', role: 'Account Executive', company: 'Acme Payments', phone: '+15551234567' };
@@ -1718,7 +1867,7 @@ app.post('/api/texts/queue/retry-failed', asyncRoute(async (_req, res) => {
 
 // One email conversation, read live from Gmail.
 app.get('/api/emails/thread', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const c = db.candidates.find((x) => x.id === String((req.query && req.query.id) || ''));
   if (!c) return res.status(404).json({ error: 'No such candidate.' });
   const base = {
@@ -1853,10 +2002,9 @@ app.post('/api/emails/seen', asyncRoute(async (req, res) => {
 
 // One conversation, both halves, oldest first.
 app.get('/api/texts/thread', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const [db, q] = await Promise.all([store.read(), textQueue.loadQ()]);
   const c = db.candidates.find((x) => x.id === String((req.query && req.query.id) || ''));
   if (!c) return res.status(404).json({ error: 'No such candidate.' });
-  const q = await textQueue.loadQ();
   const p = phone.normalize(c.phone);
   res.json({
     ok: true,
@@ -1885,10 +2033,9 @@ app.post('/api/texts/reply', asyncRoute(async (req, res) => {
   const id = String((req.body && req.body.id) || '');
   const body = String((req.body && req.body.body) || '').trim().slice(0, 2000);
   if (!body) return res.status(400).json({ error: 'Type a message first.' });
-  const db = await store.load();
+  const [db, relay] = await Promise.all([store.load(), relayState()]);
   const c = db.candidates.find((x) => x.id === id);
   if (!c) return res.status(404).json({ error: 'No such candidate.' });
-  const relay = await relayState();
   // relayState() is the raw blob the Mac last wrote; "online" is a judgement
   // about how long ago that was, made the same way the queue makes it.
   const seen = relay && relay.lastSeenAt ? new Date(relay.lastSeenAt).getTime() : 0;
@@ -1901,11 +2048,16 @@ app.post('/api/texts/reply', asyncRoute(async (req, res) => {
       : out.reason === 'no-phone' ? 'No mobile number on this candidate.' : 'Type a message first.';
     return res.status(409).json({ error: why });
   }
-  // Reading a thread is answering it, so the badge should not still be lit.
-  await store.update((fresh) => {
-    const f = fresh.candidates.find((x) => x.id === id);
-    if (f) f.textUnread = false;
-  });
+  // Reading a thread is answering it, so the badge should not still be lit —
+  // and a badge already out is nothing to write, nor to load the list again
+  // for: the copy this request began with says whether it was lit.
+  if (c.textUnread) {
+    await store.update((fresh) => {
+      const f = fresh.candidates.find((x) => x.id === id);
+      if (!f || !f.textUnread) return false;
+      f.textUnread = false;
+    });
+  }
   res.json({ ok: true, queued: true, relayOnline });
 }));
 
@@ -1928,7 +2080,7 @@ app.post('/api/texts/seen', asyncRoute(async (req, res) => {
 // full only to a signed-in dashboard so it can be copied into the relay's
 // config once, and never sent anywhere else.
 app.get('/api/texts/relay-token', asyncRoute(async (_req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   res.json({
     token: db.settings.relayToken || '',
     envOverride: Boolean(tenant.isLegacy() && (process.env.RELAY_TOKEN || '').trim()),
@@ -1956,7 +2108,7 @@ app.post('/api/texts/relay-token', asyncRoute(async (req, res) => {
 // the pixel is served either way, because whether we recognised it is not the
 // mail client's business.
 async function recordOpen(token) {
-  const db = await store.load();
+  const db = await store.read();
   const id = tracking.verify(db.settings, token);
   if (!id) return false;
   const c = db.candidates.find((x) => x.id === id);
@@ -2033,7 +2185,7 @@ app.post('/api/replies/check', asyncRoute(async (_req, res) => {
 // Used by the dashboard button: returns the consent URL (and sets the state
 // cookie) so the browser only navigates once everything server-side worked.
 app.get('/api/google/auth-url', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const st = await google.status(db.settings);
   if (!st.configured) throw new Error('Enter your Google OAuth Client ID and Secret first, then save.');
   const state = auth.issueOauthState(req, res, req.team.id);
@@ -2041,7 +2193,7 @@ app.get('/api/google/auth-url', asyncRoute(async (req, res) => {
 }));
 
 app.get('/auth/google', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const st = await google.status(db.settings);
   if (!st.configured) return res.redirect('/#settings?error=google-not-configured');
   const state = auth.issueOauthState(req, res, req.team.id);
@@ -2049,7 +2201,7 @@ app.get('/auth/google', asyncRoute(async (req, res) => {
 }));
 
 app.get('/auth/google/callback', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   if (req.query.error) return res.redirect('/#settings?error=' + encodeURIComponent(req.query.error));
   // The state round-trip stops a forged callback from binding someone else's
   // Google account to this dashboard — and, because it carries the team that
@@ -2164,6 +2316,41 @@ function learnEmail(c, email) {
   const e = normEmail(email);
   if (!e || normEmail(c.email) === e) return;
   c.altEmails = Array.from(new Set([...(c.altEmails || []), e]));
+}
+// matchCandidate() for a whole listing at once. It walks the list for every
+// invitee, and at 33,000 candidates and a listing of a few hundred bookings
+// that was most of a sync; this indexes the list once and answers exactly as
+// it would: the first person in list order with that address (their own or
+// one learned before), else the one person with that full name. learn() is
+// learnEmail() kept in step with the index, so a booking later in the same
+// listing finds an address learned earlier in it, as the walk did.
+function bookingMatcher(candidates) {
+  const byEmail = new Map();
+  const byName = new Map();
+  for (const c of candidates) {
+    for (const a of [c.email, ...(c.altEmails || [])]) {
+      const e = normEmail(a);
+      if (e && !byEmail.has(e)) byEmail.set(e, c);
+    }
+    for (const n of new Set([normName(c.name), normName(`${c.firstName || ''}${c.lastName || ''}`)])) {
+      if (!byName.has(n)) byName.set(n, []);
+      byName.get(n).push(c);
+    }
+  }
+  return {
+    match(email, name) {
+      const e = normEmail(email);
+      if (e && byEmail.has(e)) return byEmail.get(e);
+      const n = normName(name);
+      const same = n.length >= 4 ? byName.get(n) : null;
+      return same && same.length === 1 ? same[0] : null;
+    },
+    learn(c, email) {
+      learnEmail(c, email);
+      const e = normEmail(email);
+      if (e && !byEmail.has(e)) byEmail.set(e, c);
+    },
+  };
 }
 
 // Manual link from the Interviews tile for the rare booking the matcher
@@ -2319,7 +2506,7 @@ async function applyCalendlyEvent(req, db) {
 // team's keys and apply it. Nothing is applied on a signature we cannot check.
 function calendlyWebhook(req, res, team) {
   return tenant.run(team.id, async () => {
-    const db = await store.load();
+    const db = await store.read();
     const keys = calendlyKeys(db);
     const header = req.get('Calendly-Webhook-Signature');
     if (!keys.length) {
@@ -2364,7 +2551,7 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
   if (!calendly.parseSignature(header)) return res.status(401).json({ error: 'Invalid Calendly signature' });
   for (const t of await teams.all()) {
     const mine = await tenant.run(t.id, async () => {
-      const db = await store.load();
+      const db = await store.read();
       const keys = calendlyKeys(db);
       return keys.length > 0 && calendly.verifySignature(keys, header, req.rawBody);
     }).catch(() => false);
@@ -2383,121 +2570,201 @@ app.post('/webhooks/calendly', asyncRoute(async (req, res) => {
 
 // ---------- Calendly sync: pull scheduled interviews, match to candidates ----------
 const DAY_MS = 24 * 3600 * 1000;
+
+// The sync's own record: when it last ran, what went wrong if it failed, and
+// the slot Sales IQ claims before starting one. These used to live in the
+// team document, so every sync — every 90 seconds while Sales IQ is open,
+// with nothing new — rewrote the whole candidate list to move a timestamp.
+// Now they are a small record of their own, and the document is written only
+// when the interviews, or the people matched to them, actually change. Until
+// a team's first sync after the move, the values its document still holds
+// stand.
+const CALENDLY_SYNC_KEY = 'calendly-sync';
+// `record` is the record, or its read already under way, if the caller has it.
+async function calendlySyncState(db, record) {
+  const rec = record !== undefined ? await record : await storage.getJson(CALENDLY_SYNC_KEY).catch(() => null);
+  const r = rec && typeof rec === 'object' ? rec : {};
+  if (r.lastSyncAt !== undefined) return { lastSyncAt: r.lastSyncAt || null, error: r.error || '', claimedAt: r.claimedAt || null };
+  return { lastSyncAt: db.calendlyLastSyncAt || null, error: db.calendlySyncError || '', claimedAt: r.claimedAt || db.salesiqSyncClaimedAt || null };
+}
+async function recordCalendlySync(fields) {
+  return storage.updateJson(CALENDLY_SYNC_KEY, (cur) => ({ ...(cur && typeof cur === 'object' ? cur : {}), ...fields }));
+}
+
+// What one listing from Calendly makes of a document: the interviews rebuilt,
+// each booking matched to a candidate (learning the address they booked
+// with), people booked or un-booked, and each booking remembered as told.
+// Returns what to announce, and whether the document changed at all —
+// interviews, a matched candidate, or a booking newly remembered; a memo
+// entry only pruned for age is not worth a write of its own.
+function applyCalendlyListing(fresh, result, { minStart, maxStart, listedAt }) {
+  const announce = [];
+  const interviewsBefore = JSON.stringify(fresh.interviews || []);
+  const memoBefore = new Set(Object.keys(fresh.calendlyAnnounced && typeof fresh.calendlyAnnounced === 'object' ? fresh.calendlyAnnounced : {}));
+  const before = new Map();          // matched candidate -> as it was
+  const matcher = bookingMatcher(fresh.candidates);
+  // Every booking this team has already been told about — what the last
+  // sync listed and what the webhook has added since. A booking is
+  // announced the first time its (event, invitee) pair shows up, and never
+  // again. Deciding "new" from the one event a candidate's card shows made
+  // anyone with two bookings (a first and a second interview, both inside
+  // the window) flip between them and be announced twice on every sync.
+  const known = new Set((fresh.interviews || []).filter((i) => i && i.status === 'active').map((i) => bookingKey(i.uri, i.inviteeEmail)));
+  // And what it was told about before, even if the list has since lost it.
+  const announced = calendlyMemo(fresh, 'calendlyAnnounced');
+  const stamp = new Date().toISOString();
+  for (const k of Object.keys(announced)) if (!k.startsWith('x|')) known.add(k);
+  const list = [];
+  const activeFor = new Map();     // candidate -> [{ ev, inv }], in listing order
+  const canceledFor = new Map();
+  for (const ev of result.interviews) {
+    if (!ev.invitees.length) {
+      list.push({ uri: ev.uri, name: ev.name, status: ev.status, start: ev.start, end: ev.end, joinUrl: ev.joinUrl, inviteeName: '', inviteeEmail: '', candidateId: null });
+    }
+    for (const inv of ev.invitees) {
+      const c = matcher.match(inv.email, inv.name);
+      if (c) {
+        // A dry run has copies of only the people a booking can match.
+        if (Object.isFrozen(c)) throw new Error('a booking matched someone the dry run did not copy');
+        if (!before.has(c)) before.set(c, JSON.stringify(c));
+        matcher.learn(c, inv.email);
+      }
+      const active = ev.status === 'active' && inv.status !== 'canceled';
+      list.push({
+        uri: ev.uri, name: ev.name, status: active ? 'active' : 'canceled', start: ev.start, end: ev.end,
+        joinUrl: ev.joinUrl, inviteeName: inv.name || '', inviteeEmail: inv.email || '',
+        candidateId: c ? c.id : null, rescheduleUrl: inv.rescheduleUrl || '', cancelUrl: inv.cancelUrl || '',
+        inviteePhone: inv.phone || '', bookedAt: inv.createdAt || null,
+      });
+      if (!c) continue;
+      const into = active ? activeFor : canceledFor;
+      if (!into.has(c)) into.set(c, []);
+      into.get(c).push({ ev, inv });
+    }
+  }
+  for (const [c, pairs] of activeFor) {
+    // The card shows one interview: the first the listing gives (it lists
+    // upcoming ones soonest first, then past ones latest first), so the
+    // next one coming up, or else the most recent.
+    const { ev } = pairs[0];
+    const isNewAny = pairs.some(({ ev: e, inv }) => !known.has(bookingKey(e.uri, inv.email)));
+    c.bookedAt = ev.start;
+    c.bookedEvent = ev.name;
+    c.calendlyEventUri = ev.uri;
+    c.bookedJoinUrl = ev.joinUrl || '';
+    // Only moved forward from earlier in the funnel, or on a booking nobody
+    // has seen yet; a status set by hand is not undone every five minutes.
+    if (EARLY_STATUSES.has(c.status || 'new') || (isNewAny && c.status !== 'declined')) c.status = 'booked';
+    for (const { ev: e, inv } of pairs) {
+      const key = bookingKey(e.uri, inv.email);
+      const seen = known.has(key);
+      // Remembered either way, so a list that later loses the row (a
+      // listing cut short) never makes it news again.
+      announced[key] = announced[key] || stamp;
+      if (seen) continue;
+      known.add(key);
+      announce.push({ c, ev: e, at: inv.createdAt || null });
+    }
+  }
+  for (const [c, pairs] of canceledFor) {
+    if (activeFor.has(c)) continue;          // still has an interview on the books
+    for (const { ev, inv } of pairs) {
+      if (c.calendlyEventUri !== ev.uri || c.status !== 'booked') continue;
+      c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
+      c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
+      const key = `x|${bookingKey(ev.uri, inv.email)}`;
+      if (announced[key]) continue;          // the webhook said so already
+      announced[key] = stamp;
+      announce.push({ c, ev, canceled: true });
+    }
+  }
+  // What this sync did not read is kept as it was, rather than replaced by
+  // nothing: an event it listed but had no allowance left for (only a
+  // cancellation is carried over), and, when the listing stopped short of
+  // the window's end, anything it never reached. A booking the webhook has
+  // just brought in is one of those, and Sales IQ, which asks for a sync
+  // every time it looks, would otherwise see it vanish. Only what a full
+  // listing no longer has, or what has left the window, is let go.
+  const read = new Set(result.interviews.map((ev) => ev.uri));
+  const skipped = new Map((result.skipped || []).map((ev) => [ev.uri, ev]));
+  for (const i of fresh.interviews || []) {
+    if (!i || read.has(i.uri)) continue;
+    const at = new Date(i.start).getTime();
+    if (!(at >= minStart.getTime() && at <= maxStart.getTime())) continue;
+    const ev = skipped.get(i.uri);
+    // Gone from a full listing: let go — unless the webhook wrote it after
+    // the listing was taken, when the listing simply had not seen it yet.
+    if (!ev && result.complete && !(i.hookAt && Date.parse(i.hookAt) >= listedAt)) continue;
+    list.push(ev && ev.status !== 'active' ? { ...i, status: 'canceled' } : i);
+  }
+  fresh.interviews = list.sort((a, b) => String(a.start).localeCompare(String(b.start)));
+  const changed = JSON.stringify(fresh.interviews) !== interviewsBefore
+    || [...before].some(([c, was]) => JSON.stringify(c) !== was)
+    || Object.keys(announced).some((k) => !memoBefore.has(k));
+  return { announce, changed };
+}
+
 // Shared by the dashboard's sync button and by Sales IQ, which asks for one
 // so that a booking reaches it while nobody has this dashboard open. Returns
-// the body the dashboard's route has always answered with.
+// the body the dashboard's route has always answered with, plus `changed`
+// (whether what the state shows is different now, so the page knows whether
+// to fetch it) and `syncedAt`.
 async function syncCalendly() {
-  const db = await store.load();
+  const db = await store.read();
   const token = db.settings.calendlyToken;
-  if (!token) return { ok: true, unavailable: 'Add your Calendly token in Settings to sync interviews.' };
+  if (!token) return { ok: true, unavailable: 'Add your Calendly token in Settings to sync interviews.', changed: false };
   const minStart = new Date(Date.now() - 14 * DAY_MS);
   const maxStart = new Date(Date.now() + 120 * DAY_MS);
+  const previous = await calendlySyncState(db);
   let result;
   // Rows the webhook writes after this moment are newer than the listing.
   const listedAt = Date.now();
   try {
     result = await calendly.listInterviews(token, { minStart, maxStart });
   } catch (err) {
-    await store.update((d) => { d.calendlySyncError = err.message; d.calendlyLastSyncAt = new Date().toISOString(); });
-    return { ok: false, error: err.message };
+    const syncedAt = new Date().toISOString();
+    await recordCalendlySync({ lastSyncAt: syncedAt, error: err.message });
+    return { ok: false, error: err.message, changed: previous.error !== err.message, syncedAt };
   }
-  const announce = [];
-  const synced = await store.update((fresh) => {
-    announce.length = 0;   // the mutator re-runs on a conflict: collect afresh
-    // Every booking this team has already been told about — what the last
-    // sync listed and what the webhook has added since. A booking is
-    // announced the first time its (event, invitee) pair shows up, and never
-    // again. Deciding "new" from the one event a candidate's card shows made
-    // anyone with two bookings (a first and a second interview, both inside
-    // the window) flip between them and be announced twice on every sync.
-    const known = new Set((fresh.interviews || []).filter((i) => i && i.status === 'active').map((i) => bookingKey(i.uri, i.inviteeEmail)));
-    // And what it was told about before, even if the list has since lost it.
-    const announced = calendlyMemo(fresh, 'calendlyAnnounced');
-    const stamp = new Date().toISOString();
-    for (const k of Object.keys(announced)) if (!k.startsWith('x|')) known.add(k);
-    const list = [];
-    const activeFor = new Map();     // candidate -> [{ ev, inv }], in listing order
-    const canceledFor = new Map();
+  const window = { minStart, maxStart, listedAt };
+  // A dry run first, on the shared read-only copy: most syncs find nothing
+  // new, and finding that out should not cost a private copy of the whole
+  // list. Only the people a booking can be matched to are copied, because
+  // they are the only ones a listing can change — an address learned from a
+  // booking is learned by one of them, so it can only ever lead back to one
+  // of them. Should the dry run fail for any reason, the sync is simply done
+  // for real.
+  let outcome;
+  try {
+    const matched = new Set();
+    const matcher = bookingMatcher(db.candidates);
     for (const ev of result.interviews) {
-      if (!ev.invitees.length) {
-        list.push({ uri: ev.uri, name: ev.name, status: ev.status, start: ev.start, end: ev.end, joinUrl: ev.joinUrl, inviteeName: '', inviteeEmail: '', candidateId: null });
-      }
       for (const inv of ev.invitees) {
-        const c = matchCandidate(fresh.candidates, inv.email, inv.name);
-        if (c) learnEmail(c, inv.email);
-        const active = ev.status === 'active' && inv.status !== 'canceled';
-        list.push({
-          uri: ev.uri, name: ev.name, status: active ? 'active' : 'canceled', start: ev.start, end: ev.end,
-          joinUrl: ev.joinUrl, inviteeName: inv.name || '', inviteeEmail: inv.email || '',
-          candidateId: c ? c.id : null, rescheduleUrl: inv.rescheduleUrl || '', cancelUrl: inv.cancelUrl || '',
-          inviteePhone: inv.phone || '', bookedAt: inv.createdAt || null,
-        });
-        if (!c) continue;
-        const into = active ? activeFor : canceledFor;
-        if (!into.has(c)) into.set(c, []);
-        into.get(c).push({ ev, inv });
+        const c = matcher.match(inv.email, inv.name);
+        if (c) matched.add(c);
       }
     }
-    for (const [c, pairs] of activeFor) {
-      // The card shows one interview: the first the listing gives (it lists
-      // upcoming ones soonest first, then past ones latest first), so the
-      // next one coming up, or else the most recent.
-      const { ev } = pairs[0];
-      const isNewAny = pairs.some(({ ev: e, inv }) => !known.has(bookingKey(e.uri, inv.email)));
-      c.bookedAt = ev.start;
-      c.bookedEvent = ev.name;
-      c.calendlyEventUri = ev.uri;
-      c.bookedJoinUrl = ev.joinUrl || '';
-      // Only moved forward from earlier in the funnel, or on a booking nobody
-      // has seen yet; a status set by hand is not undone every five minutes.
-      if (EARLY_STATUSES.has(c.status || 'new') || (isNewAny && c.status !== 'declined')) c.status = 'booked';
-      for (const { ev: e, inv } of pairs) {
-        const key = bookingKey(e.uri, inv.email);
-        const seen = known.has(key);
-        // Remembered either way, so a list that later loses the row (a
-        // listing cut short) never makes it news again.
-        announced[key] = announced[key] || stamp;
-        if (seen) continue;
-        known.add(key);
-        announce.push({ c, ev: e, at: inv.createdAt || null });
-      }
-    }
-    for (const [c, pairs] of canceledFor) {
-      if (activeFor.has(c)) continue;          // still has an interview on the books
-      for (const { ev, inv } of pairs) {
-        if (c.calendlyEventUri !== ev.uri || c.status !== 'booked') continue;
-        c.status = (c.replies && c.replies.length) ? 'replied' : 'emailed';
-        c.bookedAt = null; c.bookedEvent = ''; c.calendlyEventUri = ''; c.bookedJoinUrl = '';
-        const key = `x|${bookingKey(ev.uri, inv.email)}`;
-        if (announced[key]) continue;          // the webhook said so already
-        announced[key] = stamp;
-        announce.push({ c, ev, canceled: true });
-      }
-    }
-    // What this sync did not read is kept as it was, rather than replaced by
-    // nothing: an event it listed but had no allowance left for (only a
-    // cancellation is carried over), and, when the listing stopped short of
-    // the window's end, anything it never reached. A booking the webhook has
-    // just brought in is one of those, and Sales IQ, which asks for a sync
-    // every time it looks, would otherwise see it vanish. Only what a full
-    // listing no longer has, or what has left the window, is let go.
-    const read = new Set(result.interviews.map((ev) => ev.uri));
-    const skipped = new Map((result.skipped || []).map((ev) => [ev.uri, ev]));
-    for (const i of fresh.interviews || []) {
-      if (!i || read.has(i.uri)) continue;
-      const at = new Date(i.start).getTime();
-      if (!(at >= minStart.getTime() && at <= maxStart.getTime())) continue;
-      const ev = skipped.get(i.uri);
-      // Gone from a full listing: let go — unless the webhook wrote it after
-      // the listing was taken, when the listing simply had not seen it yet.
-      if (!ev && result.complete && !(i.hookAt && Date.parse(i.hookAt) >= listedAt)) continue;
-      list.push(ev && ev.status !== 'active' ? { ...i, status: 'canceled' } : i);
-    }
-    fresh.interviews = list.sort((a, b) => String(a.start).localeCompare(String(b.start)));
-    fresh.calendlyLastSyncAt = new Date().toISOString();
-    fresh.calendlySyncError = '';
-  });
+    const trial = {
+      ...db,
+      candidates: db.candidates.map((c) => (matched.has(c) ? structuredClone(c) : c)),
+      calendlyAnnounced: { ...(db.calendlyAnnounced && typeof db.calendlyAnnounced === 'object' ? db.calendlyAnnounced : {}) },
+    };
+    outcome = applyCalendlyListing(trial, result, window);
+  } catch {
+    outcome = { changed: true, announce: [] };
+  }
+  let synced = db;
+  if (outcome.changed) {
+    synced = await store.update((fresh) => {
+      // The mutator re-runs on a conflict: everything is worked out afresh.
+      outcome = applyCalendlyListing(fresh, result, window);
+      if (!outcome.changed) return false;
+    });
+  }
+  const syncedAt = new Date().toISOString();
+  await recordCalendlySync({ lastSyncAt: syncedAt, error: '' });
   await feedSalesiq(synced);
+  const { announce } = outcome;
   for (const a of announce) {
     const who = a.c.name || a.c.email;
     await store.addEvent(
@@ -2507,7 +2774,13 @@ async function syncCalendly() {
       a.at || null
     );
   }
-  return { ok: true, interviews: result.interviews.length, newBookings: announce.filter((a) => !a.canceled).length };
+  return {
+    ok: true,
+    interviews: result.interviews.length,
+    newBookings: announce.filter((a) => !a.canceled).length,
+    changed: outcome.changed || Boolean(previous.error),
+    syncedAt,
+  };
 }
 
 app.post('/api/calendly/sync', asyncRoute(async (_req, res) => {
@@ -2548,7 +2821,7 @@ function salesiqConnection(team, token) {
 }
 
 app.get('/api/salesiq-connection', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   res.set('Cache-Control', 'no-store');
   res.json(salesiqConnection(req.team, db.settings.salesiqToken || ''));
 }));
@@ -2559,7 +2832,7 @@ app.get('/api/salesiq-connection', asyncRoute(async (req, res) => {
 // request that lost must say "Not connected" rather than show a code the
 // bearer check refuses.
 async function storedSalesiqConnection(id) {
-  const [team, db] = await Promise.all([teams.byId(id), store.load()]);
+  const [team, db] = await Promise.all([teams.byId(id), store.read()]);
   return salesiqConnection(team, db.settings.salesiqToken || '');
 }
 
@@ -2597,12 +2870,13 @@ app.delete('/api/salesiq-connection', asyncRoute(async (req, res) => {
 // pipeline candidate each booking was matched to stays behind: this feed has
 // never carried anybody's candidate id.
 app.get('/api/salesiq/bookings', asyncRoute(async (req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const bookings = salesiq.bookingsFrom(db).map(({ crmId, ...b }) => b);
+  const sync = await calendlySyncState(db);
   res.json({
     ok: true,
     team: teamName(req.team),
-    syncedAt: db.calendlyLastSyncAt || null,
+    syncedAt: sync.lastSyncAt || null,
     calendly: {
       sync: Boolean(db.settings.calendlyToken),
       webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
@@ -2630,17 +2904,22 @@ const recentStamp = (iso) => {
 };
 
 async function salesiqSync() {
+  const db = await store.read();
+  if (!db.settings.calendlyToken) return { ok: true, ran: false, syncedAt: (await calendlySyncState(db)).lastSyncAt };
   let claimed = false;
-  const db = await store.update((d) => {
+  // The claim is the sync's own small record (calendlySyncState), written
+  // conditionally, so two instances asking at once cannot both win it.
+  const { value } = await storage.updateJson(CALENDLY_SYNC_KEY, (cur) => {
     claimed = false;   // the mutator re-runs on a conflict
-    if (!d.settings.calendlyToken) return false;
-    if (recentStamp(d.calendlyLastSyncAt) || recentStamp(d.salesiqSyncClaimedAt)) return false;
-    d.salesiqSyncClaimedAt = new Date().toISOString();
+    const r = cur && typeof cur === 'object' ? cur : {};
+    const last = r.lastSyncAt !== undefined ? r.lastSyncAt : db.calendlyLastSyncAt;
+    if (recentStamp(last) || recentStamp(r.claimedAt)) return false;
     claimed = true;
+    return { ...r, claimedAt: new Date().toISOString() };
   });
-  if (!claimed) return { ok: true, ran: false, syncedAt: db.calendlyLastSyncAt || null };
+  if (!claimed) return { ok: true, ran: false, syncedAt: (value && value.lastSyncAt !== undefined ? value.lastSyncAt : db.calendlyLastSyncAt) || null };
   const result = await syncCalendly();
-  const syncedAt = (await store.load()).calendlyLastSyncAt || null;
+  const syncedAt = (await calendlySyncState(db)).lastSyncAt || null;
   return { ok: true, ran: true, syncedAt, ...result };
 }
 
@@ -2680,9 +2959,9 @@ const IQ_OWN_COMPANY = 'That is a Wholesale Payments address — Sales IQ is for
 const REPORT_ID_RE = /^r[0-9a-f]{18}$/;
 
 async function iqState(req) {
-  const db = await store.load();
+  const db = await store.read();
   await feedSalesiq(db);
-  const [doc, secret] = await Promise.all([salesiq.load(), salesiq.ensureSecret()]);
+  const [doc, secret, sync] = await Promise.all([salesiq.load(), salesiq.ensureSecret(), calendlySyncState(db)]);
   const sending = await mailer.sendStatus(db.settings);
   const base = google.baseUrl();
   return {
@@ -2697,8 +2976,8 @@ async function iqState(req) {
     calendly: {
       syncEnabled: Boolean(db.settings.calendlyToken),
       webhook: Boolean((db.settings.calendlySigningKeys || []).length || db.settings.calendlySigningKey),
-      lastSyncAt: db.calendlyLastSyncAt || null,
-      error: db.calendlySyncError || '',
+      lastSyncAt: sync.lastSyncAt || null,
+      error: sync.error || '',
     },
     mail: { ready: Boolean(sending.ready), from: sending.from || '', reason: sending.reason || '' },
     previewUrl: '/assessment/?preview=1',
@@ -2891,7 +3170,7 @@ app.post('/api/iq/mark-invited', asyncRoute(async (req, res) => {
 // bookings into the list.
 app.post('/api/iq/sync', asyncRoute(async (req, res) => {
   const r = await sharedSalesiqSync(req.team.id);
-  const added = await feedSalesiq(await store.load());
+  const added = await feedSalesiq(await store.read());
   res.json({ ...r, added: added.length });
 }));
 
@@ -2955,7 +3234,7 @@ function upsertIqFromPipeline(doc, pc) {
 app.post('/api/iq/add-from-pipeline', asyncRoute(async (req, res) => {
   const ids = [...new Set((Array.isArray((req.body || {}).ids) ? req.body.ids : []).map(String))].slice(0, 500);
   if (!ids.length) throw new Error('Choose who to add to Sales IQ.');
-  const db = await store.load();
+  const db = await store.read();
   const byId = new Map(db.candidates.map((c) => [c.id, c]));
   const out = { added: [], already: [], refused: [] };
   await salesiq.update((doc) => {
@@ -3176,15 +3455,16 @@ app.use(onboardingRoutes.router);
 
 // ---------- Phone notification test ----------
 app.post('/api/test-notification', asyncRoute(async (_req, res) => {
-  const db = await store.load();
+  const db = await store.read();
   const r = await notify.pushToPhone(db.settings, {
     title: 'Wholesale Payments Hiring CRM',
     message: 'Test notification — you are all set. Booking alerts will arrive here.',
     tags: 'white_check_mark',
   });
   if (!r.sent) throw new Error(r.reason);
-  // A working push retires any earlier "notification failed" warning.
-  await store.update((d) => { d.events = d.events.filter((e) => !(e.type === 'error' && /notification failed/i.test(e.message || ''))); });
+  // A working push retires any earlier "notification failed" warning — and
+  // with none standing, there is nothing to write.
+  await store.clearEvents((e) => e.type === 'error' && /notification failed/i.test(e.message || ''));
   res.json({ ok: true });
 }));
 
