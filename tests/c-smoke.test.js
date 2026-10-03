@@ -268,11 +268,14 @@ const total = (page) => page.evaluate(() => (document.querySelector('#statTotal'
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     const log = record(page);
-    // Signed in before: index.html asks for the state and the list at once.
     await page.goto(`${old.base}/`, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(() => localStorage.setItem('wp-signed-in', '1'));
-    await page.reload({ waitUntil: 'domcontentloaded' });
     ok(await waitIn(page, () => document.querySelector('#statTotal').textContent === '120', null, 15000), 'rollback: this page draws the old server\'s list', await total(page));
+    // Loaded again, signed in: index.html asks for the state and the list at once.
+    await page.waitForTimeout(500);
+    log.length = 0;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    ok(await waitIn(page, () => document.querySelector('#loginScreen').hidden && document.querySelector('#statTotal').textContent === '120', null, 15000), 'rollback: and again on its next load', await total(page));
+    await page.waitForTimeout(500);
     const states = log.filter((x) => x.what.startsWith('GET /api/state'));
     ok(states.length >= 1 && states.every((x) => x.status === 200 || x.status === 304), 'rollback: it asks for the state and is answered with the old one', states);
     ok(log.some((x) => x.what === 'GET /api/candidates?v=2' && x.status === 404) && !log.some((x) => x.what.startsWith('POST /api/candidates/sync')), 'rollback: the list the old server does not have is asked for once, at load, and never synced', log.map((x) => `${x.what} ${x.status}`));
