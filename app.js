@@ -2049,12 +2049,15 @@ app.post('/api/texts/reply', asyncRoute(async (req, res) => {
     return res.status(409).json({ error: why });
   }
   // Reading a thread is answering it, so the badge should not still be lit —
-  // and a badge already out is nothing to write.
-  await store.update((fresh) => {
-    const f = fresh.candidates.find((x) => x.id === id);
-    if (!f || !f.textUnread) return false;
-    f.textUnread = false;
-  });
+  // and a badge already out is nothing to write, nor to load the list again
+  // for: the copy this request began with says whether it was lit.
+  if (c.textUnread) {
+    await store.update((fresh) => {
+      const f = fresh.candidates.find((x) => x.id === id);
+      if (!f || !f.textUnread) return false;
+      f.textUnread = false;
+    });
+  }
   res.json({ ok: true, queued: true, relayOnline });
 }));
 
