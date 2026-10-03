@@ -103,6 +103,9 @@ async function profile(browser, s, name) {
   await ctx.addCookies([{ name: cn, value: cv, domain: 'localhost', path: '/' }]);
   await ctx.addInitScript(() => {
     window.__lt = [];
+    // Room for every request of the run: past the default 250 the browser
+    // stops recording, and the polls below are measured from these entries.
+    try { performance.setResourceTimingBufferSize(5000); } catch {}
     try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push(e.duration); }).observe({ type: 'longtask', buffered: true }); } catch {}
   });
   const page = await ctx.newPage();
@@ -148,6 +151,21 @@ async function profile(browser, s, name) {
   // Replied count on screen changing (or, for nothing new, to the last
   // answer), with what went over the wire and the main thread's time.
   await timeNav(page, 'dashboard');
+  // The page's first reply check goes out about fifteen seconds after it
+  // loads, and on the made-up team it changes hundreds of people (no replies
+  // are found, so their reply times are cleared). A poll it lands just in
+  // front of is timed bringing a third of the list rather than one person,
+  // depending on how long the pages above took: let it land, and one poll
+  // not timed bring what it changed, first.
+  await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/api\/replies\/check/.test(e.name)), null, { timeout: 30000 }).catch(() => {});
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForTimeout(phone ? 12000 : 4000);
+  // Then the page's own half-minute poll: the two timed below go just after
+  // it, so it cannot land in the middle of one and be timed with it (two
+  // states fetched and drawn, counted as one poll).
+  const states = () => page.evaluate(() => performance.getEntriesByType('resource').filter((e) => /\/api\/state/.test(e.name)).length);
+  const ticked = await states();
+  for (const end = Date.now() + 32000; Date.now() < end && (await states()) === ticked;) await page.waitForTimeout(200);
   await page.waitForTimeout(1500);
   const pollOnce = (waitForChange) => page.evaluate(async (change) => {
     const before = performance.getEntriesByType('resource').length;
