@@ -730,6 +730,10 @@
     $$('.nav-group').forEach((b) => b.classList.toggle('active', b.dataset.group === group));
     rememberInGroup(view);
     placeTabHighlight();
+    // Settings asks for its Sales IQ card on every visit (the code starts
+    // covered each time); asked before Settings is drawn, so that drawing it
+    // does not ask a second time for a team it has no answer for yet.
+    if (view === 'settings') loadSalesiq();
     // Anything that fell behind while you were on another page is drawn now,
     // rather than on every poll for six pages at once; and the "5m ago"s on a
     // page that was not, which the minute tick only keeps moving on screen.
@@ -746,7 +750,7 @@
     if (view === 'onboarding' && !currentTeam && offlineBoot && window.Onboarding && lastTeam()) window.Onboarding.showCached(lastTeam());
     // The editors moved to Settings; Email and Texting are conversations only.
     if (view === 'settings') {
-      renderTemplatePreview(); loadRelayToken(); loadSalesiq(); placeAccountControls();
+      renderTemplatePreview(); loadRelayToken(); placeAccountControls();
     }
     // Back on a page whose thread column shows the whole time (anything wider
     // than a phone): the conversation it holds may have moved on meanwhile.
@@ -1734,10 +1738,8 @@
   const roleKey = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
   // Everyone's place in the list, by id, for the many places that start from
-  // an id. Nobody is added, removed or moved in place (only a new state does
-  // that), so this lasts as long as the list it was made from.
-  // (The first of any two with one id, as .find() would have it.)
-  const candPos = kept(() => [state && state.candidates], () => {
+  // an id (the first of any two with one id, as .find() would have it).
+  const candPos = kept(() => [listVersion, state && state.candidates], () => {
     const m = new Map();
     ((state && state.candidates) || []).forEach((c, i) => { if (!m.has(c.id)) m.set(c.id, i); });
     return m;
