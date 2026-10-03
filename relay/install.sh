@@ -27,11 +27,41 @@ if [ ! -f "$CONFIG" ]; then
   cp "$DIR/config.example.json" "$CONFIG"
   chmod 600 "$CONFIG"
   say "Created $CONFIG"
-  echo "Paste in your relay token (dashboard -> Texting -> Generate), then run this again:"
-  echo "  open -e \"$CONFIG\""
-  exit 0
 fi
 chmod 600 "$CONFIG"
+
+# The token can be handed straight to this script. No editor, and no risk of
+# pasting it onto a command line where the shell treats it as a filename.
+TOKEN="${1:-}"
+if [ -n "$TOKEN" ]; then
+  node -e '
+    const fs = require("fs");
+    const file = process.argv[1], token = process.argv[2];
+    const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+    cfg.relayToken = token;
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+  ' "$CONFIG" "$TOKEN" || die "Could not write the token into $CONFIG"
+  say "Token saved (${TOKEN:0:8}...)"
+fi
+
+# Never install around a config that still holds the placeholder — that just
+# produces a service that restarts forever being told its token is wrong.
+CURRENT_TOKEN="$(node -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).relayToken||""))}catch(e){}' "$CONFIG")"
+case "$CURRENT_TOKEN" in
+  *paste*|*dashboard*|"")
+    say "Almost there - the relay token is not set yet."
+    echo
+    echo "Get one from the dashboard (Texting -> Mac relay -> Generate), then run:"
+    echo
+    echo "    ./install.sh <paste-the-token-here>"
+    echo
+    echo "Or edit it by hand:  open -e \"$CONFIG\""
+    exit 0
+    ;;
+esac
+if [ "${#CURRENT_TOKEN}" -lt 24 ]; then
+  die "The relay token in $CONFIG looks too short to be real (${#CURRENT_TOKEN} characters). Generate a new one, then run: ./install.sh <token>"
+fi
 
 # Stop any previous copy before replacing it.
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
@@ -45,7 +75,32 @@ sed -e "s|__NODE__|$NODE|g" \
 launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
 launchctl kickstart -k "gui/$UID/$LABEL" 2>/dev/null || true
 
-say "Installed. The relay now starts automatically when you log in."
+# Put the on/off command somewhere the shell will find it, without sudo.
+BINDIR=""
+for d in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
+  if [ -d "$d" ] && [ -w "$d" ]; then BINDIR="$d"; break; fi
+done
+if [ -z "$BINDIR" ]; then
+  BINDIR="$HOME/.local/bin"
+  mkdir -p "$BINDIR"
+fi
+ln -sf "$DIR/wprelay" "$BINDIR/wprelay"
+
+say "Installed and running. It starts automatically when you log in."
+echo
+say "Turning texting on and off"
+echo "  wprelay on        turn texting on"
+echo "  wprelay off       turn texting off"
+echo "  wprelay status    is it running and healthy"
+echo "  wprelay log       watch what it is doing"
+echo
+echo "These work over SSH too, from your MacBook at the office."
+case ":$PATH:" in
+  *":$BINDIR:"*) ;;
+  *) echo
+     echo "NOTE: $BINDIR is not on your PATH. Add it once:"
+     echo "  echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.zshrc && source ~/.zshrc" ;;
+esac
 echo
 echo "  Watch it:    tail -f \"$LOG\""
 echo "  Stop it:     launchctl bootout gui/$UID/$LABEL"

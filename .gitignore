@@ -5,6 +5,9 @@ data/
 *.log
 .DS_Store
 
+# The MIME tests write sample messages here to hand to a real parser.
+msg-*.eml
+
 # Local Netlify folder
 .netlify
 

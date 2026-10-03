@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="apple-touch-icon" href="/paperwork/apple-touch-icon.png" />
+  <meta name="robots" content="noindex, nofollow" />
+  <!-- The address carries the hire's signed link: it is never sent on to
+       another site as a referrer (the IRS link on the W-4 step, say). -->
+  <meta name="referrer" content="no-referrer" />
+  <title>New Hire Paperwork — Wholesale Payments</title>
+  <link rel="icon" type="image/png" href="/paperwork/favicon.png" />
+  <link rel="stylesheet" href="/paperwork/base.css" />
+  <link rel="stylesheet" href="/paperwork/paperwork.css" />
+</head>
+<body class="pw-body">
+  <header class="pw-header">
+    <div class="pw-shell pw-header-inner">
+      <img src="/paperwork/logo.png" alt="Wholesale Payments" class="pw-logo" />
+      <span class="pw-step-count" id="step-count"></span>
+    </div>
+    <div class="pw-progress"><div class="pw-progress-bar" id="progress-bar"></div></div>
+  </header>
+
+  <main class="pw-shell" id="main">
+    <!-- Loading / error gate -->
+    <section id="gate" class="pw-gate">
+      <div class="pw-spinner"></div>
+      <p>Loading your paperwork…</p>
+    </section>
+
+    <form id="pw-form" hidden>
+
+      <!-- ── STEP 1 — Welcome & consent ─────────────────────────────── -->
+      <section class="pw-step" data-step="1">
+        <p class="pw-eyebrow">Welcome</p>
+        <h1>Let's get your paperwork done, <span id="greet-name">there</span>.</h1>
+        <p class="pw-lede">
+          Everything you need to start at <strong id="greet-company">Wholesale Payments</strong> is here.
+          It takes about 10 minutes. Your details carry across every document, so you only type them once.
+        </p>
+
+        <div class="pw-card pw-doc-summary">
+          <h2 class="pw-card-title">What you'll complete</h2>
+          <ul class="pw-doc-list" id="doc-summary-list"></ul>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Signing electronically</h2>
+          <p class="pw-muted">
+            You'll sign these documents electronically. Your electronic signature is legally binding,
+            the same as signing on paper. We record the date, time, IP address, approximate location, and
+            device you signed from, and you'll receive completed copies by email.
+          </p>
+          <label class="pw-check">
+            <input type="checkbox" name="esignConsent" required />
+            <span class="pw-check-box"></span>
+            <span>I agree to sign these documents electronically, and to receive them electronically.</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- ── STEP 2 — Your information ──────────────────────────────── -->
+      <section class="pw-step" data-step="2" hidden>
+        <p class="pw-eyebrow">Step 2</p>
+        <h1>Your information</h1>
+        <p class="pw-lede">Use your legal name exactly as it appears on your Social Security card.</p>
+
+        <div class="pw-card">
+          <div class="pw-grid">
+            <label class="field">Legal first name *<input name="legalFirstName" required autocomplete="given-name" /></label>
+            <label class="field pw-narrow">Middle initial<input name="middleInitial" maxlength="2" autocomplete="additional-name" /></label>
+            <label class="field">Legal last name *<input name="legalLastName" required autocomplete="family-name" /></label>
+            <label class="field">Email *<input name="email" type="email" required autocomplete="email" /></label>
+            <label class="field">Mobile phone *<input name="phone" type="tel" required autocomplete="tel" /></label>
+            <label class="field pw-span2">Home address *<input name="address" required autocomplete="street-address" /></label>
+            <label class="field">City *<input name="city" required autocomplete="address-level2" /></label>
+            <label class="field pw-narrow">State *<input name="state" required maxlength="2" placeholder="TX" autocomplete="address-level1" /></label>
+            <label class="field">ZIP *<input name="zip" required inputmode="numeric" autocomplete="postal-code" /></label>
+            <label class="field">Social Security number *
+              <input name="ssn" required inputmode="numeric" placeholder="___-__-____" autocomplete="off" />
+              <span class="pw-hint">Required for your W-4. Encrypted in transit and only shared with payroll.</span>
+            </label>
+            <label class="field">Driver's license # *<input name="driversLicense" required autocomplete="off" /></label>
+            <label class="field pw-narrow">Issuing state *<input name="licenseState" required maxlength="2" placeholder="TX" /></label>
+          </div>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Business information <span class="pw-optional">optional</span></h2>
+          <p class="pw-muted">Only if you'll be contracting through a business entity rather than as an individual.</p>
+          <div class="pw-grid">
+            <label class="field pw-span2">Business / DBA name<input name="businessName" autocomplete="organization" /></label>
+            <label class="field pw-span2">Business address<input name="businessAddress" /></label>
+            <label class="field">City<input name="businessCity" /></label>
+            <label class="field pw-narrow">State<input name="businessState" maxlength="2" /></label>
+            <label class="field">ZIP<input name="businessZip" inputmode="numeric" /></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── STEP 3 — W-4 ───────────────────────────────────────────── -->
+      <section class="pw-step" data-step="3" hidden>
+        <p class="pw-eyebrow">Step 3</p>
+        <h1>Federal tax withholding</h1>
+        <p class="pw-lede">
+          This fills your IRS Form W-4, which sets how much federal income tax is withheld from your pay.
+          If you're not sure, the defaults below are the most common choice.
+        </p>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Filing status *</h2>
+          <div class="pw-radio-list">
+            <label class="pw-radio">
+              <input type="radio" name="w4FilingStatus" value="single" required />
+              <span class="pw-radio-dot"></span>
+              <span><strong>Single</strong> or married filing separately</span>
+            </label>
+            <label class="pw-radio">
+              <input type="radio" name="w4FilingStatus" value="married" />
+              <span class="pw-radio-dot"></span>
+              <span><strong>Married filing jointly</strong> or qualifying surviving spouse</span>
+            </label>
+            <label class="pw-radio">
+              <input type="radio" name="w4FilingStatus" value="head" />
+              <span class="pw-radio-dot"></span>
+              <span><strong>Head of household</strong></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Dependents <span class="pw-optional">skip if none</span></h2>
+          <div class="pw-grid">
+            <label class="field">Children under 17<input name="w4ChildCount" type="number" min="0" max="20" inputmode="numeric" /></label>
+            <label class="field">Other dependents<input name="w4OtherCount" type="number" min="0" max="20" inputmode="numeric" /></label>
+          </div>
+          <p class="pw-calc" id="w4-calc" hidden></p>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Other adjustments <span class="pw-optional">optional</span></h2>
+          <div class="pw-grid">
+            <label class="field">Other income (not from jobs)<input name="w4OtherIncome" inputmode="decimal" placeholder="$" /></label>
+            <label class="field">Deductions beyond standard<input name="w4Deductions" inputmode="decimal" placeholder="$" /></label>
+            <label class="field">Extra withholding per pay period<input name="w4ExtraWithholding" inputmode="decimal" placeholder="$" /></label>
+          </div>
+          <label class="pw-check">
+            <input type="checkbox" name="w4MultipleJobs" />
+            <span class="pw-check-box"></span>
+            <span>I hold more than one job, or I'm married filing jointly and my spouse also works (Step 2c)</span>
+          </label>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Sign your W-4</h2>
+          <div class="pw-sig-block" data-sig="w4Signature" data-kind="signature" data-label="Employee signature"></div>
+        </div>
+
+        <div class="pw-note">
+          We can't give tax advice. The IRS estimator at
+          <a href="https://www.irs.gov/W4App" target="_blank" rel="noopener">irs.gov/W4App</a>
+          can help you choose.
+        </div>
+      </section>
+
+      <!-- ── STEP 4 — Agent Agreement ───────────────────────────────── -->
+      <section class="pw-step" data-step="4" hidden>
+        <p class="pw-eyebrow">Step 4</p>
+        <h1>Agent Agreement</h1>
+        <p class="pw-lede">This is your contract with Wholesale Payments. Please read it before signing.</p>
+
+        <a class="pw-doc-open" href="/paperwork/documents/Agent-Agreement-2026.pdf" target="_blank" rel="noopener" data-opens="agent-agreement">
+          <span class="pw-doc-open-icon">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 2v6h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="pw-doc-open-body">
+            <strong>Open the full Agent Agreement (PDF)</strong>
+            <small>26 pages, including Schedule A</small>
+          </span>
+          <span class="pw-doc-open-go">Open</span>
+        </a>
+
+        <div class="pw-card pw-terms">
+          <h2 class="pw-card-title">Key terms in plain language</h2>
+          <p class="pw-muted">A summary for your convenience — the agreement itself governs.</p>
+          <ul class="pw-terms-list">
+            <li><strong>Independent contractor.</strong> You are an independent contractor, not an employee. You cover your own expenses and are not eligible for employee benefits (§8.5, §2.1).</li>
+            <li><strong>Term.</strong> Three years to start, renewing yearly after that (§6.1).</li>
+            <li><strong>Exclusivity.</strong> You work merchant services exclusively for Wholesale Payments. Breach carries liquidated damages of the greater of the account's value or $1,500 per breach (§1.7(B)).</li>
+            <li><strong>Non-solicitation.</strong> For five years after you leave, you may not solicit WP merchants. Damages are the greater of $1,500 or 40× the merchant's monthly value (§5.1, §5.3).</li>
+            <li><strong>Commissions &amp; residuals.</strong> Set by Schedule A, which WP may change. Residuals stop below $250/month unless vested — three consecutive months at $5,000+ and 30 processing merchants (§2.3).</li>
+            <li><strong>Chargebacks.</strong> Commissions can be charged back for up to 120 days; equipment for 45 days.</li>
+            <li><strong>Authorizations.</strong> Signing authorizes WP to run a consumer credit report and to credit <em>and debit</em> your bank account (§3.3, §2.3(C)).</li>
+            <li><strong>Changes.</strong> WP may amend the agreement on three days' notice (§8.8).</li>
+            <li><strong>Disputes.</strong> The agreement includes a jury trial and class action waiver (§8.15).</li>
+          </ul>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Initial the highlighted clauses</h2>
+          <div class="pw-initial-row">
+            <div class="pw-initial-text">
+              <strong>§1.7(B) Exclusive Services</strong>
+              <span>You will solicit merchant services exclusively for Wholesale Payments, with liquidated damages of the greater of account value or $1,500 per breach.</span>
+            </div>
+            <div class="pw-initial-pad" data-sig="exclusivityInitials" data-kind="initials"></div>
+          </div>
+          <div class="pw-initial-row">
+            <div class="pw-initial-text">
+              <strong>Section V — Non-Solicitation &amp; Confidentiality</strong>
+              <span>A five-year post-termination non-solicit, with damages of the greater of $1,500 or 40× the merchant's value.</span>
+            </div>
+            <div class="pw-initial-pad" data-sig="nonSolicitInitials" data-kind="initials"></div>
+          </div>
+          <label class="pw-check">
+            <input type="checkbox" name="juryWaiverAck" required />
+            <span class="pw-check-box"></span>
+            <span>I understand the agreement includes a waiver of jury trial and class actions (§8.15), and I've had the opportunity to review it with my own legal counsel.</span>
+          </label>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Sign the agreement</h2>
+          <div class="pw-grid">
+            <label class="field pw-span2">Your title *
+              <input name="signerTitle" required value="Owner" list="title-options" />
+              <datalist id="title-options">
+                <option value="Owner"></option><option value="Sole Proprietor"></option>
+                <option value="President"></option><option value="Managing Member"></option>
+              </datalist>
+            </label>
+          </div>
+          <div class="pw-sig-block" data-sig="agentAgreementSignature" data-kind="signature" data-label="Agent signature"></div>
+        </div>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Schedule A — fees &amp; residuals</h2>
+          <p class="pw-muted">Schedule A sets your commission, residual, and fee structure. It needs its own signature.</p>
+          <div class="pw-sig-block" data-sig="scheduleASignature" data-kind="signature" data-label="Signature — Acknowledged and Agreed"></div>
+        </div>
+      </section>
+
+      <!-- ── STEP 5 — Policies ──────────────────────────────────────── -->
+      <section class="pw-step" data-step="5" hidden>
+        <p class="pw-eyebrow">Step 5</p>
+        <h1>Policies &amp; programs</h1>
+
+        <a class="pw-doc-open" href="/paperwork/documents/Email-Policy.pdf" target="_blank" rel="noopener" data-opens="email-policy">
+          <span class="pw-doc-open-icon">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 2v6h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="pw-doc-open-body">
+            <strong>Corporate Email Usage Policy (PDF)</strong>
+            <small>How your company email may be used</small>
+          </span>
+          <span class="pw-doc-open-go">Open</span>
+        </a>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Email policy acknowledgment</h2>
+          <p class="pw-muted">I have read, understand, and accept the contents of this document.</p>
+          <div class="pw-sig-block" data-sig="emailPolicySignature" data-kind="signature" data-label="Agent signature"></div>
+        </div>
+
+        <a class="pw-doc-open" href="/paperwork/documents/Impact-Health-Sharing.pdf" target="_blank" rel="noopener" data-opens="health-sharing">
+          <span class="pw-doc-open-icon">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 2v6h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="pw-doc-open-body">
+            <strong>Impact Health Sharing — Program Overview (PDF)</strong>
+            <small>Optional healthcare cost-sharing program</small>
+          </span>
+          <span class="pw-doc-open-go">Open</span>
+        </a>
+
+        <div class="pw-card">
+          <h2 class="pw-card-title">Impact Health Sharing</h2>
+          <div class="pw-callout">
+            <strong>Important:</strong> Impact Health Sharing is a healthcare cost-sharing program — it is
+            <strong>not insurance</strong>. It is not ACA minimum essential coverage, payment of any medical
+            expense is not guaranteed, and it is not backed by a state guaranty fund. Pre-existing conditions
+            are generally not shareable until you have been treatment-, symptom-, and diagnosis-free for 36 months.
+            Participation is entirely optional and you enroll and pay directly with Impact.
+          </div>
+          <div class="pw-radio-list">
+            <label class="pw-radio">
+              <input type="radio" name="healthElection" value="interested" required />
+              <span class="pw-radio-dot"></span>
+              <span><strong>I'm interested</strong> — send me enrollment details</span>
+            </label>
+            <label class="pw-radio">
+              <input type="radio" name="healthElection" value="declined" />
+              <span class="pw-radio-dot"></span>
+              <span><strong>No thanks</strong> — I decline at this time</span>
+            </label>
+          </div>
+          <div class="pw-sig-block" data-sig="healthSharingSignature" data-kind="signature" data-label="Signature — acknowledgment"></div>
+        </div>
+      </section>
+
+      <!-- ── STEP 6 — Review ────────────────────────────────────────── -->
+      <section class="pw-step" data-step="6" hidden>
+        <p class="pw-eyebrow">Last step</p>
+        <h1>Review &amp; submit</h1>
+        <p class="pw-lede">Check everything below, then submit. We'll email you completed copies.</p>
+        <div class="pw-card" id="review-card"></div>
+        <div id="review-missing" class="pw-missing" hidden></div>
+      </section>
+
+      <!-- Nav -->
+      <div class="pw-nav">
+        <button type="button" class="btn btn-ghost" id="back-btn" hidden>Back</button>
+        <button type="button" class="btn btn-primary pw-next" id="next-btn">Continue</button>
+        <button type="submit" class="btn btn-primary pw-next" id="submit-btn" hidden>Submit my paperwork</button>
+      </div>
+    </form>
+
+    <!-- Success -->
+    <section id="done" class="pw-done" hidden>
+      <div class="pw-done-mark">
+        <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <h1>All done — thank you!</h1>
+      <p class="pw-lede" id="done-msg">Your paperwork has been submitted.</p>
+      <div class="pw-card" id="done-list"></div>
+    </section>
+  </main>
+
+  <footer class="pw-footer">
+    <div class="pw-shell">
+      <span id="footer-company">Wholesale Payments</span>
+      <span class="pw-footer-sep">·</span>
+      <span>Questions? Reply to the email that brought you here.</span>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/paperwork/paperwork.js"></script>
+</body>
+</html>

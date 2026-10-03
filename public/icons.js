@@ -1,39 +1,110 @@
-/* Apple-style line icons (SF Symbols look: 24pt grid, 1.75 stroke, round
-   caps). Use icon('name', size) in JS, or <span data-icon="name"></span> in HTML. */
+/* Icons in the SF Symbols idiom. The defining trait of Apple's UI iconography
+   is not the corner radius, it is that the glyphs are SOLID: filled
+   silhouettes with negative space punched through them, not hairline outlines.
+   So these are filled by default — the <svg> carries fill="currentColor" — and
+   counters (a gear's bore, an envelope's flap, a calendar's rule) are holes
+   cut with fill-rule="evenodd" rather than strokes drawn over the top, which
+   means they show whatever is behind them and work on any tint.
+   The handful that really are linear in SF — chevrons, the wifi arcs, plus and
+   minus — opt into a stroke via S(), at a weight that matches the filled ones
+   optically rather than the 1.7 hairline this set used to use.
+   Use icon('name', size) in JS, or <span data-icon="name"></span> in HTML. */
 (() => {
+  // A stroked member of an otherwise filled set.
+  const S = (d, w = 2.2) => `<path fill="none" stroke="currentColor" stroke-width="${w}" d="${d}"/>`;
+
   const P = {
-    grid: '<rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/>',
-    users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
-    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
-    doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
-    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
-    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
-    bubble: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
-    calendar: '<rect x="3" y="4" width="18" height="18" rx="2.5"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
-    xcircle: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
-    checkcircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
-    check: '<polyline points="20 6 9 17 4 12"/>',
-    circle: '<circle cx="12" cy="12" r="9"/>',
-    reply: '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
-    paperclip: '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
-    mail: '<path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><polyline points="22,6 12,13 2,6"/>',
-    send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
-    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
-    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
-    search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
-    lock: '<rect x="3" y="11" width="18" height="11" rx="2.5"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
-    alert: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
-    chevron: '<polyline points="9 18 15 12 9 6"/>',
-    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
-    sheet: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/>',
+    // ---- structure and navigation ----
+    grid: '<rect x="2.8" y="2.8" width="8.2" height="8.2" rx="2.7"/><rect x="13" y="2.8" width="8.2" height="8.2" rx="2.7"/><rect x="2.8" y="13" width="8.2" height="8.2" rx="2.7"/><rect x="13" y="13" width="8.2" height="8.2" rx="2.7"/>',
+    chevron: S('M9.5 5.2L16.3 12l-6.8 6.8', 2.5),
+    plus: S('M12 4.4v15.2M4.4 12h15.2', 2.5),
+    x: S('M18.4 5.6L5.6 18.4M5.6 5.6l12.8 12.8', 2.5),
+    check: S('M4.6 12.6l4.9 4.9L19.4 6.7', 2.7),
+    xcircle: '<path fill-rule="evenodd" d="M12 1.8a10.2 10.2 0 1 0 0 20.4 10.2 10.2 0 0 0 0-20.4zm4.2 12.8l-1.6 1.6L12 13.6l-2.6 2.6-1.6-1.6L10.4 12 7.8 9.4l1.6-1.6L12 10.4l2.6-2.6 1.6 1.6L13.6 12z"/>',
+    checkcircle: '<path fill-rule="evenodd" d="M12 1.8a10.2 10.2 0 1 0 0 20.4 10.2 10.2 0 0 0 0-20.4zm5 7.1l-6.3 6.9-3.9-4 1.6-1.6 2.2 2.3 4.8-5.2z"/>',
+    search: S('M10.7 4.2a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13M15.5 15.5l4.6 4.6', 2.3),
+    logout: '<path d="M10.6 2.6H6.6A3.8 3.8 0 0 0 2.8 6.4v11.2a3.8 3.8 0 0 0 3.8 3.8h4a1.2 1.2 0 0 0 0-2.4h-4a1.4 1.4 0 0 1-1.4-1.4V6.4A1.4 1.4 0 0 1 6.6 5h4a1.2 1.2 0 0 0 0-2.4z"/><path d="M16.2 6.9a1.2 1.2 0 0 0-1.7 1.7l2.2 2.2H9.8a1.2 1.2 0 0 0 0 2.4h6.9l-2.2 2.2a1.2 1.2 0 0 0 1.7 1.7l4.2-4.2a1.2 1.2 0 0 0 0-1.8z"/>',
+    gear: '<path fill-rule="evenodd" d="M9.81 4.83L10.09 2.18L13.91 2.18L14.19 4.83A7.5 7.5 0 0 1 15.52 5.38L17.59 3.71L20.29 6.41L18.62 8.48A7.5 7.5 0 0 1 19.17 9.81L21.82 10.09L21.82 13.91L19.17 14.19A7.5 7.5 0 0 1 18.62 15.52L20.29 17.59L17.59 20.29L15.52 18.62A7.5 7.5 0 0 1 14.19 19.17L13.91 21.82L10.09 21.82L9.81 19.17A7.5 7.5 0 0 1 8.48 18.62L6.41 20.29L3.71 17.59L5.38 15.52A7.5 7.5 0 0 1 4.83 14.19L2.18 13.91L2.18 10.09L4.83 9.81A7.5 7.5 0 0 1 5.38 8.48L3.71 6.41L6.41 3.71L8.48 5.38A7.5 7.5 0 0 1 9.81 4.83ZM12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6z"/>',
+
+    // A notification is a bell. A speech bubble means "messages", which is a
+    // different promise — the panel behind this also carries bounces and, in
+    // time, anything else worth interrupting for. Dome, flared skirt, and the
+    // clapper as its own shape, the way bell.fill is drawn.
+    bell: '<path d="M12 1.6a1.5 1.5 0 0 1 1.5 1.5v.8a7 7 0 0 1 5.4 6.8v2.5c0 1.4.5 2.8 1.4 3.9a1.3 1.3 0 0 1-1 2.2H4.7a1.3 1.3 0 0 1-1-2.2 6.2 6.2 0 0 0 1.4-3.9v-2.5a7 7 0 0 1 5.4-6.8v-.8A1.5 1.5 0 0 1 12 1.6z"/><path d="M9.3 18.9a.6.6 0 0 0-.6.7 3.4 3.4 0 0 0 6.6 0 .6.6 0 0 0-.6-.7z"/>',
+
+    // square.and.pencil: start something new — Mail's and Messages' compose.
+    compose: S('M11.2 4.3H7.3A3.3 3.3 0 0 0 4 7.6v9.1A3.3 3.3 0 0 0 7.3 20h9.1a3.3 3.3 0 0 0 3.3-3.3v-3.9', 2.1)
+      + '<path d="M18.3 2.7a1.9 1.9 0 0 1 2.7 0l.3.3a1.9 1.9 0 0 1 0 2.7l-8.2 8.2-3.7 1.1 1.1-3.7z"/>',
+    // info.circle.fill: about this one — the person behind a conversation.
+    info: '<path fill-rule="evenodd" d="M12 1.8a10.2 10.2 0 1 0 0 20.4 10.2 10.2 0 0 0 0-20.4zm-1.25 8.5h2.5v7.6h-2.5zM12 5.9a1.55 1.55 0 1 1 0 3.1 1.55 1.55 0 0 1 0-3.1z"/>',
+    // arrow.up.circle.fill: send, the way Messages draws it.
+    arrowup: '<path fill-rule="evenodd" d="M12 1.8a10.2 10.2 0 1 0 0 20.4 10.2 10.2 0 0 0 0-20.4zm.9 5.2l4.3 4.3a1.25 1.25 0 0 1-1.8 1.8l-2.15-2.15v6.3a1.25 1.25 0 0 1-2.5 0v-6.3L8.6 13.1a1.25 1.25 0 0 1-1.8-1.8L11.1 7a1.3 1.3 0 0 1 1.8 0z"/>',
+    // arrow.up.right.square: leaves this app for another (Gmail).
+    external: S('M13.5 4.5h6v6M19.3 4.7l-8.1 8.1M10 5.2H7.4A3.2 3.2 0 0 0 4.2 8.4v8.2a3.2 3.2 0 0 0 3.2 3.2h8.2a3.2 3.2 0 0 0 3.2-3.2V14', 2.1),
+
+    // Three dots: "more of what you can do with this one" — ellipsis in SF.
+    more: '<circle cx="5.2" cy="12" r="2.1"/><circle cx="12" cy="12" r="2.1"/><circle cx="18.8" cy="12" r="2.1"/>',
+    // The phone's two grouped tabs: Inbox (Email and Texts) is SF's tray,
+    // Hiring (Sales IQ and Onboarding docs) its briefcase.
+    tray: '<path fill-rule="evenodd" d="M7.9 3.4h8.2a2.8 2.8 0 0 1 2.6 1.9l2.4 7.3c.1.3.1.5.1.8v4.4a2.8 2.8 0 0 1-2.8 2.8H5.6a2.8 2.8 0 0 1-2.8-2.8v-4.4c0-.3 0-.5.1-.8l2.4-7.3a2.8 2.8 0 0 1 2.6-1.9zm-.4 2.9l-2.1 6.1h3.7c.5 0 .9.3 1 .8a2 2 0 0 0 3.8 0c.1-.5.5-.8 1-.8h3.7l-2.1-6.1a.9.9 0 0 0-.8-.6H8.3a.9.9 0 0 0-.8.6z"/>',
+    briefcase: '<path fill-rule="evenodd" d="M10.1 2.6h3.8a2.3 2.3 0 0 1 2.3 2.3v1.2h2.9a2.8 2.8 0 0 1 2.8 2.8v3.2H2.1V8.9a2.8 2.8 0 0 1 2.8-2.8h2.9V4.9a2.3 2.3 0 0 1 2.3-2.3zm-.3 2.3v1.2h4.4V4.9a.3.3 0 0 0-.3-.3h-3.8a.3.3 0 0 0-.3.3z"/><path d="M2.1 13.6h8.3v.9a1 1 0 0 0 1 1h1.2a1 1 0 0 0 1-1v-.9h8.3v4.1a2.8 2.8 0 0 1-2.8 2.8H4.9a2.8 2.8 0 0 1-2.8-2.8z"/>',
+
+    // ---- people ----
+    users: '<circle cx="9" cy="7.6" r="3.9"/><path d="M9 12.8c-3.9 0-6.9 2.5-6.9 5.9 0 1.4 1 2.2 2.4 2.2h9c1.4 0 2.4-.8 2.4-2.2 0-3.4-3-5.9-6.9-5.9z"/><circle cx="17.8" cy="8.4" r="3"/><path d="M17.8 13.2c-.6 0-1.2 0-1.7.2a8.5 8.5 0 0 1 2.6 5.5h2.6c1.2 0 1.9-.7 1.9-1.8 0-2.3-2.2-3.9-5.4-3.9z"/>',
+
+    // ---- files and transfer ----
+    // A clipboard with a checklist — the Sales IQ questionnaire, as
+    // list.clipboard.fill draws it: the board with its lines cut through, and
+    // the clip standing proud of it in a notch of its own.
+    clipboard: '<path fill-rule="evenodd" d="M7.5 3.5h.4v3.5h8.2V3.5h.4a3 3 0 0 1 3 3V19a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3V6.5a3 3 0 0 1 3-3zM8.2 10.2v1.6h7.6v-1.6zm0 3.5v1.6h7.6v-1.6zm0 3.5v1.6h4.6v-1.6z"/><path d="M10.3 1.6h3.4a1.6 1.6 0 0 1 1.6 1.6v1.9a1.1 1.1 0 0 1-1.1 1.1H9.8a1.1 1.1 0 0 1-1.1-1.1V3.2a1.6 1.6 0 0 1 1.6-1.6z"/>',
+    doc: '<path fill-rule="evenodd" d="M13.2 2.4H7.4A3.6 3.6 0 0 0 3.8 6v12A3.6 3.6 0 0 0 7.4 21.6h9.2A3.6 3.6 0 0 0 20.2 18V9.1h-4.6a2.4 2.4 0 0 1-2.4-2.4zm1.8.6v3.7c0 .4.3.7.7.7h3.6z"/>',
+    // A page with a signature on its line: Onboarding docs.
+    signdoc: '<path fill-rule="evenodd" d="M13.2 2.4H7.4A3.6 3.6 0 0 0 3.8 6v12A3.6 3.6 0 0 0 7.4 21.6h9.2A3.6 3.6 0 0 0 20.2 18V9.1h-4.6a2.4 2.4 0 0 1-2.4-2.4zm1.8.6v3.7c0 .4.3.7.7.7h3.6zM7.9 14.1L8.3 13.7L8.6 13.3L8.8 13.1L9.0 12.9L9.2 12.9L9.3 12.8L9.4 12.9L9.6 13.0L9.8 13.1L10.1 13.4L10.4 13.8L10.7 14.2L11.0 14.6L11.4 15.1L11.8 15.5L12.2 15.8L12.6 16.1L13.1 16.4L13.6 16.5L14.2 16.4L14.7 16.3L15.1 16.0L15.5 15.7L15.9 15.5L16.2 15.2L16.5 14.9L16.8 14.6L17.1 14.4L16.3 13.1L15.9 13.4L15.5 13.6L15.2 13.9L14.8 14.2L14.5 14.5L14.3 14.7L14.0 14.8L13.9 14.8L13.7 14.9L13.6 14.8L13.4 14.8L13.2 14.6L12.9 14.3L12.6 14.0L12.3 13.6L12.0 13.2L11.6 12.8L11.2 12.3L10.9 12.0L10.4 11.6L9.9 11.4L9.4 11.2L8.8 11.3L8.2 11.5L7.8 11.9L7.4 12.2L7.0 12.7L6.7 13.1zM7.3 17.6h9.4v1.4H7.3z"/>',
+    sheet: '<path fill-rule="evenodd" d="M6.4 3.2h11.2A3.6 3.6 0 0 1 21.2 6.8v10.4a3.6 3.6 0 0 1-3.6 3.6H6.4a3.6 3.6 0 0 1-3.6-3.6V6.8A3.6 3.6 0 0 1 6.4 3.2zM5 8.7h3.4V5.4H6.4A1.4 1.4 0 0 0 5 6.8zm5.6 0H19V6.8a1.4 1.4 0 0 0-1.4-1.4h-7zM5 13.7h3.4v-2.8H5zm5.6 0H19v-2.8h-8.4zM5 17.2c0 .8.6 1.4 1.4 1.4h2v-2.7H5zm5.6 1.4h7c.8 0 1.4-.6 1.4-1.4v-1.3h-8.4z"/>',
+    download: '<path d="M12 2.4a1.3 1.3 0 0 0-1.3 1.3v8.9l-2.5-2.5a1.3 1.3 0 0 0-1.8 1.8l4.7 4.7a1.3 1.3 0 0 0 1.8 0l4.7-4.7a1.3 1.3 0 0 0-1.8-1.8l-2.5 2.5V3.7A1.3 1.3 0 0 0 12 2.4z"/><path d="M3.6 13.8a1.3 1.3 0 0 1 1.3 1.3v2.7a1.5 1.5 0 0 0 1.5 1.5h11.2a1.5 1.5 0 0 0 1.5-1.5v-2.7a1.3 1.3 0 0 1 2.6 0v2.7a4.1 4.1 0 0 1-4.1 4.1H6.4a4.1 4.1 0 0 1-4.1-4.1v-2.7a1.3 1.3 0 0 1 1.3-1.3z"/>',
+    upload: '<path d="M12 16.6a1.3 1.3 0 0 0 1.3-1.3V6.4l2.5 2.5a1.3 1.3 0 0 0 1.8-1.8l-4.7-4.7a1.3 1.3 0 0 0-1.8 0L6.4 7.1a1.3 1.3 0 0 0 1.8 1.8l2.5-2.5v8.9a1.3 1.3 0 0 0 1.3 1.3z"/><path d="M3.6 13.8a1.3 1.3 0 0 1 1.3 1.3v2.7a1.5 1.5 0 0 0 1.5 1.5h11.2a1.5 1.5 0 0 0 1.5-1.5v-2.7a1.3 1.3 0 0 1 2.6 0v2.7a4.1 4.1 0 0 1-4.1 4.1H6.4a4.1 4.1 0 0 1-4.1-4.1v-2.7a1.3 1.3 0 0 1 1.3-1.3z"/>',
+    paperclip: S('M18.8 10.6l-7.9 7.9a4.4 4.4 0 0 1-6.2-6.2l8.2-8.2a2.9 2.9 0 0 1 4.1 4.1l-8.2 8.2a1.4 1.4 0 0 1-2-2l7.5-7.5', 2.1),
+    trash: '<path d="M10.4 2.2h3.2a2.2 2.2 0 0 1 2.2 2.2v1.1h4a1.1 1.1 0 0 1 0 2.2h-.6l-.9 11.7a3.3 3.3 0 0 1-3.3 3h-5.6a3.3 3.3 0 0 1-3.3-3L5.2 7.7h-.6a1.1 1.1 0 0 1 0-2.2h4V4.4a2.2 2.2 0 0 1 2.2-2.2zm3.2 3.3V4.4h-3.2v1.1z"/>',
+
+    // ---- messaging ----
+    mail: '<path fill-rule="evenodd" d="M5.4 4.6h13.2a3.7 3.7 0 0 1 3.7 3.7v7.4a3.7 3.7 0 0 1-3.7 3.7H5.4a3.7 3.7 0 0 1-3.7-3.7V8.3a3.7 3.7 0 0 1 3.7-3.7zM3.4 8.9l7.5 5c.7.5 1.5.5 2.2 0l7.5-5-1-1.6-7.6 5.1-7.6-5.1z"/>',
+    send: '<path d="M21.7 2.3a1.1 1.1 0 0 0-1.2-.2L2.9 8.7a1.1 1.1 0 0 0 .1 2.1l7.1 2.1 2.1 7.1a1.1 1.1 0 0 0 2.1.1l6.6-16.6a1.1 1.1 0 0 0-.2-1.2z"/>',
+    reply: '<path d="M10.6 5a1.2 1.2 0 0 0-2-.9L2.4 9.8a1.6 1.6 0 0 0 0 2.4l6.2 5.7a1.2 1.2 0 0 0 2-.9v-2.6c4.1.1 7 1.3 9.2 4.3.5.7 1.7.3 1.6-.6-.6-6.3-4.7-9.6-10.8-9.9z"/>',
+    bubble: '<path d="M12 3.3c-5.3 0-9.6 3.6-9.6 8 0 2 .9 3.9 2.4 5.3l-1.3 3.7a1 1 0 0 0 1.3 1.2l4.4-1.9c.9.2 1.8.3 2.8.3 5.3 0 9.6-3.6 9.6-8s-4.3-8.6-9.6-8.6z"/>',
+    eye: '<path fill-rule="evenodd" d="M12 4.8C7 4.8 3 8.6 1.5 11.3a1.4 1.4 0 0 0 0 1.4C3 15.4 7 19.2 12 19.2s9-3.8 10.5-6.5a1.4 1.4 0 0 0 0-1.4C21 8.6 17 4.8 12 4.8zm0 10.6a3.4 3.4 0 1 1 0-6.8 3.4 3.4 0 0 1 0 6.8z"/>',
+    calendar: '<path fill-rule="evenodd" d="M7.9 1.8A1.2 1.2 0 0 1 9.1 3v1.2h5.8V3a1.2 1.2 0 0 1 2.4 0v1.3a3.8 3.8 0 0 1 3.5 3.8v10a3.8 3.8 0 0 1-3.8 3.8H7a3.8 3.8 0 0 1-3.8-3.8v-10a3.8 3.8 0 0 1 3.5-3.8V3a1.2 1.2 0 0 1 1.2-1.2zM5.4 9.4v1.9h13.2V9.4z"/>',
+    alert: '<path fill-rule="evenodd" d="M13.8 3.5a2.1 2.1 0 0 0-3.6 0L1.9 18.2A2.1 2.1 0 0 0 3.7 21.4h16.6a2.1 2.1 0 0 0 1.8-3.2zM10.9 8.6h2.2v5.7h-2.2zm0 7.4h2.2v2.2h-2.2z"/>',
+    lock: '<path d="M12 2.2a4.9 4.9 0 0 0-4.9 4.9v2.5h2.6V7.1a2.3 2.3 0 0 1 4.6 0v2.5h2.6V7.1A4.9 4.9 0 0 0 12 2.2z"/><rect x="3.8" y="9.6" width="16.4" height="11.8" rx="3.6"/>',
+
+    // Three sliders, which is the one thing everyone reads as "filters". Each
+    // knob sits at a different point along its rail, so it cannot be mistaken
+    // for a list or a menu.
+    filter: '<path fill-rule="evenodd" d="M3 4.9h3.4a3 3 0 0 1 5.8 0H21a1.1 1.1 0 0 1 0 2.2h-8.8a3 3 0 0 1-5.8 0H3a1.1 1.1 0 0 1 0-2.2zm0 6h11a3 3 0 0 1 5.8 0H21a1.1 1.1 0 0 1 0 2.2h-1.2a3 3 0 0 1-5.8 0H3a1.1 1.1 0 0 1 0-2.2zm0 6h6.2a3 3 0 0 1 5.8 0H21a1.1 1.1 0 0 1 0 2.2h-6a3 3 0 0 1-5.8 0H3a1.1 1.1 0 0 1 0-2.2z"/>',
+
+    // A crescent: one disc with a second, offset disc taken out of it. Two arcs,
+    // no subtraction — the return arc is the bite.
+    moon: '<path d="M21.3 13.6a9.4 9.4 0 1 1-10.9-10.9 8.2 8.2 0 0 0 10.9 10.9z"/>',
+    sun: '<circle cx="12" cy="12" r="5"/><path d="M12 .9a1.2 1.2 0 0 1 1.2 1.2v1.6a1.2 1.2 0 0 1-2.4 0V2.1A1.2 1.2 0 0 1 12 .9zm0 18.2a1.2 1.2 0 0 1 1.2 1.2v1.6a1.2 1.2 0 0 1-2.4 0v-1.6a1.2 1.2 0 0 1 1.2-1.2zM23.1 12a1.2 1.2 0 0 1-1.2 1.2h-1.6a1.2 1.2 0 0 1 0-2.4h1.6a1.2 1.2 0 0 1 1.2 1.2zM4.9 12a1.2 1.2 0 0 1-1.2 1.2H2.1a1.2 1.2 0 0 1 0-2.4h1.6A1.2 1.2 0 0 1 4.9 12zM19.9 4.1a1.2 1.2 0 0 1 0 1.7l-1.1 1.1a1.2 1.2 0 0 1-1.7-1.7l1.1-1.1a1.2 1.2 0 0 1 1.7 0zM7 16.9a1.2 1.2 0 0 1 0 1.7l-1.1 1.1a1.2 1.2 0 1 1-1.7-1.7l1.1-1.1a1.2 1.2 0 0 1 1.7 0zm12.9 2.8a1.2 1.2 0 0 1-1.7 0L17.1 18.6a1.2 1.2 0 0 1 1.7-1.7l1.1 1.1a1.2 1.2 0 0 1 0 1.7zM7 7.1a1.2 1.2 0 0 1-1.7 0L4.2 5.8a1.2 1.2 0 0 1 1.7-1.7L7 5.4A1.2 1.2 0 0 1 7 7.1z"/>',
   };
+
   function icon(name, size = 16, cls = '') {
     const body = P[name] || P.circle;
-    return `<svg class="ico ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+    return `<svg class="ico ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" stroke="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
   }
   window.icon = icon;
+
+  // The Phone, Messages and Mail app icons, for the buttons that hand a call,
+  // a text or an email to the phone's own apps. Drawn as the apps are drawn —
+  // a white glyph on a rounded tile with the app's own gradient — so they read
+  // at a glance as "this opens Phone", not as another button of this app's.
+  // The tile is CSS (.app-ico-*), so it follows the size it is given.
+  const APP = {
+    phone: '<path d="M7.1 2.6c.6-.2 1.3 0 1.6.6l1.9 3.4c.3.6.2 1.2-.2 1.7L8.9 9.8c1.1 2.5 3 4.4 5.4 5.4l1.5-1.5c.5-.4 1.1-.5 1.7-.2l3.4 1.9c.6.3.8 1 .6 1.6l-.8 2.2c-.4 1.1-1.5 1.8-2.7 1.6C10.6 19.8 4.3 13.5 3.3 6.1c-.2-1.2.5-2.3 1.6-2.7z"/>',
+    messages: '<path d="M12 3.2c-5.6 0-10.1 3.8-10.1 8.4 0 2.6 1.4 4.9 3.7 6.4-.2 1.1-.8 2.2-1.7 3-.3.3-.1.8.3.8 1.9 0 3.6-.7 4.8-1.6 1 .3 2 .4 3 .4 5.6 0 10.1-3.8 10.1-8.5S17.6 3.2 12 3.2z"/>',
+    mail: '<path d="M4.4 5.4h15.2c1 0 1.8.8 1.8 1.8v9.6c0 1-.8 1.8-1.8 1.8H4.4c-1 0-1.8-.8-1.8-1.8V7.2c0-1 .8-1.8 1.8-1.8z"/><path fill="none" stroke="#1a73ef" stroke-opacity=".55" stroke-width="1.25" stroke-linejoin="round" d="M3.3 6.6l8.7 6.6 8.7-6.6"/>',
+  };
+  window.appIcon = (name, size = 36) =>
+    `<span class="app-ico app-ico-${name}" style="--s:${size}px" aria-hidden="true"><svg viewBox="0 0 24 24" fill="#fff">${APP[name] || ''}</svg></span>`;
   window.mountIcons = (root = document) => {
     root.querySelectorAll('[data-icon]').forEach((el) => {
       el.innerHTML = icon(el.dataset.icon, el.dataset.size ? Number(el.dataset.size) : 16);

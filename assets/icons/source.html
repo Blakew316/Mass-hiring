@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WPI Outreach — app icon artwork</title>
+<!--
+  The source artwork for the app icon: the Wholesale Payments bars with
+  "WPI OUTREACH" set above them.
+
+  Open this file in a browser to look at it, or re-render the masters with
+  scripts/render-icon-masters.mjs (headless Chromium). The masters land in this
+  folder; scripts/build-icons.mjs then makes every shipped size from them with
+  no dependencies at all.
+
+  Pick which master with the query string:
+    ?v=app-light   ?v=app-dark   ?v=mask-light   ?v=mask-dark
+    ?v=favicon     ?v=wordmark
+
+  "mask-*" is the Android maskable form: the same artwork at 75%, so all of it
+  survives the circular mask some launchers apply. "favicon" is the bars alone
+  on transparency — at 16 pixels the words are a smudge, and the bars are the
+  part that is recognisable anyway.
+-->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@800&display=block" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1024px; height: 1024px; }
+  .icon {
+    width: 1024px; height: 1024px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: Inter, system-ui, sans-serif;
+  }
+  /* The light face is not flat white, which disappears against a pale
+     wallpaper, but a soft fall towards the brand's own pale blue. */
+  .icon.light { background: linear-gradient(168deg, #ffffff 0%, #e8eefb 100%); }
+  .icon.light .label { color: #141b4d; }
+  .icon.dark  { background: linear-gradient(168deg, #232a3b 0%, #0a0c11 100%); }
+  .icon.dark  .label { color: #f2f5ff; }
+  .icon.bare  { background: none; }
+
+  .label {
+    font-size: 84px; font-weight: 800; letter-spacing: .075em; text-transform: uppercase;
+    line-height: 1; white-space: nowrap;
+    /* Letter-spacing adds a trailing gap after the last letter, which drags a
+       centred line left by half of it. This puts it back. */
+    text-indent: .075em;
+    margin-bottom: 44px;
+  }
+  .mark { height: 580px; width: auto; display: block; }
+
+  /* 75%: at that size the artwork's diagonal fits inside the circle a maskable
+     icon is guaranteed. */
+  .icon.masked .label { font-size: 63px; margin-bottom: 33px; }
+  .icon.masked .mark  { height: 435px; }
+
+  .icon.bare .label { display: none; }
+  .icon.bare .mark  { height: 900px; }
+
+  /* The words alone, for the launch screen. White, because a launch screen is
+     built per theme and tints it there. */
+  .icon.words { background: none; }
+  .icon.words .mark { display: none; }
+  .icon.words .label { color: #ffffff; margin-bottom: 0; font-size: 150px; }
+</style>
+</head>
+<body>
+  <div class="icon" id="icon">
+    <div class="label">WPI Outreach</div>
+    <img class="mark" src="mark.png" alt="">
+  </div>
+  <script>
+    const v = new URLSearchParams(location.search).get('v') || 'app-light';
+    const el = document.getElementById('icon');
+    if (v === 'favicon') el.className = 'icon bare';
+    else if (v === 'wordmark') el.className = 'icon words';
+    else {
+      el.classList.add(v.endsWith('dark') ? 'dark' : 'light');
+      if (v.startsWith('mask')) el.classList.add('masked');
+    }
+  </script>
+</body>
+</html>

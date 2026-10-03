@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "build": "npm run build:sw && npm run build:function",
+    "build:sw": "node scripts/build-sw.mjs",
+    "build:icons": "node scripts/build-icons.mjs",
     "build:function": "node scripts/build-function.mjs"
   },
   "engines": {
@@ -16,9 +19,11 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "nodemailer": "^6.9.14",
+    "pdf-lib": "^1.17.1",
     "serverless-http": "^3.2.0"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "unpdf": "^1.8.1"
   }
 }

@@ -1,0 +1,1049 @@
+/* Onboarding docs — WPI Hire's page script (its public/app.js), as a page of
+   this site. The code below is WPI Hire's own, section for section; what is
+   different is only what had to be:
+
+   - its routes live under /api/onboarding/ here, and are signed in to the way
+     every page of this site is (the session cookie), so there is no password
+     prompt; a lapsed session goes to this site's sign-in screen
+   - its ids and the class names this site already used are wh-* (see the
+     top of public/onboarding.css)
+   - everything it cached in this browser is cached per team
+   - no BambooHR: its Sync, Hire and Directory, its stage menus and its
+     sample data are gone, and so are Add hire and Upload resume — people
+     come here from the Candidates page, which already has all of that
+   - its two remaining sections are tabs within the page, remembered in the
+     address bar (#onboarding?tab=onboarding), with an iOS segmented control
+     on a phone
+   - it starts when the page is first opened, looks again every 30 seconds
+     while it is open, and forgets everything when the team changes
+   - the site's header, offline marker and service worker do what WPI Hire's
+     own did
+   - new: the Signed paperwork list (the signing record and the signed copies
+     of every completed packet), and "Send onboarding docs" from the
+     Candidates page. The company's details are fixed (lib/onboarding.js). */
+(() => {
+const state = {
+  localCandidates: [],
+  overrides: {},
+  storage: null,
+  documents: [],
+  sends: {},
+  completedHires: [],
+  // As a page of this site: whose data this is, whether the page is open,
+  // and which of its four sections is showing.
+  teamId: '',
+  active: false,
+  booted: false,
+  tab: 'pipeline',
+  // Moved on by a change of team: an answer asked for before it is dropped.
+  generation: 0,
+  // The completed hire whose record is open in Signed paperwork.
+  openSigned: '',
+  // Cards whose packet is on its way (their Send button stays "Sending…"
+  // however often the board is drawn), and a count of changes made here —
+  // an answer asked for before the latest one would undo it on screen.
+  sending: new Set(),
+  localEdits: 0,
+};
+
+const $ = (sel) => document.querySelector(sel);
+
+const ICONS = {
+  mail: '<svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m22 7-10 6L2 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  phone: '<svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.8a2 2 0 0 1-.4 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  check: '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  flask: '<svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 9V3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  skip: '<svg viewBox="0 0 24 24"><path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>',
+  x: '<svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>',
+  info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 8h.01M12 12v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  file: '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 2v6h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+
+// ── Saved records ────────────────────────────────────────────────────────────
+// Uploaded candidates and manual corrections are stored on the server so they
+// persist across sessions and devices. The browser keeps a copy purely as an
+// offline cache, so the pipeline still renders if a request fails.
+
+const LOCAL_CANDIDATES_KEY = 'hhqLocalCandidates';
+const OVERRIDES_KEY = 'hhqCandidateOverrides';
+
+// One browser can be signed in to one team and then another, and the second
+// must never be shown the first one's pipeline: the records are kept per
+// team. Whether the install hint was dismissed is about the device.
+const DEVICE_KEYS = new Set(['hhqInstallHintDismissed']);
+const cacheKey = (key) => (DEVICE_KEYS.has(key) ? key : state.teamId ? `${key}:${state.teamId}` : '');
+
+function cacheGet(key, fallback) {
+  const k = cacheKey(key);
+  if (!k) return fallback;
+  try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; }
+}
+function cacheSet(key, value) {
+  const k = cacheKey(key);
+  if (!k) return;
+  try { localStorage.setItem(k, JSON.stringify(value)); } catch { /* private mode */ }
+}
+
+function loadLocalCandidates() {
+  return cacheGet(LOCAL_CANDIDATES_KEY, []) || [];
+}
+function saveLocalCandidates() {
+  state.localEdits++;
+  cacheSet(LOCAL_CANDIDATES_KEY, state.localCandidates);
+}
+// A record the server refused is taken back off the board and the cache.
+function forgetLocal(id) {
+  state.localCandidates = state.localCandidates.filter((x) => String(x.id) !== String(id));
+  saveLocalCandidates();
+  renderStats();
+  renderBoard();
+}
+function allCandidates() {
+  return state.localCandidates;
+}
+
+// Pulls the saved records from the server; the cache covers a failed request.
+async function loadSaved() {
+  const gen = state.generation;
+  const edits = state.localEdits;
+  try {
+    const res = await api('/api/saved');
+    if (gen !== state.generation) return;
+    // Something was added, changed or sent here while this was on its way:
+    // the answer predates it. The next look brings both.
+    if (edits !== state.localEdits) return;
+    state.localCandidates = Array.isArray(res.candidates) ? res.candidates : [];
+    state.overrides = {};
+    for (const o of res.overrides || []) {
+      const { id, savedAt, ...details } = o;
+      void savedAt;
+      state.overrides[String(id)] = details;
+    }
+    state.sends = {};
+    for (const send of res.sends || []) {
+      const key = emailKey(send.email || send.id);
+      if (key) state.sends[key] = send;
+    }
+    state.completedHires = Array.isArray(res.hires) ? res.hires : [];
+    state.storage = res.storage || null;
+    cacheSet(LOCAL_CANDIDATES_KEY, state.localCandidates);
+    cacheSet(OVERRIDES_KEY, state.overrides);
+  } catch (err) {
+    if (gen !== state.generation) return;
+    state.localCandidates = loadLocalCandidates();
+    state.overrides = cacheGet(OVERRIDES_KEY, {}) || {};
+    console.warn('Using cached records:', err.message);
+  }
+}
+
+// Packets are addressed by email, so that is the key that ties a candidate to
+// the packet they were sent and the paperwork they signed.
+function emailKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+// One Intl.DateTimeFormat for each way a date is written here, made the
+// first time it is needed: toLocaleDateString builds a new one on every
+// call, which is nearly all it costs, and every card writes a date or two.
+function dateFormat(options) {
+  let f = null;
+  return (d) => (f || (f = new Intl.DateTimeFormat(undefined, options))).format(d);
+}
+const shortDateFormat = dateFormat({ month: 'short', day: 'numeric' });
+const signedFormat = dateFormat({ month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+function shortDate(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : shortDateFormat(d);
+}
+
+// Where each candidate has got to: sent a packet, signed it, or neither.
+function progressOf(c) {
+  const key = emailKey(applicantOf(c).email);
+  if (!key) return {};
+  const signed = state.completedHires.find((h) => emailKey(h.email) === key);
+  return { sentAt: state.sends[key]?.sentAt, signedAt: signed?.signedAt };
+}
+
+// Records the send locally the moment it succeeds, so the tiles and cards move
+// without waiting for the next round-trip. The server stores it durably too.
+function noteSend(email) {
+  state.localEdits++;
+  const key = emailKey(email);
+  if (!key) return;
+  state.sends[key] = { ...(state.sends[key] || {}), email, sentAt: new Date().toISOString() };
+  renderStats();
+  renderBoard();
+  // The Candidates page shows who was sent their packet: it looks again.
+  host.changed();
+}
+
+function loadOverrides() {
+  return state.overrides || {};
+}
+
+// The candidate's contact details with any manual edits applied.
+function applicantOf(c) {
+  const a = c.applicant || {};
+  const o = loadOverrides()[String(c.id)];
+  return o ? { ...a, ...o } : a;
+}
+
+// WPI Hire's routes, at their place in this app: /api/onboarding/… (the site
+// already has an /api/candidates of its own). They are behind the team
+// sign-in like every other page — the session cookie goes with each call — so
+// where WPI Hire prompted for its password, a refusal here is a lapsed
+// session, and the site's own sign-in screen takes over.
+const route = (path) => (path.startsWith('/api/onboarding/') ? path : path.replace(/^\/api\//, '/api/onboarding/'));
+
+// Set by the site (public/app.js): its sign-in screen, and its pages.
+const host = { signedOut() {}, show() {}, changed() {} };
+
+async function rawFetch(path, opts = {}) {
+  let res;
+  try {
+    res = await fetch(route(path), {
+      ...opts,
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        // Refused by the server if this browser has since signed in to
+        // another team (see lib/onboarding-routes.js).
+        ...(state.teamId ? { 'X-Team-Expected': encodeURIComponent(state.teamId) } : {}),
+        ...(opts.headers || {}),
+      },
+    });
+  } catch {
+    // A dropped connection reads as "Failed to fetch", which tells nobody
+    // anything. Say what actually happened.
+    throw new Error(
+      navigator.onLine
+        ? 'Could not reach the server — try again in a moment'
+        : "You're offline — reconnect to load the latest"
+    );
+  }
+  if (res.status === 401) host.signedOut();
+  // Answered for another team: this browser was signed in to it elsewhere.
+  // Nothing of it is shown or kept under this team's name; the site looks
+  // again, finds the team it is now signed in to, and the page starts over.
+  const team = res.headers.get('X-Team');
+  if (team && state.teamId && decodeURIComponent(team) !== state.teamId) {
+    host.changed();
+    const err = new Error('This browser is now signed in to another team — switching to it.');
+    err.otherTeam = true;
+    throw err;
+  }
+  return res;
+}
+
+const api = async (path, opts = {}) => {
+  const res = await rawFetch(path, {
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.auth ? 'Please sign in to the dashboard.' : data.error || `Request failed (${res.status})`);
+    // A 400 is the server refusing on purpose — someone at Wholesale Payments,
+    // an address that is not one. Keeping it "on this device only" would keep
+    // exactly what was refused, so those are undone rather than cached.
+    err.refused = res.status === 400;
+    throw err;
+  }
+  return data;
+};
+
+// Nobody at Wholesale Payments is added or sent a packet as a new hire: the
+// packet goes to the person's own address, before they have a company inbox.
+// The server holds the line; this says so before anything is added.
+const OWN_COMPANY = /@(?:[a-z0-9-]+\.)*wholesalepayments\.com$/i;
+function refuseOwnCompany(email) {
+  if (!OWN_COMPANY.test(String(email || '').trim())) return false;
+  toast('That is a Wholesale Payments address. Onboarding packets go to the new hire’s own email — use their personal address.', true);
+  return true;
+}
+
+function toast(msg, isError = false) {
+  const el = $('#wh-toast');
+  el.textContent = msg;
+  el.className = `wh-toast${isError ? ' error' : ''}`;
+  el.hidden = false;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, 4200);
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s ?? '';
+  return d.innerHTML;
+}
+// For use inside double-quoted HTML attributes (input values).
+function escAttr(s) {
+  return esc(s).replaceAll('"', '&quot;');
+}
+
+const AVATAR_COLORS = ['#0b1b5e', '#0a8fe0', '#0aa065', '#0f7691', '#4a5d94', '#6437a8', '#5b6673'];
+function avatar(name, cls = 'wh-avatar') {
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+  const color = AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+  return `<span class="${cls}" style="background:${color}">${esc(initials)}</span>`;
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+
+const TABS = ['pipeline', 'onboarding'];
+const wph = $('#wph');
+
+// The page scrolls in this site's page area on a phone, and in the window on
+// a wide screen: back to the top of whichever it is.
+function scrollToTop() {
+  window.scrollTo({ top: 0 });
+  const main = document.querySelector('.main');
+  if (main) main.scrollTop = 0;
+}
+
+function showTab(name, { scroll = true } = {}) {
+  if (!TABS.includes(name)) name = 'pipeline';
+  state.tab = name;
+  wph.querySelectorAll('.nav-tab').forEach((t) => t.classList.toggle('wh-active', t.dataset.tab === name));
+  wph.querySelectorAll('.panel').forEach((p) => p.classList.toggle('wh-active', p.id === `wh-tab-${name}`));
+  document.querySelectorAll('#view-onboarding .wh-seg-btn').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
+  // Which section is open is in the address bar, so a reload or a link lands
+  // on it. Replaced, not pushed: Back leaves the page, as it does elsewhere.
+  // Only once the page's own entry is the current one — opened from another
+  // page, the entry still showing is that page's, and the site pushes this
+  // one's address (address() below) itself.
+  if (state.active && location.hash.split('?')[0] === '#onboarding') {
+    const want = address();
+    if (location.hash !== want) history.replaceState(history.state, '', want);
+  }
+  if (scroll) scrollToTop();
+}
+document.querySelectorAll('#wph .nav-tab, #view-onboarding .wh-seg-btn').forEach((t) =>
+  t.addEventListener('click', () => showTab(t.dataset.tab))
+);
+
+// ── Pipeline ─────────────────────────────────────────────────────────────────
+
+// The tiles read from the records this app owns — candidates on the board,
+// packets it has sent, and paperwork that has come back signed. Nothing here
+// needs a round-trip anywhere else, so the numbers move the moment anything changes.
+function renderStats() {
+  const el = $('#wh-pipeline-stats');
+  const all = allCandidates();
+
+  const signed = new Set(state.completedHires.map((h) => emailKey(h.email)).filter(Boolean));
+  const sent = new Set(signed); // signing proves a packet went out
+  for (const key of Object.keys(state.sends)) if (key) sent.add(key);
+
+  // Phones get the short label so four tiles fit one row and the candidate
+  // cards stay above the fold; CSS picks which of the two to show.
+  const stats = [
+    { value: all.length, label: 'Candidates', short: 'Hires' },
+    { value: sent.size, label: 'Packets sent', short: 'Sent' },
+    { value: Math.max(0, sent.size - signed.size), label: 'Awaiting signature', short: 'Awaiting' },
+    { value: signed.size, label: 'Signed & complete', short: 'Signed' },
+  ];
+  el.innerHTML = stats
+    .map(
+      (s) =>
+        `<div class="stat"><div class="wh-stat-value">${s.value}</div>` +
+        `<div class="wh-stat-label"><span class="label-full">${esc(s.label)}</span>` +
+        `<span class="label-short">${esc(s.short)}</span></div></div>`
+    )
+    .join('');
+  el.hidden = false;
+}
+
+function candidateCard(c) {
+  const a = applicantOf(c);
+  const name = `${a.firstName || ''} ${a.lastName || ''}`.trim() || 'Unknown';
+  const role = c.job?.title?.label || c.job?.title || '';
+  const statusLabel = c.status?.label || c.status?.name || 'Added';
+  const { sentAt, signedAt } = progressOf(c);
+  const meta = [
+    a.email && `<div class="meta-line">${ICONS.mail}<span>${esc(a.email)}</span></div>`,
+    a.phoneNumber && `<div class="meta-line">${ICONS.phone}<span>${esc(a.phoneNumber)}</span></div>`,
+    c.resumeName && `<div class="meta-line">${ICONS.file}<span>${esc(c.resumeName)}</span></div>`,
+    c.startDate && `<div class="meta-line">${ICONS.calendar}<span>Starts ${esc(c.startDate)}</span></div>`,
+    c.appliedDate && `<div class="meta-line">${ICONS.calendar}<span>Added ${esc(c.appliedDate)}</span></div>`,
+    signedAt
+      ? `<div class="meta-line meta-good"><button type="button" class="meta-link open-signed" data-email="${escAttr(emailKey(a.email))}" title="The signing record and the signed copies">${ICONS.check}<span>Paperwork signed ${esc(shortDate(signedAt))}</span></button></div>`
+      : sentAt && `<div class="meta-line meta-pending">${ICONS.mail}<span>Packet sent ${esc(shortDate(sentAt))} — awaiting signature</span></div>`,
+  ].filter(Boolean).join('');
+
+  return `
+  <div class="candidate-card" data-id="${c.id}">
+    <div class="candidate-head">
+      ${avatar(name)}
+      <div class="candidate-id">
+        <div class="candidate-name">${esc(name)}</div>
+        <div class="candidate-role">${esc(role)}</div>
+      </div>
+      <span class="wh-chip chip-blue">${esc(statusLabel)}</span>
+      <button class="wh-icon-btn edit-btn" type="button" aria-label="Edit contact details" title="Edit contact details">${ICONS.pencil}</button>
+    </div>
+    <form class="edit-form" hidden>
+      <div class="edit-grid">
+        <label class="field">First name<input name="firstName" value="${escAttr(a.firstName || '')}" required /></label>
+        <label class="field">Last name<input name="lastName" value="${escAttr(a.lastName || '')}" required /></label>
+        <label class="field span-2">Email<input name="email" type="email" value="${escAttr(a.email || '')}" /></label>
+        <label class="field span-2">Phone<input name="phoneNumber" type="tel" value="${escAttr(a.phoneNumber || '')}" /></label>
+      </div>
+      <div class="edit-actions">
+        <button type="submit" class="wh-btn wh-btn-primary wh-btn-sm">Save</button>
+        <button type="button" class="wh-btn wh-btn-ghost wh-btn-sm cancel-edit">Cancel</button>
+      </div>
+    </form>
+    ${meta ? `<div class="candidate-meta">${meta}</div>` : ''}
+    <div class="candidate-actions">
+      ${state.sending.has(String(c.id))
+        ? '<button class="wh-btn wh-btn-primary wh-btn-sm send-packet-quick" style="flex:1" disabled>Sending…</button>'
+        : `<button class="wh-btn wh-btn-primary wh-btn-sm send-packet-quick" style="flex:1" ${a.email ? '' : 'disabled title="No email on file"'}>
+        <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        ${signedAt ? 'Send again' : sentAt ? 'Send again' : 'Send onboarding packet'}
+      </button>`}
+      <button class="wh-btn wh-btn-ghost wh-btn-sm remove-local">Remove</button>
+    </div>
+  </div>`;
+}
+
+// One-tap send from a candidate card: the packet is personalized with the
+// candidate's name, email, phone, and role, and emailed immediately.
+async function quickSendPacket(c, btn) {
+  const a = applicantOf(c);
+  if (!a.email) return toast('This candidate has no email on file', true);
+  const name = `${a.firstName || ''} ${a.lastName || ''}`.trim();
+
+  btn.disabled = true;
+  const original = btn.innerHTML;
+  btn.textContent = 'Sending…';
+  state.sending.add(String(c.id));
+  try {
+    const hire = {
+      firstName: a.firstName || '',
+      lastName: a.lastName || '',
+      email: a.email,
+      phone: a.phoneNumber || '',
+      jobTitle: 'Account Executive',
+      startDate: c.startDate || '',
+    };
+    const res = await api('/api/onboarding/send', {
+      method: 'POST',
+      body: { hire, options: { sendEmail: true } },
+    });
+
+    // Mirror the send in the Onboarding tab so the details and results are there.
+    const p = $('#wh-packet-form');
+    p.firstName.value = hire.firstName;
+    p.lastName.value = hire.lastName;
+    p.email.value = hire.email;
+    p.phone.value = hire.phone;
+    p.jobTitle.value = hire.jobTitle;
+    if (hire.startDate) p.startDate.value = hire.startDate;
+    packetSettled();
+    renderPacketResult(res);
+    noteSend(hire.email);
+
+    toast(res.ok ? `Onboarding packet sent to ${name || hire.email}` : 'Sent, but check the Onboarding tab', !res.ok);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    state.sending.delete(String(c.id));
+    // The board may have been drawn again meanwhile: this card's button as
+    // it is now, not the one that was pressed.
+    const now = document.querySelector(`#wh-pipeline-board .candidate-card[data-id="${CSS.escape(String(c.id))}"] .send-packet-quick`) || btn;
+    now.disabled = false;
+    now.innerHTML = original;
+  }
+}
+
+// Is someone in the middle of something on the board? Then a look for news
+// leaves it be: redrawn, an open edit form would close and lose what was
+// typed, and a stage menu would shut mid-choice.
+function boardInUse() {
+  const board = $('#wh-pipeline-board');
+  return [...board.querySelectorAll('.edit-form')].some((f) => !f.hidden)
+    || board.contains(document.activeElement);
+}
+
+function renderBoard() {
+  const board = $('#wh-pipeline-board');
+  const all = allCandidates();
+  if (!all.length) {
+    board.innerHTML = '<div class="wh-empty-state">No one here yet — on the Candidates page, use Send onboarding docs (or Add to Onboarding docs) on anyone you are hiring.</div>';
+    return;
+  }
+
+  // Group candidates by how they came: added from Candidates first.
+  const OWN_STAGES = ['Added', 'Uploaded'];
+  const rank = (label) => (OWN_STAGES.includes(label) ? OWN_STAGES.indexOf(label) : 99);
+  const groups = new Map();
+  for (const c of all) {
+    const label = c.status?.label || 'Other';
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(c);
+  }
+  const sorted = [...groups.entries()].sort((x, y) => rank(x[0]) - rank(y[0]));
+
+  board.innerHTML = sorted
+    .map(
+      ([label, cands]) => `
+      <section class="stage">
+        <div class="stage-head">
+          <span class="stage-name">${esc(label)}</span>
+          <span class="stage-count">${cands.length}</span>
+          <span class="stage-rule"></span>
+        </div>
+        <div class="candidate-grid">${cands.map(candidateCard).join('')}</div>
+      </section>`
+    )
+    .join('');
+
+  const findCandidate = (id) => allCandidates().find((x) => String(x.id) === String(id));
+
+  board.querySelectorAll('.open-signed').forEach((btn) =>
+    btn.addEventListener('click', () => openSignedFor(btn.dataset.email))
+  );
+
+  board.querySelectorAll('.send-packet-quick').forEach((btn) =>
+    btn.addEventListener('click', (e) => {
+      const c = findCandidate(e.target.closest('.candidate-card').dataset.id);
+      quickSendPacket(c, btn);
+    })
+  );
+
+  board.querySelectorAll('.remove-local').forEach((btn) =>
+    btn.addEventListener('click', (e) => {
+      const id = e.target.closest('.candidate-card').dataset.id;
+      const c = findCandidate(id);
+      const a = applicantOf(c);
+      if (!confirm(`Remove ${a.firstName} ${a.lastName} from the pipeline?`)) return;
+      state.localCandidates = state.localCandidates.filter((x) => String(x.id) !== String(id));
+      saveLocalCandidates();
+      delete state.overrides[String(id)];
+      cacheSet(OVERRIDES_KEY, state.overrides);
+      api(`/api/saved/candidates/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+      renderStats();
+      renderBoard();
+      toast('Candidate removed');
+    })
+  );
+
+  board.querySelectorAll('.edit-btn').forEach((btn) =>
+    btn.addEventListener('click', (e) => {
+      const form = e.target.closest('.candidate-card').querySelector('.edit-form');
+      form.hidden = !form.hidden;
+    })
+  );
+
+  board.querySelectorAll('.cancel-edit').forEach((btn) =>
+    btn.addEventListener('click', (e) => {
+      e.target.closest('.edit-form').hidden = true;
+    })
+  );
+
+  board.querySelectorAll('.edit-form').forEach((form) =>
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const card = e.target.closest('.candidate-card');
+      const f = e.target;
+      const details = {
+        firstName: f.firstName.value.trim(),
+        lastName: f.lastName.value.trim(),
+        email: f.email.value.trim(),
+        phoneNumber: f.phoneNumber.value.trim(),
+      };
+      if (refuseOwnCompany(details.email)) return;
+      const c = findCandidate(card.dataset.id);
+      if (c) {
+        // Every candidate here is a record of this page's: updated in place.
+        const before = c.applicant;
+        c.applicant = { ...c.applicant, ...details };
+        saveLocalCandidates();
+        api('/api/saved/candidates', { method: 'POST', body: { candidate: c } }).catch((err) => {
+          if (!err.refused) return toast(`Saved on this device only — ${err.message}`, true);
+          c.applicant = before;
+          saveLocalCandidates();
+          renderBoard();
+          toast(err.message, true);
+        });
+      }
+      renderBoard();
+      toast('Details saved — packets will use the updated info');
+    })
+  );
+}
+
+// ── Onboarding packet ────────────────────────────────────────────────────────
+
+async function loadDocuments() {
+  const gen = state.generation;
+  const res = await api('/api/packet/documents');
+  if (gen !== state.generation) return;
+  state.documents = res.documents;
+  $('#wh-doc-list').innerHTML = state.documents
+    .map(
+      (d) => `
+      <label class="doc-item">
+        <input type="checkbox" value="${d.key}" ${d.default ? 'checked' : ''} />
+        <span class="doc-check"></span>
+        <span class="doc-title">${esc(d.title)}</span>
+        <a href="${escAttr(d.href || '#')}" ${d.href ? 'target="_blank" rel="noopener"' : ''} class="doc-preview" data-key="${d.key}">Preview</a>
+      </label>`
+    )
+    .join('');
+
+  $('#wh-doc-list').querySelectorAll('.doc-preview').forEach((a) =>
+    a.addEventListener('click', async (e) => {
+      // A company document is published beside the paperwork portal: the link
+      // opens the PDF itself, which works everywhere — the installed app on an
+      // iPhone included, where a window opened after a network request is
+      // blocked as a pop-up.
+      const doc = state.documents.find((d) => d.key === a.dataset.key);
+      if (doc && doc.href) return;
+      e.preventDefault();
+      const win = window.open('', '_blank');
+      try {
+        const res = await rawFetch('/api/packet/preview', {
+          method: 'POST',
+          body: JSON.stringify({ docKey: a.dataset.key, hire: readHireForm() }),
+        });
+        if (!res.ok) throw new Error('Preview failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (win) win.location = url;
+        else window.open(url, '_blank');
+      } catch (err) {
+        if (win) win.close();
+        toast(err.message, true);
+      }
+    })
+  );
+}
+
+// What the packet form held when it was last filled in, sent or cleared:
+// anything different is typing that a reload would lose.
+const packetValues = () => [...$('#wh-packet-form').querySelectorAll('input[name], select[name], textarea[name]')]
+  .map((i) => (i.type === 'checkbox' || i.type === 'radio' ? i.checked : i.value)).join('\u0001');
+let packetBaseline = packetValues();
+function packetSettled() { packetBaseline = packetValues(); }
+
+function readHireForm() {
+  const f = $('#wh-packet-form');
+  return {
+    firstName: f.firstName.value.trim(),
+    lastName: f.lastName.value.trim(),
+    email: f.email.value.trim(),
+    phone: f.phone.value.trim(),
+    jobTitle: f.jobTitle.value.trim(),
+    department: f.department.value.trim(),
+    startDate: f.startDate.value,
+    manager: f.manager.value.trim(),
+    salary: f.salary.value.trim(),
+    employmentType: f.employmentType.value,
+    workLocation: f.workLocation.value.trim(),
+  };
+}
+
+const STEP_STYLE = {
+  done: { cls: 'tl-done', icon: ICONS.check },
+  simulated: { cls: 'tl-sim', icon: ICONS.flask },
+  skipped: { cls: 'tl-skip', icon: ICONS.skip },
+  error: { cls: 'tl-err', icon: ICONS.x },
+};
+
+function renderPacketResult(res) {
+  const card = $('#wh-packet-result');
+  card.hidden = false;
+  card.innerHTML =
+    `<h2 class="result-title">${res.ok ? 'Packet sent' : 'Sent with issues'}</h2>` +
+    `<div class="timeline">` +
+    res.steps
+      .map((s) => {
+        const st = STEP_STYLE[s.status] || { cls: 'tl-skip', icon: ICONS.info };
+        return `
+        <div class="tl-step">
+          <span class="tl-dot ${st.cls}">${st.icon}</span>
+          <div class="tl-body">
+            <div class="tl-name">${esc(s.step)}</div>
+            <div class="tl-detail">${esc(s.detail)}</div>
+          </div>
+        </div>`;
+      })
+      .join('') +
+    `</div>`;
+}
+
+$('#wh-packet-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const btn = $('#wh-send-packet-btn');
+  const selectedDocs = [...f.querySelectorAll('.doc-item input:checked')].map((i) => i.value);
+  if (!selectedDocs.length) return toast('Select at least one document for the packet', true);
+
+  btn.disabled = true;
+  $('#wh-send-packet-label').textContent = 'Sending…';
+  try {
+    const res = await api('/api/onboarding/send', {
+      method: 'POST',
+      body: {
+        hire: readHireForm(),
+        documents: selectedDocs,
+        options: { sendEmail: f.sendEmail.checked },
+      },
+    });
+    renderPacketResult(res);
+    packetSettled();
+    if (f.sendEmail.checked) noteSend(f.email.value);
+    $('#wh-packet-result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    toast(res.ok ? 'Onboarding packet on its way' : 'Sent, but check the results panel', !res.ok);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    $('#wh-send-packet-label').textContent = 'Send onboarding packet';
+  }
+});
+
+// Tests the deployed SMTP login and reports which account it authenticates as.
+$('#wh-test-email-btn').addEventListener('click', async () => {
+  const btn = $('#wh-test-email-btn');
+  const out = $('#wh-email-test-result');
+  btn.disabled = true;
+  out.textContent = 'Testing…';
+  try {
+    const res = await api('/api/email/test', { method: 'POST', body: {} });
+    out.textContent = res.ok
+      ? `✓ Login OK — sending as ${res.user} via ${res.host}`
+      : `✗ ${res.host} rejected login as ${res.user}: ${res.error}`;
+    toast(res.ok ? 'Email login works' : 'Email login failed — details shown below the button', !res.ok);
+  } catch (err) {
+    out.textContent = `✗ ${err.message}`;
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ── Installed app ────────────────────────────────────────────────────────────
+
+const isStandalone =
+  window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+// The service worker is this site's (public/sw.js), registered by the site.
+
+// Reopening the app should show current numbers. Only the app's own saved
+// records are re-read.
+// And while the page is open, every 30 seconds, as the rest of the site does:
+// a hire who signs while you watch appears without a reload.
+async function lookAgain() {
+  if (document.hidden || !state.active) return;
+  await loadSaved();
+  renderStats();
+  if (!boardInUse()) renderBoard();
+  renderSigned();
+}
+document.addEventListener('visibilitychange', lookAgain);
+let pollTimer = null;
+
+// iOS Safari has no install prompt API, so the steps are spelled out instead.
+const INSTALL_DISMISSED_KEY = 'hhqInstallHintDismissed';
+
+$('#wh-install-dismiss').addEventListener('click', () => {
+  $('#wh-install-hint').hidden = true;
+  cacheSet(INSTALL_DISMISSED_KEY, true);
+});
+
+function maybeOfferInstall() {
+  if (isStandalone || cacheGet(INSTALL_DISMISSED_KEY, false)) return;
+  const ua = navigator.userAgent;
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const safari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|Android/.test(ua);
+  if (!iOS || !safari) return;
+  setTimeout(() => { $('#wh-install-hint').hidden = false; }, 1400);
+}
+
+// ── Signed paperwork ─────────────────────────────────────────────────────────
+// Every completed packet, newest first: who signed, when, from where, and the
+// signed copies themselves — kept encrypted on the server, each with the
+// SHA-256 fingerprint it had the moment it was signed, so a copy can always
+// be checked against the record.
+
+const DOC_ICON = ICONS.file;
+const HEALTH = { interested: 'Interested — send details', declined: 'Declined' };
+
+// As toLocaleString would write it, "Invalid Date" included.
+function signedWhen(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? 'Invalid Date' : signedFormat(d);
+}
+
+function signedItem(h) {
+  const name = `${h.firstName || ''} ${h.lastName || ''}`.trim() || h.email || 'New hire';
+  const open = state.openSigned === h.reference;
+  const when = h.signedAt ? signedWhen(h.signedAt) : h.signedDate || '';
+  const audit = h.audit || {};
+  const files = Array.isArray(h.files) ? h.files : [];
+  const docs = files.length
+    ? files.map((f) => {
+        const url = `/api/onboarding/hires/${encodeURIComponent(h.reference)}/files/${encodeURIComponent(f.key)}`;
+        return `
+          <div class="signed-doc">
+            <div class="signed-doc-top">
+              <span class="signed-doc-title">${esc(f.title)}</span>
+              <span class="signed-doc-actions">${f.stored === false ? '<span class="signed-missing">Emailed only</span>' : `<a href="${url}" target="_blank" rel="noopener">Open</a><a href="${url}?download=1" download="${escAttr(f.filename)}">Download</a>`}</span>
+            </div>
+            <div class="signed-hash" title="SHA-256 of the signed file">SHA-256 ${esc(f.sha256 || '')}</div>
+          </div>`;
+      }).join('')
+    : (h.documents || []).map((t) => `<div class="signed-doc"><div class="signed-doc-top"><span class="signed-doc-title">${esc(t)}</span><span class="signed-missing">Emailed</span></div></div>`).join('');
+  const rows = [
+    ['Reference', h.reference],
+    ['Signed', `${h.signedDate || ''}${audit.time ? ` at ${audit.time}` : ''}`.trim()],
+    ['IP address', audit.ip],
+    ['Location', audit.location],
+    ['Device', audit.userAgent],
+    ['Consent', audit.consent ? 'Agreed to sign electronically (ESIGN / UETA)' : ''],
+    ['Email', h.email],
+    ['Phone', h.phone],
+    ['Health Sharing', HEALTH[h.healthElection] || ''],
+    ['Delivered to', h.delivered ? h.deliveredTo || 'your inbox' : 'Not emailed — email was not set up'],
+  ].filter(([, v]) => v);
+  return `
+    <div class="signed-item${open ? ' open' : ''}" data-ref="${escAttr(h.reference)}">
+      <button type="button" class="signed-head" aria-expanded="${open}">
+        ${avatar(name)}
+        <span class="signed-who">
+          <span class="signed-name">${esc(name)}</span>
+          <span class="signed-sub">${esc([when, h.reference].filter(Boolean).join(' · '))}</span>
+        </span>
+        <svg class="signed-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      ${open ? `
+      <div class="signed-body">
+        <p class="signed-group">Signed documents</p>
+        <div class="signed-docs">${docs}</div>
+        <p class="signed-group">Signing record</p>
+        <dl class="audit-list">${rows.map(([k, v]) => `<div class="audit-row"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
+        <div class="signed-foot"><button type="button" class="wh-btn wh-btn-ghost wh-btn-sm signed-remove">Remove from list</button></div>
+      </div>` : ''}
+    </div>`;
+}
+void DOC_ICON;
+
+function renderSigned() {
+  const el = $('#wh-signed-list');
+  const list = state.completedHires || [];
+  if (!list.length) {
+    el.innerHTML = '<p class="signed-empty">Nobody has signed yet. Completed packets appear here the moment they come back.</p>';
+    return;
+  }
+  // The newest fifty, then Show all — and whichever record was asked for
+  // (from the Candidates page) is always among them.
+  const cap = state.signedAll ? list.length : 50;
+  let shown = list.slice(0, cap);
+  if (state.openSigned && !shown.some((h) => h.reference === state.openSigned)) {
+    const h = list.find((x) => x.reference === state.openSigned);
+    if (h) shown = [h, ...shown];
+  }
+  el.innerHTML = shown.map(signedItem).join('')
+    + (list.length > cap ? `<button type="button" class="wh-btn wh-btn-ghost wh-btn-sm signed-more">Show all ${list.length.toLocaleString()}</button>` : '');
+}
+
+$('#wh-signed-list').addEventListener('click', async (e) => {
+  if (e.target.closest('.signed-more')) { state.signedAll = true; renderSigned(); return; }
+  const item = e.target.closest('.signed-item');
+  if (!item) return;
+  if (e.target.closest('.signed-head')) {
+    state.openSigned = state.openSigned === item.dataset.ref ? '' : item.dataset.ref;
+    renderSigned();
+    return;
+  }
+  if (e.target.closest('.signed-remove')) {
+    const h = state.completedHires.find((x) => x.reference === item.dataset.ref);
+    if (!h) return;
+    const name = `${h.firstName || ''} ${h.lastName || ''}`.trim() || h.email;
+    if (!confirm(`Remove ${name}'s signed paperwork (${h.reference}) from this list? The stored copies are deleted too. Copies already emailed are not affected.`)) return;
+    try {
+      await api(`/api/hires/${encodeURIComponent(h.reference)}`, { method: 'DELETE' });
+      state.localEdits++;
+      state.completedHires = state.completedHires.filter((x) => x.reference !== h.reference);
+      state.openSigned = '';
+      renderSigned();
+      renderStats();
+      renderBoard();
+      host.changed();
+      toast('Removed from Signed paperwork');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
+});
+
+// From a candidate card's "Paperwork signed" line: to their record.
+function openSignedFor(email) {
+  const key = emailKey(email);
+  const h = state.completedHires
+    .filter((x) => emailKey(x.email) === key)
+    .sort((a, b) => String(b.signedAt || '').localeCompare(String(a.signedAt || '')))[0];
+  if (!h) return;
+  state.openSigned = h.reference;
+  showTab('onboarding', { scroll: false });
+  renderSigned();
+  requestAnimationFrame(() => {
+    const el = $('#wh-signed-list').querySelector(`.signed-item[data-ref="${CSS.escape(h.reference)}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+// ── For the rest of the site ─────────────────────────────────────────────────
+
+// From the Candidates page: someone onto the pipeline (once — by email), and
+// the page opened on their card, ready to send their packet.
+async function addFromCrm(c) {
+  const r = await api('/api/from-crm', { method: 'POST', body: { id: c.id } });
+  host.show('onboarding');
+  showTab('pipeline', { scroll: false });
+  await loadSaved();
+  renderStats();
+  renderBoard();
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`.candidate-card[data-id="${CSS.escape(String(r.id))}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.remove('wh-flash');
+    void card.offsetWidth;
+    card.classList.add('wh-flash');
+  });
+  return r;
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+
+// Show cached records immediately, then reconcile with the server. Run the
+// first time the page is opened, and again after a change of team.
+async function boot() {
+  state.booted = true;
+  state.localCandidates = loadLocalCandidates();
+  state.overrides = cacheGet(OVERRIDES_KEY, {}) || {};
+  renderStats();
+  renderBoard();
+  renderSigned();
+  const gen = state.generation;
+  await loadSaved();
+  if (gen !== state.generation) return;
+  loadDocuments().catch((e) => toast(e.message, true));
+  renderStats();
+  renderBoard();
+  renderSigned();
+}
+
+const POLL_MS = 30 * 1000;
+
+function tabFromAddress() {
+  if (location.hash.split('?')[0] !== '#onboarding') return '';
+  const m = location.hash.match(/[?&]tab=([a-z]+)/);
+  return m && TABS.includes(m[1]) ? m[1] : '';
+}
+
+// The page's address, with the section that is open (or about to be).
+function address() {
+  const tab = state.active ? state.tab : tabFromAddress() || state.tab;
+  return tab === 'pipeline' ? '#onboarding' : `#onboarding?tab=${tab}`;
+}
+
+// A section typed into the address bar, or reached by Back, while the page is
+// already open: the site sees the same page and does nothing, so this does.
+['hashchange', 'popstate'].forEach((type) => window.addEventListener(type, () => {
+  const onPage = location.hash.split('?')[0] === '#onboarding';
+  // A bare #onboarding is the Pipeline, as a link or the Home Screen shortcut
+  // means it.
+  const tab = tabFromAddress() || (onPage ? 'pipeline' : '');
+  if (state.active && tab && tab !== state.tab) showTab(tab, { scroll: false });
+}));
+
+function activate() {
+  if (state.active) return;
+  state.active = true;
+  showTab(tabFromAddress() || state.tab, { scroll: false });
+  if (!state.booted) boot().catch((e) => toast(e.message, true));
+  else lookAgain().catch(() => {});
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => lookAgain().catch(() => {}), POLL_MS);
+}
+
+function deactivate() {
+  state.active = false;
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+// Is something half-done here that a reload would throw away?
+function busy() {
+  return [...document.querySelectorAll('#wph .edit-form')].some((f) => !f.hidden)
+    || Boolean($('#wh-send-packet-btn').disabled)
+    // A packet being typed, or a card's packet on its way.
+    || packetValues() !== packetBaseline
+    || state.sending.size > 0;
+}
+
+// Signed in to another team, or signed out: nothing of the last team's stays
+// on screen — records, forms, results — and an answer still on
+// its way for it is dropped. `signedIn` says whether there is a team to look
+// again for.
+function reset(signedIn, teamId) {
+  const wasActive = state.active;
+  deactivate();
+  state.generation++;
+  state.teamId = teamId || '';
+  Object.assign(state, {
+    localCandidates: [], overrides: {}, storage: null, documents: [],
+    sends: {}, completedHires: [], booted: false, openSigned: '', signedAll: false,
+  });
+  $('#wh-packet-form').reset();
+  packetSettled();
+  $('#wh-packet-result').hidden = true;
+  $('#wh-doc-list').innerHTML = '';
+  $('#wh-email-test-result').textContent = '';
+  $('#wh-pipeline-stats').hidden = true;
+  $('#wh-pipeline-board').innerHTML = '<div class="wh-empty-state" id="wh-pipeline-loading">Loading candidates…</div>';
+  $('#wh-signed-list').innerHTML = '<p class="signed-empty">Loading…</p>';
+  if (wasActive && signedIn) activate();
+}
+
+// The installed app opened with no connection: what this device last had
+// for the team it was last signed in to, as WPI Hire showed its cached
+// records offline — until the site reaches the server and the page starts
+// properly (reset(), then activate()).
+function showCached(teamId) {
+  if (state.teamId || !teamId) return;
+  state.teamId = teamId;
+  state.localCandidates = loadLocalCandidates();
+  state.overrides = cacheGet(OVERRIDES_KEY, {}) || {};
+  showTab(tabFromAddress() || state.tab, { scroll: false });
+  renderStats();
+  renderBoard();
+}
+
+// From the Candidates page, for someone who has signed: their record.
+async function openSigned(email) {
+  host.show('onboarding');
+  await loadSaved();
+  renderStats();
+  renderBoard();
+  openSignedFor(email);
+}
+
+window.Onboarding = {
+  activate, deactivate, reset, busy, addFromCrm, openSigned, address, showCached,
+  refresh: () => lookAgain().catch(() => {}),
+  connect(hooks) { Object.assign(host, hooks); },
+};
+
+maybeOfferInstall();
+})();

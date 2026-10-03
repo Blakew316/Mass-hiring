@@ -1,0 +1,1696 @@
+/* =====================================================================
+   WPI Outreach · the phone
+   ---------------------------------------------------------------------
+   Loaded after styles.css, and everything in it is inside a media query,
+   so on a desktop this file changes nothing at all.
+
+   It does three jobs:
+
+   1. Touch hygiene everywhere — no grey tap flash, no accidental text
+      selection on a control, scroll contained to the thing being scrolled.
+   2. At 800px and under, a phone app: one fixed shell, one scrolling
+      area, a tab bar along the bottom, and a stack you push and pop
+      instead of two panes side by side.
+   3. Installed to the Home Screen, the last details — safe areas, a
+      height driven by the visual viewport so the keyboard cannot leave a
+      dead band under the composer, and no rubber-band on the document.
+
+   Sizes follow Apple's own: 44pt is the smallest thing a thumb should
+   have to hit, 50pt of tab bar, 16px on anything you can type into,
+   because below that iOS zooms the page and never zooms back.
+   ===================================================================== */
+
+:root {
+  --tabbar-h: 58px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  /* The tab bar floats: a capsule held clear of the screen's edges, sitting
+     just above the home indicator. --tabbar-space is everything from the
+     bottom of the screen to its top plus a breath, which is what a page's
+     last line, a toast or a sheet has to stay clear of. */
+  --tabbar-lift: max(10px, calc(var(--safe-b) - 12px));
+  --tabbar-space: calc(var(--tabbar-h) + var(--tabbar-lift) + 8px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  /* iOS curves: a quick ease-out for something arriving, and a shorter one
+     for something leaving, which is what makes a push feel like a push. */
+  --ease-in-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --push-ms: 320ms;
+}
+
+/* ---------------- Touch hygiene, at every width ---------------- */
+
+html {
+  /* Stops iOS inflating text in the one orientation it feels like. */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* The grey flash iOS paints over anything tappable is from a decade of
+   pages where nothing else said "that worked". Everything here has a
+   :active state instead. */
+button, a, label, summary, .conv, .stat-card, .view-pill, .feed-chip,
+.nav-item, .filter-tag, .chip, .token, input[type="checkbox"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* A control is not prose: a long press should not offer to select it or
+   pop the iOS callout menu. Text the user might want to copy — a message,
+   an address, a token — is deliberately left out of this list. */
+button, .nav-item, .conv-tab, .view-pill, .feed-chip, .tab, .avatar,
+.stat-label, .pipe-label, .funnel-label {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Every scroller keeps its overscroll to itself, so flinging a list does
+   not drag the page underneath it. */
+.activity, .modal-body, .conv-list, .thread-body, .bell-body,
+.preview-wrap, .nav, .main, .send-progress, .link-results {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 100vh is the *large* viewport: on iOS it is taller than what you can
+   see, so the bottom of the page sits under the browser chrome. */
+@supports (height: 100dvh) {
+  .shell { min-height: 100dvh; }
+  .modal { max-height: 88dvh; }
+}
+
+/* =====================================================================
+   The phone
+   ===================================================================== */
+@media (max-width: 800px) {
+
+  /* ---- the shell: one fixed frame, one thing inside it that scrolls ----
+     The document itself must not scroll, or the rubber-band drags the tab
+     bar and the header around with it. --app-h is set from the visual
+     viewport by app.js when the keyboard changes the usable height; the
+     dvh is what it falls back to. */
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  .shell {
+    position: fixed;
+    inset: 0;
+    height: var(--app-h, 100dvh);
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .main {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-width: none;
+    padding: 0 16px calc(var(--tabbar-space) + 20px);
+    padding-left: max(16px, var(--safe-l));
+    padding-right: max(16px, var(--safe-r));
+    scroll-padding-top: 56px;
+  }
+
+  /* ---- the tab bar ----
+     It is the sidebar, moved: the same buttons, click handlers and hash
+     routing. On a phone it is a capsule floating over the page, five tabs
+     wide — Home, People, Inbox, Hiring, More — with the current one sitting
+     in a highlight that slides from tab to tab. */
+  .sidebar {
+    position: fixed;
+    /* top: auto matters — the desktop rule is `position: sticky; top: 0` with
+       a height, and leaving that top in place stretched the bar over the whole
+       screen, blurring the app behind its own backdrop filter. */
+    top: auto;
+    left: max(12px, var(--safe-l));
+    right: max(12px, var(--safe-r));
+    bottom: var(--tabbar-lift);
+    z-index: 60;
+    width: auto;
+    max-width: 520px;
+    margin: 0 auto;
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 30px;
+    background: var(--card);
+    box-shadow: 0 12px 32px -10px rgba(16, 24, 64, .30), 0 2px 8px rgba(16, 24, 64, .08);
+    /* Frosted, the way an iOS bar is, over whatever scrolls beneath it. */
+    -webkit-backdrop-filter: saturate(180%) blur(22px);
+    backdrop-filter: saturate(180%) blur(22px);
+  }
+  @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .sidebar { background: color-mix(in srgb, var(--card) 80%, transparent); }
+  }
+  /* The wordmark lives in the header on a phone; the tab bar is for tabs. */
+  .sidebar .brand, .sidebar-foot { display: none; }
+
+  .nav {
+    --tab-n: 5;
+    --tab-i: 0;
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    margin: 0;
+    padding: 5px;
+    overflow: visible;
+    height: var(--tabbar-h);
+    box-sizing: border-box;
+  }
+  /* The highlight: one element, moved by the index of the current tab. */
+  .nav::before {
+    content: '';
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    left: 5px;
+    width: calc((100% - 10px) / var(--tab-n));
+    border-radius: 24px;
+    background: var(--blue-tint);
+    transform: translateX(calc(var(--tab-i) * 100%));
+    opacity: 0;
+    pointer-events: none;
+  }
+  .nav.tabs-ready::before { transition: transform .42s var(--ease-in-ios), opacity .2s; }
+  .nav.has-current::before { opacity: 1; }
+  .nav-item {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 2px 3px;
+    margin: 0;
+    border-radius: 24px;
+    background: none;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+    color: var(--muted);
+    white-space: nowrap;
+    position: relative;
+    z-index: 1;
+    transition: color .2s, transform .15s;
+  }
+  /* Each tab carries a short name for this width; the sidebar keeps the long
+     ones. */
+  .nav-item .nav-label { display: none; }
+  .nav-item::after { content: attr(data-short); }
+  .nav-item .nav-ico { margin: 0; }
+  .nav-item .ico { width: 23px; height: 23px; }
+  .nav-item.active { background: none; color: var(--blue); }
+  .nav-item:active { transform: scale(.94); }
+  /* The count rides on the icon's shoulder as a badge, anchored to the corner
+     and grown leftwards the way a badge on an app icon is, so a four-digit
+     count reaches back across the icon and is still whole.
+
+     It draws data-short, not its own text: the element says "3,514" for the
+     sidebar and the badge wants "3514". */
+  .nav-count {
+    position: absolute;
+    top: 3px;
+    left: calc(50% + 4px);
+    right: auto;
+    transform: none;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
+    border-radius: 99px;
+    border: 2px solid var(--card);
+    box-sizing: border-box;
+    background: var(--red);
+    color: #fff;
+    font-size: 0;
+    font-weight: 700;
+    line-height: 13px;
+    text-align: center;
+  }
+  .nav-count::after { content: attr(data-short); font-size: 9.5px; letter-spacing: -0.01em; }
+  .nav-count:empty { display: none; }
+  /* The badge sits over the icon's shoulder and must not be clipped by the
+     cell; the label below it is what needed clipping, and it has its own. */
+  .nav-item { overflow: visible; }
+  .nav-item::after {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ---- the switch at the top of a grouped page ----
+     Email | Texts under Inbox, Sales IQ | Onboarding under Hiring: a row of
+     two pills under the title, the current one filled. */
+  .page-head.has-group {
+    grid-template-areas:
+      "title chrome"
+      "group group"
+      "acts  acts";
+  }
+  /* The tab's name is the title here; the page's own title is the pill. */
+  .page-head.has-group h1 { display: none; }
+  .group-title {
+    display: block;
+    margin: 0;
+    font-family: var(--font);
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--navy);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: font-size .2s var(--ease-in-ios);
+  }
+  .main.scrolled .group-title { font-size: 19px; }
+  /* The pill already says Email or Texts; the card's own "Inbox" and
+     "Messages" heading would be the third time. */
+  #view-template .messages-card .card-head h2,
+  #view-texting .messages-card .card-head h2 { display: none; }
+  .group-tabs {
+    grid-area: group; display: flex; gap: 8px; min-width: 0;
+    overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px;
+  }
+  .group-tabs::-webkit-scrollbar { display: none; }
+  .group-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 38px;
+    padding: 0 15px 0 13px;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    background: var(--card);
+    color: var(--ink-soft);
+    font: inherit;
+    font-family: var(--font);
+    font-size: 14px;
+    white-space: nowrap;
+    flex: none;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .group-tab .ico { flex: none; }
+  .group-tab.is-on { background: var(--navy); border-color: var(--navy); color: var(--card); }
+  .group-tab:not(.is-on):active { background: var(--surface-sunk); }
+  .group-count {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 99px;
+    background: var(--red);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+  }
+  .group-count:empty { display: none; }
+
+  /* ---- cards ----
+     Early in the file on purpose: the specific card rules further down have
+     the same specificity, and whichever comes last wins. */
+  .view .card, .view.dense .card { padding: 16px 14px; }
+  .view .list-card, .view.dense .list-card { padding: 0; }
+
+  /* ---- the header ----
+     A large title that shrinks to a compact one as you scroll, the way an
+     iOS navigation bar does. The class is toggled by an IntersectionObserver
+     watching a sentinel, so nothing runs on the scroll itself. */
+  /* Two rows, laid out rather than left to wrap: the title and the chrome that
+     belongs to every page on the first, the page's own buttons underneath.
+     Wrapping put the bell on a line of its own whenever a page had a wide
+     primary button, which read as a mistake. */
+  .page-head {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    margin: 0 -16px 12px;
+    padding: 10px 16px 8px;
+    background: var(--bg);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title chrome"
+      "acts  acts";
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 10px;
+    transition: box-shadow .2s, padding .2s;
+  }
+  .page-head > div:first-child { grid-area: title; min-width: 0; }
+  .head-chrome { grid-area: chrome; }
+  .head-actions { grid-area: acts; margin-left: 0; }
+  /* Nothing to lay out on a page whose header is just a title. */
+  .head-actions:empty { display: none; }
+  .page-head h1 {
+    font-size: 30px;
+    line-height: 1.15;
+    margin: 0;
+    transition: font-size .2s var(--ease-in-ios);
+  }
+  .main.scrolled .page-head {
+    box-shadow: 0 1px 0 var(--line);
+  }
+  .main.scrolled .page-head h1 { font-size: 19px; }
+  /* A safety net, not a plan: a title that will not fit ends in an ellipsis
+     rather than being sliced through a letter. */
+  .page-head h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .head-actions { flex-wrap: wrap; row-gap: 8px; gap: 8px; }
+  /* The header's buttons share the row under the title rather than three of
+     them squeezing onto one 358px line. */
+  .head-actions .btn { flex: 1 1 140px; justify-content: center; }
+
+  /* ---- everything you can type into ----
+     16px exactly. Below it WebKit zooms the page on focus and leaves it
+     zoomed, which breaks every fixed thing on the screen. The visual size
+     is kept by trimming the padding, not the type. */
+  .input, .textarea, .select, .select.slim, .status-select,
+  .view.dense .input, .view.dense .select, .view.dense .textarea,
+  .filter-row .role-filter, .thread-compose .textarea,
+  #view-import .paste-details .textarea, #view-import .paste-details summary,
+  input, select, textarea {
+    font-size: 16px;
+  }
+  .input, .select, .view.dense .input, .view.dense .select {
+    padding: 10px 12px;
+    min-height: 44px;
+  }
+  .textarea, .view.dense .textarea { padding: 10px 12px; }
+  .select, .select.slim, .filter-row .role-filter { padding-right: 34px; }
+
+  /* ---- 44px, everywhere a thumb lands ----
+     Grown with padding and a ::before overlay rather than by scaling the
+     glyph, so nothing about the design gets bigger, only the target. */
+  .btn, .btn-sm, .btn.small, .view.dense .btn, .btn-small {
+    min-height: 44px;
+    padding: 11px 16px;
+    font-size: 14px;
+  }
+  .icon-btn, .bell, .conn-lost, .send-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* The quiet link between the two halves of the sign-in screen. It is the
+     only way to a new team from a phone, so it is a proper target even though
+     it is deliberately understated. */
+  .login-alt {
+    min-height: 44px;
+    padding: 12px 16px;
+    font-size: 14px;
+  }
+  .team-option { min-height: 44px; padding: 11px 16px; font-size: 14px; }
+  /* The phone's answer to "whose list am I about to email": a caption under
+     the page title, and the way to switch. Small paint, full-size target —
+     the same trick the filter chips use. */
+  .head-team { display: inline-flex; }
+  /* The sidebar's copy of the same thing follows .sidebar-foot into Settings
+     on a phone, where the header caption and the Team card have already said
+     it twice. Once is enough. */
+  .team-chip { display: none; }
+  .head-team::before {
+    content: ''; position: absolute; left: 0; right: 0;
+    top: 50%; transform: translateY(-50%); height: 44px;
+  }
+  /* Out of the way once you have started reading the page. */
+  .main.scrolled .head-team { display: none; }
+  .team-picker { max-height: 42vh; }
+  .view-pill, .conv-tab, .chip, .feed-chip, .filter-tag, .token, .tab {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Under 44px on purpose — a dense strip of filters that were 22px before
+     — so the target is extended past the paint instead. */
+  .view-pill, .feed-chip, .filter-tag, .token, .text-pip, .btn-link {
+    position: relative;
+  }
+  .view-pill::before, .feed-chip::before, .filter-tag::before,
+  .token::before, .text-pip::before, .btn-link::before {
+    content: '';
+    position: absolute;
+    inset: -6px -4px;
+  }
+  /* The tick box for a row is the start of every bulk send, and it was 15px.
+     22px of paint, and the rest of the 44 comes from a transparent overlay so
+     the design does not grow, only the target. */
+  .table input[type="checkbox"], .check input, .check-row input,
+  .row-check, input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    position: relative;
+  }
+  .table input[type="checkbox"]::before, .check input::before,
+  .check-row input::before, .row-check::before, input[type="checkbox"]::before {
+    content: '';
+    position: absolute;
+    inset: -11px;
+  }
+  /* A status pill is a real menu — changing someone's stage is a daily action
+     and it was 27px tall. */
+  .status-select { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
+  /* A disclosure triangle is a control, not a caption. */
+  summary { min-height: 44px; display: flex; align-items: center; }
+  .check-row { min-height: 44px; align-items: center; }
+  .theme-switch { position: relative; }
+  .theme-switch::before { content: ''; position: absolute; inset: -4px; }
+
+  /* ---- the candidates table is not a table on a phone ----
+     Each row is a card, laid out on a fixed grid so that every card has the
+     same shape whatever is in it — the way a Contacts entry does — rather
+     than a row of facts left to wrap wherever they happened to run out of
+     room. Every cell keeps its place by name; counting nth-child would break
+     the moment the ranking column appears.
+
+       [ ] (MP) Michael Pacheco
+                Account Executive · PayCompass
+            [Emailed v]                    Emailed 20h ago
+        @  michael.pacheco2010@gmail.com
+        #  (805) 907-2604 · Delivered
+       -------------------------------------------------
+        [Call] [Message] [Mail]                      (...)
+
+     The status has a line of its own, with when they were last emailed:
+     beside the name it was the widest thing on the card and left the name
+     a few letters. */
+  #candTableWrap .table,
+  #candTableWrap thead,
+  #candTableWrap tbody,
+  #candTableWrap tr,
+  #candTableWrap td { display: block; }
+  #candTableWrap thead { display: none; }
+  #candTableWrap tbody tr {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check name   name"
+      ".     status last"
+      "email email  email"
+      "text  text   text"
+      "act   act    act";
+    column-gap: 12px;
+    row-gap: 4px;
+    align-items: center;
+    padding: 14px 16px 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  /* Written as specifically as the desktop's 11px cell padding, or that rule
+     wins and every line of the card starts 11px in from its column. */
+  #candTableWrap td, #candTableWrap .table td { padding: 0; border: 0; min-width: 0; position: relative; }
+  /* width: auto — the desktop's 36px column width would push the tick box
+     past its 26px track, under the name, which then took its taps. */
+  #candTableWrap td[data-col="check"] { grid-area: check; width: auto; }
+  td[data-col="name"]   { grid-area: name; }
+  td[data-col="status"] { grid-area: status; justify-self: start; margin: 6px 0 4px; }
+  td[data-col="email"]  { grid-area: email; }
+  td[data-col="text"]   { grid-area: text; }
+  td[data-col="last"]   { grid-area: last; justify-self: end; }
+  td[data-col="act"]    { grid-area: act; }
+  /* Role and company are the line under the name on a card. */
+  #candTableWrap td[data-col="role"], #candTableWrap td[data-col="company"] { display: none; }
+  /* The rank, in the Best to text next list, is a badge on the avatar —
+     written as specifically as the desktop's 44px column and cell padding,
+     or those win and it is a bar across the avatar. Nobody unranked gets one. */
+  #candTableWrap .table td[data-col="rank"] {
+    width: auto;
+    grid-area: name;
+    justify-self: start; align-self: start;
+    z-index: 1;
+    margin: -6px 0 0 -8px;
+    min-width: 20px; height: 20px; padding: 0 6px;
+    border-radius: 99px;
+    background: var(--blue); color: #fff;
+    font-size: 11px; font-weight: 700; line-height: 20px; text-align: center;
+    box-shadow: 0 0 0 2px var(--card);
+  }
+  #candTableWrap .table td[data-col="rank"]:has(.muted) { display: none; }
+
+  .name-cell { min-width: 0; }
+  .name-cell .avatar { width: 40px; height: 40px; font-size: 14px; margin-right: 12px; flex: none; }
+  /* A long name takes a second line rather than losing its end. */
+  .name-cell .cand-name {
+    font-size: 16px; font-weight: 650; line-height: 1.25;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden; overflow-wrap: anywhere;
+  }
+  .cand-line {
+    font-size: 13px; line-height: 1.35; color: var(--ink-soft); margin-top: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .name-cell .cand-sub, .name-cell .cand-past { font-size: 12px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cand-past { color: var(--muted); }
+
+  /* The two detail lines each carry a small glyph in the gutter under the tick
+     box, so the eye finds the address and the number without reading. */
+  #candTableWrap td[data-col="email"], #candTableWrap td[data-col="text"], #candTableWrap td[data-col="last"] {
+    font-size: 13.5px; line-height: 20px; min-height: 22px; display: flex; align-items: center;
+  }
+  td[data-col="email"] {
+    color: var(--ink); overflow: hidden;
+  }
+  td[data-col="email"], td[data-col="text"] { white-space: nowrap; }
+  /* The glyph sits centred under the tick box (26px column, 12px gap), and
+     the text starts where the name's column does. */
+  #candTableWrap td[data-col="email"]::before, #candTableWrap td[data-col="text"]::before {
+    content: '';
+    flex: none;
+    display: inline-block;
+    width: 15px; height: 15px;
+    margin: 0 17.5px 0 5.5px;
+    vertical-align: -2.5px;
+    background: var(--muted);
+    -webkit-mask: var(--glyph) center / contain no-repeat;
+    mask: var(--glyph) center / contain no-repeat;
+  }
+  #candTableWrap td[data-col="text"]::before { margin-right: 9.5px; }
+  td[data-col="email"] {
+    --glyph: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill-rule='evenodd' d='M5.4 4.6h13.2a3.7 3.7 0 0 1 3.7 3.7v7.4a3.7 3.7 0 0 1-3.7 3.7H5.4a3.7 3.7 0 0 1-3.7-3.7V8.3a3.7 3.7 0 0 1 3.7-3.7zM3.4 8.9l7.5 5c.7.5 1.5.5 2.2 0l7.5-5-1-1.6-7.6 5.1-7.6-5.1z'/></svg>");
+    text-overflow: ellipsis;
+  }
+  #candTableWrap td[data-col="email"] { display: block; max-width: none; }
+  td[data-col="text"] {
+    --glyph: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M7.1 2.6c.6-.2 1.3 0 1.6.6l1.9 3.4c.3.6.2 1.2-.2 1.7L8.9 9.8c1.1 2.5 3 4.4 5.4 5.4l1.5-1.5c.5-.4 1.1-.5 1.7-.2l3.4 1.9c.6.3.8 1 .6 1.6l-.8 2.2c-.4 1.1-1.5 1.8-2.7 1.6C10.6 19.8 4.3 13.5 3.3 6.1c-.2-1.2.5-2.3 1.6-2.7z'/></svg>");
+    gap: 8px; overflow: hidden;
+  }
+  .m-phone { color: var(--ink); font-variant-numeric: tabular-nums; }
+  td[data-col="text"] .text-pip { font-size: 12.5px; }
+  #candTableWrap td[data-col="last"] { font-size: 12.5px; color: var(--muted); white-space: nowrap; padding-left: 8px; }
+
+  /* The status is a compact pill with the real select laid over it,
+     invisible: tapping the pill opens the phone's own picker. The select
+     stays 16px (iOS zooms the page for anything smaller); the pill is free to
+     be the size of a label. */
+  .status-ctl { position: relative; display: inline-flex; align-items: center; }
+  .status-face {
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 27px 0 12px;
+    border-radius: 99px;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%237a8194' stroke-width='1.6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
+  .status-ctl .status-select {
+    position: absolute;
+    inset: -7px -4px;
+    width: calc(100% + 8px);
+    height: calc(100% + 14px);
+    min-height: 0;
+    padding: 0;
+    opacity: 0;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .status-ctl:focus-within .status-face { box-shadow: 0 0 0 3px var(--blue-tint); }
+
+  /* The foot of the card: the phone's own Call, Message and Mail on the
+     left; the arrow on the right says the card opens their profile, where
+     everything else for them is. */
+  #candTableWrap td[data-col="act"] {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
+  }
+  #candTableWrap .table td[data-col="act"] { width: auto; }
+  #candTableWrap .row-open { opacity: .6; padding: 10px 4px; }
+  #candTableWrap tr.cand-row:active { background: var(--row-hover); }
+
+  /* The profile, as a sheet: the actions four across, the details narrower. */
+  .profile-top { padding: 4px 18px 14px; }
+  .modal-body.profile-body { padding: 14px 18px 4px; }
+  .profile-acts { gap: 6px; }
+  .profile-act { min-height: 62px; padding: 8px 2px; font-size: 11.5px; border-radius: 11px; }
+  .profile-row { grid-template-columns: 84px minmax(0, 1fr); }
+
+  /* ---- Call, Message and Mail, through the phone's own apps ----
+     The Contacts-card pattern: the app's icon, its name under it, a 44pt
+     target. A missing number greys the two that need one; on a card, tapping
+     one of those opens the person to add the number. */
+  .native-acts { display: flex; align-items: flex-start; gap: 4px; }
+  .native-act {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 56px;
+    min-height: 44px;
+    padding: 4px 2px;
+    border: 0;
+    background: none;
+    color: var(--ink-soft);
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .native-act:active .app-ico { transform: scale(0.9); filter: brightness(0.9); }
+  .native-act.is-off .app-ico { filter: grayscale(1); opacity: 0.35; }
+  .native-act.is-off .native-label { opacity: 0.6; }
+  span.native-act.is-off { cursor: default; }
+
+
+  /* ---- the tiles' lists (Interviews booked, Emailed, Replied) ----
+     One column: who and when across the full width, then Call / Message /
+     Mail, then the status and the links. Side by side, the name was being
+     squeezed into a third of the sheet, one word a line. */
+  .tile-row {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-areas:
+      "av     main"
+      "native native"
+      "side   side";
+    column-gap: 12px;
+    row-gap: 10px;
+    padding: 14px 0;
+  }
+  .tile-row > .avatar { grid-area: av; width: 40px; height: 40px; font-size: 14px; margin: 0; }
+  .tile-main { grid-area: main; }
+  .tile-when { font-size: 14px; }
+  .tile-name { font-size: 15px; margin-top: 1px; }
+  .tile-email, .tile-meta { font-size: 12.5px; overflow-wrap: anywhere; }
+  .tile-native { grid-area: native; padding-left: 50px; }
+  .tile-side {
+    grid-area: side;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px 16px;
+    padding-left: 52px;
+  }
+  .tile-side .status-ctl { order: -1; }
+  .tile-link { min-height: 34px; font-size: 13.5px; }
+  .tile-side:empty { display: none; }
+  .soon-tag { font-size: 11.5px; }
+
+  /* ---- More: an iOS action sheet ----
+     Two floating groups over the dimmed page — the actions, and Cancel on its
+     own — rather than a sheet with a header and a footer. */
+  .modal.action-sheet {
+    background: none;
+    border: 0;
+    box-shadow: none;
+    padding: 0 10px calc(10px + var(--safe-b));
+    max-height: none;
+    overflow: visible;
+  }
+  .modal.action-sheet::before { display: none; }
+  .sheet-group, .sheet-cancel {
+    background: var(--card);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .sheet-head { padding: 14px 16px 12px; text-align: center; border-bottom: 1px solid var(--line); }
+  .sheet-title { font-size: 13px; font-weight: 650; color: var(--navy); }
+  .sheet-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+  .sheet-sub .nowrap { white-space: nowrap; }
+  .sheet-btn, .sheet-cancel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 56px;
+    padding: 0 16px;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font-family: var(--font);
+    font-size: 17px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .sheet-btn + .sheet-btn { border-top: 1px solid var(--line); }
+  .sheet-btn .ico { flex: none; }
+  .sheet-btn.is-danger { color: var(--red); }
+  .sheet-btn:active, .sheet-cancel:active { background: var(--surface-sunk); }
+  .sheet-cancel { margin-top: 8px; font-weight: 650; background: var(--card); }
+  .list-card { overflow: visible; }
+  #candTableWrap { overflow: visible; }
+  .list-top, .filter-row { padding-left: 14px; padding-right: 14px; }
+  /* One column, not two. At 16px — which iOS requires — two 165px selects
+     clipped their own labels to "Any indus" and "All roles (2". */
+  .filter-row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  /* max-width: 200px on the desktop rule is why these were half-width menus
+     with their own labels clipped. */
+  .filter-row .role-filter { width: 100%; min-width: 0; max-width: none; }
+
+  /* The filters fold away. What is actually in force is still on screen the
+     whole time, as the removable chips under them. */
+  .filters-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 14px 12px;
+  }
+  #candFilters { display: none; }
+  .list-card.filters-open #candFilters { display: grid; }
+  .filters-toggle [data-icon] { transition: transform .2s var(--ease-in-ios); }
+  .list-card.filters-open .filters-toggle [data-icon] { transform: rotate(180deg); }
+  /* The count belongs under the search box, not squeezed beside it. */
+  .list-top { flex-wrap: wrap; gap: 8px; padding-top: 12px; padding-bottom: 10px; }
+  .list-top .search-wrap, .list-top .search-wrap.wide { max-width: none; width: 100%; flex: 1 1 100%; }
+  .search-wrap.wide { margin-bottom: 12px; }
+  .card-views, #candViews { gap: 8px; }
+
+  /* ---- Inbox: Email and Texts, the way Mail and Messages are laid out ----
+     A large title with the compose button and the bell beside it; a
+     segmented switch between Email and Texts; a search field; the filters;
+     and then the list, which runs to the bottom edge under the floating tab
+     bar and is the one thing on the page that scrolls. A conversation is a
+     screen of its own, pushed over all of it — tab bar included — with its
+     reply box on the bottom edge where a thumb is.
+
+     Before this, the page and the list both scrolled, a 216px header of
+     bulk-send buttons sat over everything, and a conversation opened inside
+     a card under that header, its reply box behind the tab bar. */
+
+  /* The page is a column and does not scroll; the list inside it does. */
+  .main[data-view="template"], .main[data-view="texting"] {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0;
+    /* A plain list, like Mail: one white screen, header and all, rather
+       than the grey behind the other pages' grouped cards. */
+    background: var(--card);
+  }
+  .main[data-view="template"] > .notices, .main[data-view="texting"] > .notices { flex: none; margin-top: 8px; }
+  #view-template.active, #view-texting.active {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    /* A fade with no movement: a transform on the page, even for the moment
+       it plays, would hold the conversation screen inside it. */
+    animation-name: inboxIn;
+  }
+  @keyframes inboxIn { from { opacity: 0; } }
+
+  /* ---- the navigation bar ---- */
+  #view-template .page-head.has-group, #view-texting .page-head.has-group {
+    position: relative;
+    flex: none;
+    margin: 0 -16px;
+    /* The same top as every other tab's header, so the title and the bell
+       stay put when you move between tabs. */
+    padding: 10px 16px 10px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "title compose chrome"
+      "group group   group";
+    column-gap: 8px;
+    row-gap: 12px;
+    background: var(--card);
+    box-shadow: none;
+  }
+  /* Once the list is scrolled: the hairline a navigation bar draws where the
+     list passes under it (below the filters), and the large title shrinks to
+     the compact one, as it does on every other tab. */
+  #view-template.list-scrolled .conv-tabs, #view-texting.list-scrolled .conv-tabs { box-shadow: 0 .5px 0 var(--line-strong); }
+  #view-template.list-scrolled .group-title, #view-texting.list-scrolled .group-title { font-size: 19px; }
+  /* The page's own buttons are the compose sheet's, here. */
+  #view-template .head-actions, #view-texting .head-actions { display: none; }
+  /* Light and dark is a setting, not something the Inbox needs beside its
+     title; every other page still carries the switch. */
+  #view-template .theme-switch, #view-texting .theme-switch { display: none; }
+  .head-compose {
+    grid-area: compose;
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    padding: 0 0 2px 2px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--blue);
+    cursor: pointer;
+  }
+  .head-compose:active { background: var(--surface-sunk); }
+  .head-compose:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  /* ---- the switch between a grouped tab's two pages: a segmented control ----
+     Email | Texts, Sales IQ | Onboarding docs: one track, the current half
+     raised out of it. The same control on both tabs. */
+  .group-tabs {
+    gap: 2px;
+    margin: 0;
+    padding: 2px;
+    border-radius: 10px;
+    background: var(--seg-track);
+    overflow: visible;
+  }
+  .group-tab {
+    /* The segments share the whole track, each as wide as its label needs
+       and the rest split between them, so "Onboarding docs" is never cut. */
+    flex: 1 1 auto;
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 0;
+  }
+  .group-tab > span:not(.group-count) { overflow: hidden; text-overflow: ellipsis; }
+  .group-tab.is-on {
+    background: var(--seg-on);
+    border: 0;
+    color: var(--ink);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .04), 0 3px 8px rgba(0, 0, 0, .12);
+  }
+  .group-tab:not(.is-on):active { background: transparent; opacity: .55; }
+  .group-tab .ico { color: var(--muted); }
+  .group-tab.is-on .ico { color: var(--blue); }
+  .group-count { min-width: 20px; height: 20px; line-height: 20px; font-size: 12px; }
+
+  /* ---- the list ---- */
+  #view-template .messages-card, #view-texting .messages-card {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin: 0 -16px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--card);
+    box-shadow: none;
+  }
+  .messages-card .card-head { flex: none; margin: 0; padding: 10px 16px 0; }
+  .messages-card .msg-head-right, .messages-card .msg-search { width: 100%; max-width: none; }
+  /* The search field: grey, rounded, no border, the magnifier inside. */
+  .messages-card .msg-search .input.search {
+    min-height: 38px;
+    height: 38px;
+    padding: 0 12px 0 34px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--search-fill);
+    color: var(--ink);
+  }
+  .messages-card .msg-search .input.search::placeholder { color: var(--muted); opacity: 1; }
+  .messages-card .msg-search .input.search:focus { box-shadow: 0 0 0 2px var(--blue-tint); }
+  .messages-card .msg-search .search-ico { left: 11px; color: var(--muted); }
+  .messenger {
+    position: static;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    border: 0;
+    border-radius: 0;
+    overflow: hidden;
+    background: none;
+  }
+  .messenger .conv-col {
+    min-width: 0;
+    min-height: 0;
+    border-right: 0;
+    background: var(--card);
+    transition: transform var(--push-ms) var(--ease-in-ios);
+  }
+  .messenger.thread-open .conv-col { transform: translateX(-22%); }
+  .messenger .conv-list, .messenger .conv, .messenger .conv-main { min-width: 0; }
+  /* The filters: a row of capsules under the search, not a second switch. */
+  .messenger .conv-tabs {
+    flex: none;
+    gap: 8px;
+    padding: 10px 16px 8px;
+    border-bottom: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    position: relative;
+    z-index: 1;
+    background: var(--card);
+    transition: box-shadow .2s;
+  }
+  .messenger .conv-tabs::-webkit-scrollbar { display: none; }
+  .messenger .conv-tab {
+    flex: none;
+    min-width: 0;
+    min-height: 32px;
+    padding: 0 14px;
+    border-radius: 99px;
+    /* The same iOS grey as the search field above it, in both themes. */
+    background: var(--search-fill);
+    color: var(--ink-soft);
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: none;
+    gap: 6px;
+    position: relative;
+  }
+  /* A 44pt target round a 32pt capsule, inside the row's own padding. */
+  .messenger .conv-tab::before { content: ''; position: absolute; inset: -6px -3px; }
+  .messenger .conv-tab.on { background: var(--navy); color: var(--card); box-shadow: none; }
+  .messenger .conv-col.is-searching .conv-tab.on { background: var(--search-fill); color: var(--muted); }
+  .messenger .conv-tab-n { margin-left: 0; min-width: 18px; height: 18px; line-height: 18px; padding: 0 5px; font-size: 11px; font-weight: 700; }
+  .messenger .conv-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    /* Under the floating tab bar, so the last row can be scrolled clear of it. */
+    padding-bottom: calc(var(--tabbar-space) + 8px);
+  }
+
+  /* ---- a row, the way Mail draws one ----
+     The unread dot in the margin, a picture, the name with the time and a
+     chevron on its line, and two lines of the last message under it. The
+     separator starts where the words do. */
+  .messenger .conv {
+    position: relative;
+    align-items: flex-start;
+    gap: 12px;
+    min-height: 76px;
+    padding: 10px 16px 10px 28px;
+    border-bottom: 0;
+    background: none;
+  }
+  .messenger li + li .conv::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 84px;
+    right: 0;
+    height: 1px;
+    background: var(--line);
+    transform: scaleY(.5);
+    transform-origin: top;
+  }
+  .messenger .conv:active { background: var(--surface-sunk); }
+  /* What was open is not left looking selected behind you. */
+  .messenger .conv.on { background: none; }
+  .messenger .conv.on .conv-name { color: var(--navy); }
+  .messenger .conv.on .conv-last, .messenger .conv.on .conv-when { color: var(--muted); }
+  .messenger .conv.on .conv-you { color: var(--navy-soft); }
+  .messenger .conv.on .avatar { background: var(--avatar-bg); color: var(--avatar-ink); }
+  .messenger .conv.on .conv-dot { background: var(--blue); }
+  .messenger .conv.unread.on .conv-last { color: var(--ink); }
+  .messenger .conv .avatar {
+    width: 44px;
+    height: 44px;
+    margin-top: 2px;
+    font-size: 16px;
+    font-weight: 600;
+    background: var(--avatar-bg);
+    color: var(--avatar-ink);
+  }
+  .messenger .conv-top { align-items: baseline; gap: 6px; }
+  .messenger .conv-name { flex: 1 1 auto; min-width: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--navy); }
+  .messenger .conv-when { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .messenger .conv-chev { display: inline-flex; align-self: center; color: var(--dot); margin-left: -1px; }
+  .messenger .conv-last {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow: hidden;
+    margin-top: 2px;
+    font-size: 15px;
+    line-height: 1.33;
+    color: var(--muted);
+  }
+  .messenger .conv.unread .conv-name { font-weight: 700; }
+  .messenger .conv.unread .conv-last { color: var(--ink-soft); }
+  .messenger .conv-dot {
+    position: absolute;
+    left: 10px;
+    top: 30px;
+    width: 10px;
+    height: 10px;
+    background: var(--blue);
+  }
+  .messenger .conv-flag { align-self: center; }
+  .messenger .conv-none { padding: 48px 32px; font-size: 15px; }
+  .messenger .conv-more { padding: 14px 16px 18px; font-size: 13px; }
+
+  /* ---- a conversation: its own screen ----
+     Fixed to the screen rather than laid over the list, so it can be the
+     whole screen: over the page's header and the tab bar, from the top edge
+     to the bottom, the keyboard's top when it is up (--app-h). */
+  .messenger .thread-col {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: auto;
+    height: var(--app-h, 100dvh);
+    z-index: 65;
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, .08);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform var(--push-ms) var(--ease-in-ios), visibility 0s linear var(--push-ms);
+  }
+  .messenger.thread-open .thread-col {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform var(--push-ms) var(--ease-in-ios), visibility 0s;
+  }
+  .messenger .thread-empty { display: none; }
+  .thread-live { flex: 1 1 auto; min-height: 0; }
+  /* Nothing may hold the page moved while a conversation is over it (a pull
+     to refresh still settling): a transform there would pin the
+     conversation inside the page, under the tab bar. */
+  .view:has(.messenger.thread-open) { transform: none !important; }
+
+  /* Two rows: Back and the actions (Gmail, and ⓘ for their card) along the
+     top, as a navigation bar; who this is under it, with Call, Message and
+     Mail. */
+  .thread-head {
+    flex: none;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "back acts"
+      "who  who";
+    align-items: center;
+    row-gap: 2px;
+    column-gap: 8px;
+    padding: var(--safe-t) max(12px, var(--safe-r)) 10px max(12px, var(--safe-l));
+    border-bottom: .5px solid var(--line-strong);
+    background: var(--bar-bg);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  .thread-back {
+    grid-area: back;
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    min-width: 44px;
+    min-height: 44px;
+    margin-left: -6px;
+    padding: 0 8px 0 0;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font-family: var(--font);
+    font-size: 17px;
+    font-weight: 400;
+    cursor: pointer;
+  }
+  .thread-back .ico { width: 22px; height: 22px; }
+  .thread-back:active { opacity: .45; }
+  .thread-head-actions, .thread-head > .btn {
+    grid-area: acts;
+    justify-self: end;
+    display: flex;
+    gap: 2px;
+    margin: 0;
+  }
+  /* The icon, not the words: ⓘ is what iOS draws for "about this one". */
+  .thread-head .thread-act {
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--blue);
+  }
+  .thread-head .thread-act[hidden] { display: none; }
+  .thread-head .thread-act:active { opacity: .45; }
+  .thread-act .thread-act-label { display: none; }
+  .thread-act .thread-act-ico { display: inline-flex; }
+  .thread-who {
+    grid-area: who;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .thread-person { flex: 1 1 auto; gap: 12px; padding: 2px 0; }
+  .thread-person:active { opacity: .6; }
+  .thread-who .avatar {
+    width: 44px;
+    height: 44px;
+    font-size: 16px;
+    font-weight: 600;
+    background: var(--avatar-bg);
+    color: var(--avatar-ink);
+  }
+  .thread-who .thread-name {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--navy);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thread-who .thread-sub {
+    margin-top: 1px;
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thread-native { margin-left: auto; flex: none; }
+  .thread-native .native-acts { gap: 2px; }
+  .thread-native .native-act { min-width: 40px; padding: 0; }
+
+  /* The messages. */
+  .thread-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 12px max(12px, var(--safe-r)) 16px max(12px, var(--safe-l));
+    gap: 3px;
+    background: var(--card);
+  }
+  .thread-stamp { font-size: 12px; margin: 14px 0 8px; }
+  .msg { max-width: 80%; }
+  .bubble { font-size: 17px; line-height: 1.32; padding: 8px 13px; border-radius: 19px; }
+  .msg-meta, .msg-tag { font-size: 12px; }
+
+  /* Email is not a chat: each message is a card the width of the screen,
+     headed with who sent it and when, like a message in Mail. */
+  .mail-body { gap: 10px; background: var(--surface-sunk); }
+  .mail-body .thread-stamp { display: none; }
+  .mail-body .msg, .mail-body .msg.in, .mail-body .msg.out {
+    align-self: stretch;
+    align-items: stretch;
+    max-width: none;
+    padding: 12px 14px 14px;
+    border-radius: 14px;
+    background: var(--card);
+    box-shadow: 0 0 0 .5px var(--line-strong);
+  }
+  .mail-body .msg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+  .mail-body .msg-who { font-size: 15px; font-weight: 650; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mail-body .msg-when { flex: none; font-size: 13px; color: var(--muted); }
+  .mail-body .msg .bubble, .mail-body .msg.in .bubble, .mail-body .msg.out .bubble {
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--ink);
+    font-size: 16px;
+    line-height: 1.45;
+    max-width: none;
+  }
+  .mail-body .msg.out .msg-who { color: var(--blue); }
+  .mail-body .msg.machine { background: var(--surface-sunk); box-shadow: 0 0 0 .5px var(--line); }
+  .mail-body .msg.machine .bubble { background: none; color: var(--muted); }
+  .mail-body .msg.out .msg-quote > summary { background: var(--code-wash); color: var(--muted); }
+  .mail-body .msg.out .msg-quoted { color: var(--muted); border-left-color: var(--line-strong); }
+  .mail-body .msg-tag { margin-top: 8px; }
+  /* "•••": a small capsule, with a target a thumb can find around it. */
+  .msg-quote > summary {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-height: 0;
+    height: 22px;
+    padding: 0 11px;
+    font-size: 13px;
+  }
+  .msg-quote > summary::after { content: ''; position: absolute; inset: -11px -8px; }
+  .msg-quoted { font-size: 15px; }
+  /* A tapback or a Driving Focus reply: quieter than anything they typed. */
+  .thread-body .msg.machine .bubble { font-size: 14px; padding: 5px 12px; }
+  .thread-body .msg.machine .msg-tag { font-size: 11px; margin-top: 2px; }
+
+  /* The reply box on the bottom edge, clear of the home indicator. */
+  .thread-compose {
+    flex: none;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 8px max(10px, var(--safe-r)) max(8px, var(--safe-b)) max(12px, var(--safe-l));
+    border-top: .5px solid var(--line-strong);
+    background: var(--bar-bg);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  .thread-compose .textarea {
+    min-height: 38px;
+    padding: 8px 14px;
+    border-radius: 19px;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    line-height: 1.3;
+  }
+  /* Send is the up-arrow in a circle, the way Messages draws it. */
+  .thread-compose .send-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 0;
+    background: none;
+    color: var(--blue);
+    position: relative;
+  }
+  .thread-compose .send-btn::after { content: ''; position: absolute; inset: -4px; }
+  .thread-compose .send-btn:hover { background: none; }
+  .thread-compose .send-btn .send-ico { display: none; }
+  .thread-compose .send-btn .send-ico-up { display: inline-flex; }
+  .thread-compose .send-btn:disabled { opacity: .3; }
+  .thread-note { flex: none; margin: 0; padding: 0 16px max(8px, var(--safe-b)); font-size: 13px; background: var(--bar-bg); }
+  .thread-compose + .thread-note:not(:empty) { margin-top: -2px; }
+  .thread-compose:has(+ .thread-note:not(:empty)) { padding-bottom: 6px; }
+
+  /* The compose sheet: the same rows as More. */
+  .inbox-sheet .sheet-sub:empty { display: none; }
+  .inbox-sheet .sheet-btn.more-row {
+    justify-content: flex-start;
+    gap: 14px;
+    color: var(--ink);
+    font-weight: 500;
+    text-align: left;
+  }
+  .inbox-sheet .sheet-btn.more-row:disabled { opacity: .45; }
+  .inbox-sheet .sheet-btn.more-row.is-danger { color: var(--red); }
+  .inbox-sheet .sheet-btn.more-row.is-danger .more-ico { background: var(--red); }
+
+  /* The account pill and Sign out, moved into Settings because the tab bar
+     has no room for them and there was otherwise no way to sign out. */
+  .settings-account { margin-bottom: 14px; }
+  .settings-account .sidebar-foot { display: flex; margin: 0; padding: 0; border: 0; }
+  .settings-account .account { margin-bottom: 10px; }
+
+  /* Pull down to refresh: the spinner in the gap the page leaves as it comes
+     down. Fixed, outside the scroller, so the scroller cannot clip it. */
+  .ptr {
+    position: fixed;
+    top: var(--safe-t);
+    left: 0;
+    right: 0;
+    height: 0;
+    z-index: 45;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: var(--muted);
+    pointer-events: none;
+    opacity: 0;
+  }
+  .ptr.is-on { opacity: 1; }
+  .ptr-spin { flex: none; transition: transform .2s var(--ease-in-ios), color .2s; }
+  .ptr-spin rect { fill: currentColor; transition: opacity .12s; }
+  .ptr.is-armed .ptr-spin { transform: scale(1.12); color: var(--ink-soft); }
+  /* Spinning, the iOS way: the spokes fade in turn around the circle. */
+  .ptr.is-busy .ptr-spin { color: var(--ink-soft); }
+  .ptr.is-busy .ptr-spin rect { animation: ptrFade .8s linear infinite; animation-delay: calc(var(--k) * .1s - .8s); }
+  @keyframes ptrFade { from { opacity: 1; } to { opacity: .22; } }
+
+  /* ---- modals arrive from the bottom, like a sheet ---- */
+  .modal-backdrop {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    width: 100%;
+    max-width: none;
+    max-height: 92dvh;
+    margin: 0;
+    border-radius: 16px 16px 0 0;
+    padding-bottom: var(--safe-b);
+    animation: sheetUp .34s var(--ease-in-ios);
+  }
+  /* The grabber, which is how a sheet says it can be dragged away. */
+  .modal::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 5px;
+    margin: 8px auto 2px;
+    border-radius: 99px;
+    background: var(--dot);
+  }
+  @keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+  .modal-head { padding-top: 6px; }
+  .modal-body { overscroll-behavior: contain; }
+  /* The send and save buttons were behind the keyboard, in a footer that
+     was a sibling of the scroller rather than part of it. */
+  .modal-foot {
+    position: sticky;
+    bottom: 0;
+    background: var(--card);
+    padding-bottom: 14px;
+  }
+  .modal-foot .btn { flex: 1 1 auto; }
+  .modal-foot { flex-wrap: wrap; }
+  .modal-foot .foot-left { order: 3; flex-basis: 100%; margin: 2px 0 0; padding: 6px 0; text-align: center; }
+  .preset-row { flex-wrap: wrap; }
+  .preset-row .input { flex: 1 1 100%; }
+  .preset-row .btn { flex: 1 1 auto; }
+  .preset-links .muted { flex-basis: 100%; margin-left: 0; }
+
+  /* ---- the notifications panel is a sheet ----
+     The way every other sheet here works: it rises from the bottom edge over
+     the tab bar, the page behind it dims, and it goes away with a tap
+     outside, the close button, or a swipe down. New replies carry a blue dot
+     rather than a tinted row, the way Mail marks unread. */
+  .bell-backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: var(--scrim);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+    touch-action: none;
+    cursor: pointer;
+    animation: bellFadeIn .28s ease;
+    transition: opacity .26s ease;
+  }
+  .bell-backdrop.is-closing { opacity: 0; }
+  @keyframes bellFadeIn { from { opacity: 0; } }
+  .bell-panel {
+    position: fixed;
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 71;
+    width: auto;
+    max-height: calc(var(--app-h, 100dvh) - var(--safe-t) - 48px);
+    margin: 0;
+    padding-bottom: var(--safe-b);
+    border: 0;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -12px 40px rgba(16, 24, 64, .22);
+    animation: sheetUp .34s var(--ease-in-ios);
+    transition: transform .26s var(--ease-in-ios);
+    will-change: transform;
+  }
+  .bell-panel.is-closing { transform: translateY(100%); }
+  .bell-panel::before {
+    content: '';
+    display: block;
+    flex: none;
+    width: 36px;
+    height: 5px;
+    margin: 8px auto 0;
+    border-radius: 99px;
+    background: var(--dot);
+  }
+  .bell-head {
+    padding: 8px 12px 12px 20px;
+    border-bottom: 1px solid var(--line);
+    font-size: 17px;
+  }
+  .bell-title { font-weight: 700; letter-spacing: -0.01em; }
+  .bell-head-acts { gap: 14px; }
+  .bell-head .btn-link { display: inline-flex; align-items: center; font-size: 15px; font-weight: 600; min-height: 44px; }
+  .bell-close {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--surface-sunk);
+    color: var(--ink-soft);
+    position: relative;
+  }
+  /* A 44pt target around the 30pt circle. */
+  .bell-close::after { content: ''; position: absolute; inset: -7px; }
+  .bell-body { overscroll-behavior: contain; padding-bottom: 8px; }
+  .bell-sec { padding: 14px 20px 6px; font-size: 12px; }
+  .bell-row {
+    position: relative;
+    gap: 12px;
+    min-height: 68px;
+    padding: 10px 16px 10px 22px;
+  }
+  .bell-row + .bell-row::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 74px;
+    right: 0;
+    height: 1px;
+    background: var(--line);
+  }
+  .bell-row.new { background: none; }
+  .bell-row.new::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    margin-top: -4px;
+    border-radius: 50%;
+    background: var(--blue);
+  }
+  .bell-row:active { background: var(--surface-sunk); }
+  .bell-row .avatar { width: 40px; height: 40px; font-size: 14px; flex: none; }
+  .bell-name { font-size: 15.5px; }
+  .bell-row.new .bell-name { font-weight: 750; }
+  .bell-when { font-size: 13px; }
+  .bell-text {
+    font-size: 14px;
+    line-height: 1.35;
+    margin-top: 2px;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .bell-row .act-tag { flex: none; align-self: flex-start; margin-top: 3px; }
+  .bell-row.new .act-tag { background: var(--blue-tint); }
+  .bell-row.new .act-tag.ch-text { background: var(--green-tint); }
+  .bell-none { padding: 36px 24px 44px; font-size: 15px; }
+  /* The page behind stays where it is while the sheet is up. */
+  .main.bell-open { overflow: hidden; }
+
+  /* ---- odds and ends ---- */
+  .toast-wrap {
+    right: 12px;
+    left: 12px;
+    bottom: calc(6px + var(--tabbar-space));
+  }
+  .toast { max-width: none; }
+  .grid-2, #apolloCard .grid-2, .field-row, .two-col { grid-template-columns: 1fr; }
+  .field-row { display: flex; flex-wrap: wrap; }
+  .field-row > * { flex: 1 1 100%; }
+  .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .login-screen, .setup-screen {
+    padding: max(20px, var(--safe-t)) 16px calc(20px + var(--safe-b));
+  }
+  /* ---- one way to lay out buttons, everywhere ----
+     A page's main action is the full width of the page, first; the others
+     share the row under it. A card's buttons stack the full width of the
+     card, the main one on top, the way an iOS form ends. Before this each page
+     wrapped its own way, and labels broke over two lines ("Import /
+     candidates", "No follow-ups / due", "Restore starter / text"). */
+  .head-actions .btn {
+    flex: 1 1 0;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .head-actions .btn-primary { order: -1; flex-basis: 100%; }
+  .head-actions .follow-up-btn { margin-right: 0; }
+  .card-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .card-actions .btn { width: 100%; justify-content: center; white-space: nowrap; }
+  .view .card > .btn:not(.filters-toggle), .view .card > a.btn,
+  .backup-actions .btn { width: 100%; justify-content: center; }
+  .backup-actions { display: flex; flex-direction: column; gap: 8px; }
+  /* A field and the buttons that go with it: the field across the card, the
+     buttons sharing one row under it — not each a row of its own. */
+  .field-row > .input, .field-row > input, .field-row > select, .field-row > .select { flex: 1 1 100%; }
+  .field-row > .btn { flex: 1 1 0; justify-content: center; white-space: nowrap; }
+
+  /* ---- Candidate updates: part of the page, not a box inside it ----
+     A short scroller inside the page's own was a trap for the thumb: a flick
+     at its end went nowhere. Rows are a readable size and open whoever they
+     are about. */
+  .activity { max-height: none; overflow: visible; }
+  .activity li { font-size: 15px; line-height: 1.35; border-bottom: 0; position: relative; }
+  .activity li:not(:last-child)::after {
+    content: ""; position: absolute; left: 42px; right: 0; bottom: 0;
+    height: 1px; background: var(--line); transform: scaleY(.5); transform-origin: bottom;
+  }
+  .activity .act-row { padding: 11px 0; min-height: 52px; gap: 12px; }
+  .activity .act-ico { width: 30px; height: 30px; margin-top: 1px; }
+  .activity .act-time { font-size: 12.5px; margin-top: 4px; }
+  .activity .act-open:active { background: var(--navy-tint); }
+  .feed-chip { padding: 6px 12px; font-size: 13px; min-height: 32px; }
+
+  /* ---- the dashboard's charts: labels on one line ---- */
+  .pipe-row { grid-template-columns: 112px minmax(0, 1fr) 34px; gap: 10px; }
+  .pipe-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .funnel-row { grid-template-columns: 86px minmax(0, 1fr) 30px 38px; gap: 8px; }
+  .funnel-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .setup-list li { min-height: 44px; }
+  .setup-list .link { flex: none; white-space: nowrap; }
+
+  /* Hover states are sticky on iOS: the first tap paints them and they stay
+     until you touch something else, which reads as a stuck selection. */
+  @media (hover: none) {
+    .conv:hover, .link-results li:hover, tr:hover,
+    .btn:hover, .icon-btn:hover, .bell:hover { background: inherit; }
+    .tile-link:hover { text-decoration: none; }
+  }
+}
+
+/* Narrower still — the small iPhones and anything in a split view. */
+@media (max-width: 380px) {
+  /* Two secondary buttons side by side no longer fit their labels: a row each. */
+  .head-actions .btn { flex-basis: 100%; }
+  .nav-item { font-size: 10px; }
+  .filter-row { grid-template-columns: 1fr; }
+  /* Still two across: one tile a row made the dashboard four screens of
+     numbers. The tiles give up some padding instead. */
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat-card { padding: 12px 12px; }
+}
+
+/* =====================================================================
+   Installed to the Home Screen
+   Not width-dependent: an installed app on an iPad needs the safe areas
+   and the no-bounce document just as much.
+   ===================================================================== */
+@media all and (display-mode: standalone) {
+  html, body {
+    overscroll-behavior: none;
+    background: var(--bg);
+  }
+  /* There is no browser chrome to pull down, so a page that ends exactly at
+     the bottom looks cut off. */
+  .main { padding-bottom: calc(var(--tabbar-space) + 28px); }
+  /* No URL bar to tell you the page is loading, so the app says it itself. */
+  .conn-lost { display: inline-flex; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .messenger .thread-col, .messenger .conv-col { transition: none; }
+  .modal, .bell-panel, .bell-backdrop:not([hidden]) { animation: none; }
+  .page-head, .page-head h1, .group-title { transition: none; }
+  .nav.tabs-ready::before, .nav-item { transition: none; }
+  .ptr.is-busy .ptr-spin rect { animation-duration: 2.4s; }
+}
+
+/* =====================================================================
+   No connection
+   The header already says so. This is the rest of the honesty: a control
+   that is going to fail should not look ready to go. Every one of these
+   sends an email, a text, or a change the server has to accept.
+   ===================================================================== */
+:root.is-offline .email-all-btn,
+:root.is-offline .follow-up-btn,
+:root.is-offline #textSendAllBtn,
+:root.is-offline #composeSendBtn,
+:root.is-offline #textComposeSendBtn,
+:root.is-offline #selEmailBtn,
+:root.is-offline #selTextBtn,
+:root.is-offline #selBothBtn,
+:root.is-offline .send-btn,
+:root.is-offline #fetchSheetBtn,
+:root.is-offline #apolloImportBtn,
+:root.is-offline #apolloSearchBtn,
+:root.is-offline #saveSettingsBtn {
+  opacity: .4;
+  pointer-events: none;
+}
+:root.is-offline .thread-compose .textarea { opacity: .5; }
+
+
+/* ---- the narrowest phones still in use (iPhone SE, 320pt) ----
+   "Candidates" at the large-title size does not fit beside the header's
+   controls at this width, and never did. One step down and it does. */
+@media (max-width: 360px) {
+  .page-head h1, .group-title { font-size: 26px; }
+  /* Both pills on one line without their icons, rather than the second one
+     running off the edge. */
+  .group-tab .ico { display: none; }
+  .group-tab { padding: 0 14px; }
+  /* The Inbox filters fit on one line, and a conversation's name keeps
+     room beside Call, Message and Mail. */
+  .messenger .conv-tabs { gap: 6px; }
+  .messenger .conv-tab { padding: 0 11px; font-size: 13.5px; }
+  .thread-who, .thread-person { gap: 10px; }
+  .thread-who .avatar { width: 38px; height: 38px; font-size: 14px; }
+  .thread-native .native-act { min-width: 36px; }
+  .messenger .conv { padding-left: 24px; gap: 10px; }
+  .messenger .conv .avatar { width: 40px; height: 40px; font-size: 15px; }
+  .messenger .conv-dot { left: 8px; }
+  .messenger li + li .conv::before { left: 74px; }
+}
+
+/* =====================================================================
+   The tab bar's five tabs
+   Eight pages at a phone's width would be eight 45px tabs, which is a row
+   of icons, not a tab bar. So on a phone Email and Texting share Inbox,
+   Sales IQ and Onboarding docs share Hiring (data-in on their own tabs),
+   and the two pages visited least (data-overflow) are in More, as a list —
+   what iOS itself does once a tab bar runs out of room. The sidebar never
+   shows the grouped tabs or More.
+   ===================================================================== */
+.nav .nav-more, .nav .nav-group, .group-tabs { display: none; }
+@media (max-width: 800px) {
+  .nav .nav-item[data-overflow], .nav .nav-item[data-in] { display: none; }
+  .nav .nav-more, .nav .nav-group { display: flex; }
+  .group-tabs { display: flex; }
+}
+.more-sheet .sheet-btn.more-row {
+  justify-content: flex-start;
+  gap: 14px;
+  color: var(--ink);
+  font-weight: 500;
+  text-align: left;
+}
+.more-row .more-ico {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: var(--blue);
+  color: #fff;
+}
+.more-row .more-label { flex: 1; min-width: 0; }
+.more-row .more-chev { flex: none; color: var(--muted); display: flex; }
+.more-row.is-current .more-label { color: var(--blue); font-weight: 650; }

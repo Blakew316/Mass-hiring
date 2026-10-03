@@ -82,6 +82,25 @@ Each row shows what that person did **before** their current job, the search box
 
 People who were emailed and never replied or booked become **due a follow-up** after a wait (Settings → Sending pace: *Follow up after N days*, default 3; *Follow-ups per person*, default 2). The **Follow up** button on the Dashboard, the Candidates page, the Emailed tile and the Email Template page shows how many are due and sends them the follow-up email — as a **reply in the same conversation** (the subject becomes *Re:* the email they received, with the proper In-Reply-To/References headers, so it lands in the same thread in their inbox), without the attachment. Each person can also be followed up individually from their row. The follow-up text has its own editor and preview on the Email Template page; `{{originalSubject}}` stands for the subject they got. Anyone who replies or books while a follow-up is queued is skipped.
 
+## Saved templates
+
+Keep as many named emails and texts as you like and pick one each time you send.
+
+- **Making one.** In Settings → *Email template* (or the text *Message* card), press **+ New template** (**+ New text**) beside the list, type a name in the **Template name** box, change the subject and message if you like, and press **Save new template**. It starts as a copy of whatever was in the editor; **Cancel new template** throws it away. From a send window, **Save as new template** opens a name box in the window itself. Each team's templates are its own.
+- **Naming and renaming.** The name box always shows the name of the template you are looking at; change it and press **Save template** to rename. The list beside it shows every saved template by name, so choosing one loads it for editing.
+- **Using one.** The email send window and the text composer both have a **Template** list; choosing one fills in the subject and message, which you can still change for that send. **Text everyone with a number** now opens the composer too, so you choose and read the message before anything is queued.
+- **The default.** One email and one text are marked *default*: the send window opens with it, and the queue uses it when nothing else was chosen. **Make default** switches it; the default cannot be deleted until another one is.
+- Editing or deleting a template never changes a message that is already queued — it goes out as it was written. Attachments belong to the team and go with every outreach email, whichever template it started from. The follow-up email keeps its own single template.
+
+## Keeping the candidate list safe
+
+- **Every change is checked.** Saves are made against the exact version that was read, so two changes at the same moment can never overwrite each other; each save is confirmed by the store before the page is told it worked; and a save that would leave out anybody who was not deliberately deleted is refused outright, with nothing written. Deleting someone from their row is the only way a candidate leaves the list.
+- **No silent fallback.** If Netlify Blobs were ever unavailable, the app now stops with a storage error instead of showing (and saving to) an empty temporary list.
+- **Daily backups.** Once a day the list is copied to a separate entry that nothing else writes, and the last 20 copies are kept (Settings → *Candidate list backups*). **Back up now** makes one on demand; **Restore missing** adds back anybody in a copy who is not on the list now — it never removes or changes anyone already there.
+- **Your own copy.** **Download all candidates (CSV)** in the same card exports the whole list as a spreadsheet.
+- **Sends are never forgotten.** Each email or text is recorded, together with what it changes on the candidate (Emailed, when, the Gmail thread), in the same save that logs the send. If the sender is cut off before it updates the candidate list, the next run (within a minute) finishes the update, so nobody who was contacted is left showing as *Not contacted* or gets a second copy from **Email all not contacted**.
+- **Imports.** A batch that meets a busy moment is retried automatically; the page asks before you close it mid-import, never reloads itself for an update during one, and afterwards shows the new people first along with the total now on your list.
+
 ## Opens and replies
 
 - Every email carries an invisible tracking image; when a candidate opens it, the dashboard's **Candidate updates** feed shows "*Name* opened your email". The feed is ordered by when things actually happened (a reply is dated when it was sent, a booking when it was made), even if the app only noticed later.
@@ -92,15 +111,70 @@ People who were emailed and never replied or booked become **due a follow-up** a
 
 The feed shows only candidate signals (opened, replied, booked, cancelled) — no connection or import history.
 
+## On your phone
+
+Installed to the Home Screen (or opened in Safari on an iPhone), the dashboard is laid out for a phone:
+
+- **Every candidate is a card** with the same shape: name, role and company, status, when they were last emailed, email address and phone number, in the same place on every card.
+- **Call, Message and Mail** sit at the foot of each card, as the iPhone's own Phone, Messages and Mail icons. They open the phone's apps — a call, a text or a new email from your phone itself, not through the Mac relay or Gmail. With no number on file, Call and Message are greyed out and tapping one opens the person so you can add it.
+- **Running late?** The *Interviews booked* list has the same three buttons under every interview, and an interview starting within the hour (or started without the candidate) says so — *Starts in 12 min*, *Started 5 min ago*. The buttons use the candidate's number, or the one they booked with on Calendly.
+- The same buttons are in the header of an open email or text conversation.
+- **More (···)** on a card holds this app's own actions for the person: the tracked outreach email, a text from the Mac, a follow-up, editing and removing.
+- The status is a small pill; tap it for the iPhone's own picker.
+- **The tab bar** has *Home, People, Email, Texts, Sales IQ, Docs* and **More**, which holds *Import* and *Settings* — eight tabs would be too narrow to read on a phone, so the two used least are one tap further, the way iOS does it. On a wider screen (an iPad, a phone on its side) every page has its own tab again. Onboarding docs' four sections are an iOS segmented control under its title.
+- **Add to Home Screen.** In iPhone Safari the app offers, once, the two taps that install it; dismissed, it never asks again.
+
+On a computer, the dashboard is unchanged.
+
 ## Interviews synced from Calendly
 
 With a Calendly personal access token saved in Settings, the app pulls your scheduled interviews every few minutes (and on demand with **Sync now** in the Interviews booked tile), matches invitees to candidates, flips them to **Booked**, reverts cancellations, and lists every upcoming interview — including bookings made before the webhook existed. The webhook still delivers instant booking alerts.
 
 Matching is by email first (any address the person has booked with before counts), then by full name when the name is unique in your list — people often book with a work address when the sheet has their personal one. A booking the app still cannot place shows **Link to candidate** in the tile: type part of the name or email, click the person, and the address is remembered for next time.
 
+## Sales IQ — the sales talent questionnaire
+
+The Sales IQ hiring dashboard and its 10-question sales talent assessment are part of this app: the **Sales IQ** tab. It is the Sales IQ app itself — its screens, its words and its look, pixel for pixel — with its data kept here, per team, instead of in one browser. So the same list is on every device you sign in from, and nothing needs connecting.
+
+- **Candidates arrive on their own.** Everyone who books an interview on your Calendly is added within a couple of minutes (as soon as the webhook fires, with booking alerts on) as *Not sent*, with their phone and interview time. Nothing is ever sent automatically. Someone you remove stays removed — a reschedule does not bring them back — and a booking canceled before you sent anything is flagged on their row. You can also **Upload Résumé** (name, email and phone are read from the PDF on your device; the file never leaves it) or **Add Manually**.
+- **Upcoming interviews**, the four tiles, the Not sent / Sent / Done filters and each candidate's card work as they always did, with **Message · Call · Email** opening your phone's own apps, pre-written around the interview time.
+- **Send questionnaire** emails each person their own link from your connected Gmail, from their card or to everyone not yet sent at once. With no mailbox connected it opens a ready-to-send draft in your mail app instead, one person at a time. The card also has *Run assessment on this device* and *Copy their questionnaire link*.
+- **Results delivery.** Choose your team and every finished assessment is emailed, scored, to that team lead's address (editable), with a link straight to the report. Candidates never see a score — their page is sent the question text and nothing else, and the score is worked out on the server.
+- **When a candidate finishes**, their report appears on the Sales IQ page (score ring, tier, time taken, competency breakdown, and where the results email went), their row turns *Completed · 82/100*, the Dashboard's candidate updates say so, and your phone gets a push. A candidate's first report is the one that counts; anything later is filed as a *Retake*.
+- **The candidate's page** is `/assessment/` — its own page, with none of this app on it, exactly as Sales IQ had it: *Prepared for* their name, one question at a time, progress kept if they close the tab, done is final on every device, and nothing is lost to a dropped connection (their answers are kept and sent the moment it is back). **Preview** at the top of the Sales IQ page opens it without recording anything. Links are signed per candidate and per team, and a link that has been tampered with is refused.
+- **Across the app.** A candidate who has been sent the questionnaire, or has finished it, carries a badge on the Candidates page (*Questionnaire sent*, or *Sales IQ 82/100* coloured by tier); their row's clipboard button — or *More* on a phone — sends it to them, or opens their result. *Interviews booked* shows where each booker stands, with a *Send questionnaire* button for anyone not yet sent it.
+- **Report links from the separate Sales IQ app** (the `#report=WPR1.…` links in its results emails) can still be filed here: open this app at `#salesiq?report=WPR1.…`. The data the separate app kept in a browser cannot move by itself — it lives on that browser — but everyone with a Calendly booking comes across again, and any report link does.
+- Sales IQ's list and reports are included in the automatic backups. The *Sales IQ* card in Settings is only needed by the separate Sales IQ app; the built-in page needs nothing there.
+
+## Onboarding docs — hiring paperwork, signed online
+
+WPI Hire is part of this app too: the **Onboarding docs** tab (*Docs* on a phone) — its screens and its look, with its records kept here, per team, and its mail sent from your own connected account. There is no BambooHR and nothing to configure: people come from the Candidates page, and the company's details (WPI Inc., 7602 University Ave, Lubbock, Texas 79423; signatures in Central time) are fixed in `lib/onboarding.js`.
+
+- **Pipeline.** Everyone you are onboarding, with the four tiles (*Candidates · Packets sent · Awaiting signature · Signed & complete*). People are added from the Candidates page (**Send onboarding docs**); each card can be edited, removed, or sent its packet in one tap.
+- **Onboarding.** The packet is the company's own documents — the **Agent Agreement 2026** (with Schedule A), **Form W-4**, the **Email Policy** and the **Impact Health Sharing** overview. *Send onboarding packet* emails the new hire their own signed link; nothing is attached, they read each document in full online. *Test email settings* checks the mailbox it goes out through.
+- **The new hire's side** is `/paperwork/` — a page of its own, the WPI Hire portal as it was: consent to sign electronically, their details (typed once, used everywhere), the W-4 with its dependent maths, the agreement's key terms in plain language, initials on the two clauses, a signature for each document (drawn with a finger or typed), and a review before submitting. A refresh keeps what they typed — except their Social Security number, which is never written to their phone.
+- **What comes back.** Every signed PDF is filled in (the W-4's own form fields, everything else stamped where it belongs) and ends with an **e-signature certificate**: who signed, their email and phone, date and time, how they signed, their **IP address**, their **location** (as Netlify's network places that address), their device, their consent (ESIGN/UETA) and a reference. The signed PDFs are emailed back to the mailbox the packet was sent from, with the hire copied, and **kept here, encrypted** (AES-256-GCM, a key of the team's own) with a **SHA-256 fingerprint** of each, so any copy can be checked against the record. *Signed paperwork* on the Onboarding tab lists every packet with its signing record and the signed copies to open or download; a copy that no longer matches its fingerprint refuses to open.
+- **Checks and balances.** A link is signed with the team's key and names its team, so an edited or moved link is refused; it expires after 60 days; and, like an envelope, it is signed once — opened again it says it was already submitted, and a retry never files a second copy. Its address is never sent on to another site. Every signature is validated before it is drawn into a PDF, and a packet is never reported complete unless every document built.
+- **Across the app.** Signed paperwork lands in *Candidate updates* and pushes to your phone. On the Candidates page each person carries *Docs sent* or *Docs signed*, and their row (or *More* on a phone) has **Send onboarding docs**, which puts them on the onboarding pipeline once and opens their card there. Nobody at Wholesale Payments is ever added or sent a packet.
+- The pipeline and the record of every signed packet are in the automatic backups (the signed files and the keys are not).
+
+## Teams
+
+Everything in this app belongs to exactly one team: its candidates, templates, settings, Gmail connection, Calendly registration, text threads and history. Signing in means choosing a team and entering its **four-digit PIN**, and from that point nothing another team owns is reachable — not by the dashboard, not by a candidate id typed into a URL, not by a cached response.
+
+- **The first team.** Everything stored before teams existed belongs to **Team Maverick**, which is adopted automatically on first run. Its data is not moved anywhere: it keeps the storage keys it has always had.
+- **A new team starts empty.** No candidates, no history, no interviews, no attachments, no connections, a blank sender name, and its own tracking secret. It gets generic starter copy for the outreach email and text — generic meaning it names nobody and no company — and the setup checklist says the template still needs writing, because it does.
+- **Making one.** *Start a new team* on the sign-in screen, or the Team card in Settings. Both ask for the **admin password**, which is what `APP_PASSWORD` now is: it does not sign you in anywhere, it is what lets you create and delete teams. Team Maverick has no PIN of its own yet, so it still signs in with `APP_PASSWORD` until you give it four digits in Settings.
+- **The PIN.** Exactly four digits, so it can be handed to a team and tapped on a phone. Four of the same digit and runs like 1234 are refused — they are the first thing anybody guessing would try. What actually protects four digits is the lockout below, which is why it is written to storage rather than kept in one server's memory.
+- **Switching.** The team's name sits in the header of every page. Tap it to sign out and pick another.
+
 ## Protecting the dashboard
 
-Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in (sessions last 30 days; *Sign out* revokes every device; five wrong passwords lock that address for 15 minutes). A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
+Set an `APP_PASSWORD` environment variable (Netlify: *Project configuration → Environment variables*; locally: `.env`) and the dashboard requires a sign-in: a team, then that team's four-digit PIN. Sessions last 30 days. *Sign out* ends this browser's session only; *Sign out on every device* in the Team card ends all of them, for that team alone.
+
+Five wrong PINs from one address lock that address for 15 minutes, counted across every team and **kept in storage**, so the count survives a cold start or a request landing on a different instance — without that, a four-digit PIN would hand out a fresh allowance every few minutes. Coming back and guessing again re-locks it immediately. Sustained guessing at one team also lengthens the pause before every answer, but never denies one: team names are listed on the sign-in screen, so a team-wide lock would let anyone read a name off it and keep that team out of its own dashboard all day.
+
+A public Netlify deploy **refuses to run** until the password is set, because the app can send email from your account.
 
 ## 3. Calendly + phone notifications
 
