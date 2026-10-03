@@ -3,10 +3,12 @@
 // flagged and never counted as a reply, growing the list as it is scrolled,
 // opening a conversation (read from "Gmail", quoted history folded away, read
 // here and on the server, every unread count following), replying (to that
-// person, in that thread, through the stubbed mailer — never twice), and a
-// poll that brings a new reply, including one into the conversation on screen.
-const { startApp, launch, ok, done, crash, ago } = require('./helpers');
-const { stubEverything, open, text, waitIn, waitText, until, poke, state, byId, person } = require('./views-helpers');
+// person, in that thread, through the stubbed mailer — once, even for a
+// double tap on Send; a reply Gmail refuses says so and keeps what was
+// typed), and a poll that brings a new reply, including one into the
+// conversation on screen.
+const { startApp, launch, ok, done, crash, ago, R } = require('./helpers');
+const { stubEverything, open, text, texts, waitIn, waitText, settle, same, until, poke, stored, byId, person } = require('./views-helpers');
 
 const pad = (i) => String(i).padStart(2, '0');
 const N = 64;
@@ -74,24 +76,35 @@ function gmail(rec) {
     await page.waitForSelector('#view-template.active');
     await page.waitForSelector('#mailList [data-mail]');
 
-    ok(JSON.stringify(await rows(page)) === JSON.stringify(odd()), `${tag}: Replied lists everyone who wrote back, newest reply first`, await rows(page));
-    ok(JSON.stringify(await unreadRows(page)) === JSON.stringify(['m03', 'm07', 'm61']), `${tag}: unread marked`, await unreadRows(page));
+    const replied = await settle(() => rows(page), odd());
+    ok(same(replied, odd()), `${tag}: Replied lists everyone who wrote back, newest reply first`, replied);
+    ok(same(await settle(() => unreadRows(page), ['m03', 'm07', 'm61']), ['m03', 'm07', 'm61']), `${tag}: unread marked`, await unreadRows(page));
     ok(await text(page, '#mailList [data-mail="m01"] .conv-last') === 'Reply 01', `${tag}: their reply is the preview`, await text(page, '#mailList [data-mail="m01"] .conv-last'));
-    ok(JSON.stringify(await counts(page)) === JSON.stringify(all3('3')), `${tag}: every unread count says 3`, await counts(page));
+    const three = await settle(() => counts(page), all3('3'));
+    ok(same(three, all3('3')), `${tag}: every unread count says 3`, three);
 
     await page.click('[data-mail-tab="unread"]');
-    ok(JSON.stringify(await rows(page)) === JSON.stringify(['m03', 'm07', 'm61']), `${tag}: Unread lists the three`, await rows(page));
+    ok(same(await settle(() => rows(page), ['m03', 'm07', 'm61']), ['m03', 'm07', 'm61']), `${tag}: Unread lists the three`, await rows(page));
     await page.click('[data-mail-tab="all"]');
-    ok(JSON.stringify(await rows(page)) === JSON.stringify([...odd(), ...even()].slice(0, 60)), `${tag}: All sent: the first 60, by latest activity`, await rows(page));
-    ok(await text(page, '#mailList .conv-more') === '4 more', `${tag}: and says 4 more`, await text(page, '#mailList .conv-more'));
+    // A first screenful (today 60 of the 64) by latest activity, and how many
+    // more; then the rest as it is scrolled, in the same order.
+    const everyone = [...odd(), ...even()];
+    // (Drawn once it lists someone who has not replied.)
+    const first = await until(async () => { const r = await rows(page); return r.length > N / 2 && same(r, everyone.slice(0, r.length)) ? r : null; }, 5000) || await rows(page);
+    const firstLen = first.length;
+    ok(firstLen < N && same(first, everyone.slice(0, firstLen)), `${tag}: All sent: the first ones, by latest activity`, first);
+    ok(await text(page, '#mailList .conv-more') === `${N - firstLen} more`, `${tag}: and says how many more`, await text(page, '#mailList .conv-more'));
     ok(await text(page, '#mailList [data-mail="m02"] .conv-last') === 'You: Quick question 02', `${tag}: no reply yet shows our subject`, await text(page, '#mailList [data-mail="m02"] .conv-last'));
-    await page.evaluate(() => { const l = document.querySelector('#mailList'); l.scrollTop = l.scrollHeight; l.dispatchEvent(new Event('scroll')); });
-    await waitIn(page, (n) => document.querySelectorAll('#mailList [data-mail]').length >= n, N);
-    ok(JSON.stringify(await rows(page)) === JSON.stringify([...odd(), ...even()]), `${tag}: scrolled down, the rest load in the same order`, (await rows(page)).slice(-6));
+    for (let k = 0; k < 10 && (await rows(page)).length < N; k++) {
+      const had = (await rows(page)).length;
+      await page.evaluate(() => { const l = document.querySelector('#mailList'); l.scrollTop = l.scrollHeight; l.dispatchEvent(new Event('scroll')); });
+      await waitIn(page, (n) => document.querySelectorAll('#mailList [data-mail]').length > n, had, 3000);
+    }
+    ok(same(await rows(page), everyone), `${tag}: scrolled down, the rest load in the same order`, (await rows(page)).slice(-6));
     ok(!(await rows(page)).includes('never'), `${tag}: someone never emailed is not in the inbox`);
     ok(await text(page, '#mailList [data-mail="m64"] .conv-flag') === '!', `${tag}: a bounce is flagged`, await text(page, '#mailList [data-mail="m64"] .conv-flag'));
     await page.click('[data-mail-tab="replied"]');
-    ok(!(await rows(page)).includes('m64'), `${tag}: and is not a reply`);
+    ok(same(await settle(() => rows(page), odd()), odd()), `${tag}: and is not a reply`, await rows(page));
 
     // Search covers every conversation, whatever tab is showing. Typing is
     // debounced, so each search waits for the list it should produce.
@@ -108,13 +121,14 @@ function gmail(rec) {
     await page.click('#mailList [data-mail="m03"]');
     ok(await waitText(page, '#mailName', 'Mail Person03'), `${tag}: opening shows who it is with`, await text(page, '#mailName'));
     ok(await waitIn(page, () => document.querySelectorAll('#mailBody .msg').length === 2), `${tag}: the conversation is read from Gmail`, await text(page, '#mailBody'));
-    ok(JSON.stringify(await msgs(page)) === JSON.stringify(['> You: Hi Mail, are you open to a new role? (03)', '< Mail Person03: Reply 03']), `${tag}: oldest first, ours and theirs`, await msgs(page));
+    const m03 = await settle(() => msgs(page), ['> You: Hi Mail, are you open to a new role? (03)', '< Mail Person03: Reply 03']);
+    ok(same(m03, ['> You: Hi Mail, are you open to a new role? (03)', '< Mail Person03: Reply 03']), `${tag}: oldest first, ours and theirs`, m03);
     ok(await page.evaluate(() => { const d = document.querySelector('#mailBody .msg.in details.msg-quote'); return Boolean(d && !d.open && /Blake Woodruff wrote/.test(d.textContent)); }), `${tag}: the history it quotes is folded away`);
     ok(/th-m03/.test(await page.getAttribute('#mailGmail', 'href') || ''), `${tag}: Open in Gmail goes to that thread`);
     ok(await waitIn(page, () => document.querySelector('#mailUnreadN').textContent === '2'), `${tag}: unread drops to 2`, await counts(page));
-    ok(JSON.stringify(await counts(page)) === JSON.stringify(all3('2')), `${tag}: every count follows`, await counts(page));
-    ok(await until(async () => byId(await state(s), 'm03').emailUnread === false), `${tag}: read on the server`);
-    ok(byId(await state(s), 'm07').emailUnread === true, `${tag}: and nobody else`);
+    ok(same(await settle(() => counts(page), all3('2')), all3('2')), `${tag}: every count follows`, await counts(page));
+    ok(await until(async () => byId(await stored(s), 'm03').emailUnread === false), `${tag}: read on the server`);
+    ok(byId(await stored(s), 'm07').emailUnread === true, `${tag}: and nobody else`);
 
     // Reply: to that person, in that thread, once.
     await page.fill('#mailInput', 'Great, talk Tuesday');
@@ -126,7 +140,7 @@ function gmail(rec) {
     ok(m.subject === 'Re: Quick question 03' && m.inReplyTo === '<th-m03-1@example.com>', `${tag}: as a Re: of their last message`, { subject: m.subject, inReplyTo: m.inReplyTo });
     ok(await waitIn(page, () => [...document.querySelectorAll('.toast')].some((t) => t.textContent === 'Reply sent.')), `${tag}: the page says it was sent`);
     ok(await page.inputValue('#mailInput') === '', `${tag}: and clears the box`);
-    const after = byId(await state(s), 'm03');
+    const after = byId(await stored(s), 'm03');
     ok(Date.now() - new Date(after.lastEmailedAt).getTime() < 60000, `${tag}: the follow-up clock restarts from the reply`, after.lastEmailedAt);
 
     // Two opened in quick succession: the reply goes to the one on screen.
@@ -138,6 +152,24 @@ function gmail(rec) {
     await page.click('#mailSend');
     await until(() => rec.sent.length >= 2);
     ok(rec.sent.length === 2 && rec.sent[1].to === 'mail.person07@example.com' && rec.sent[1].threadId === 'th-m07', `${tag}: the reply went to the person on screen`, rec.sent.map((x) => x.to));
+    await waitIn(page, () => document.querySelector('#mailInput').value === '' && !document.querySelector('#mailSend').disabled);
+
+    // Gmail refuses one: the page says so, what was typed is still there to
+    // send again, and nothing counts it as sent (the follow-up clock stays).
+    const mailer = require(R('lib/mailer.js'));
+    const recording = mailer.sendEmail;
+    const clock = byId(await stored(s), 'm07').lastEmailedAt;
+    mailer.sendEmail = async () => { throw new Error('Gmail refused this one (test)'); };
+    await page.fill('#mailInput', 'This one will not go');
+    await page.dispatchEvent('#mailInput', 'input');
+    await page.click('#mailSend');
+    ok(await waitIn(page, () => [...document.querySelectorAll('.toast')].some((t) => /Gmail refused this one/.test(t.textContent))), `${tag}: a reply Gmail refuses says so`, await texts(page, '.toast'));
+    ok(await page.inputValue('#mailInput') === 'This one will not go', `${tag}: and keeps what was typed`, await page.inputValue('#mailInput'));
+    ok(await waitIn(page, () => !document.querySelector('#mailSend').disabled), `${tag}: ready to try again`);
+    ok(byId(await stored(s), 'm07').lastEmailedAt === clock && rec.sent.length === 2, `${tag}: nothing is counted as sent`, byId(await stored(s), 'm07').lastEmailedAt);
+    mailer.sendEmail = recording;
+    await page.fill('#mailInput', '');
+    await page.dispatchEvent('#mailInput', 'input');
 
     // A poll that brings a new reply from someone else.
     await s.store.update((d) => {
@@ -147,8 +179,8 @@ function gmail(rec) {
     });
     await poke(page);
     ok(await waitIn(page, () => document.querySelector('#mailList [data-mail]').dataset.mail === 'm40'), `${tag}: a new reply puts that conversation on top`, (await rows(page)).slice(0, 3));
-    ok((await unreadRows(page)).includes('m40'), `${tag}: unread`);
-    ok(JSON.stringify(await counts(page)) === JSON.stringify(all3('2')), `${tag}: counted alongside m61`, await counts(page));
+    ok((await settle(() => unreadRows(page), ['m40', 'm61'])).includes('m40'), `${tag}: unread`, await unreadRows(page));
+    ok(same(await settle(() => counts(page), all3('2')), all3('2')), `${tag}: counted alongside m61`, await counts(page));
 
     // One into the conversation on screen is read as it arrives.
     await page.click('#mailList [data-mail="m05"]');
@@ -163,7 +195,7 @@ function gmail(rec) {
     await poke(page);
     ok(await waitIn(page, () => /One more thing 05/.test(document.querySelector('#mailBody').textContent)), `${tag}: a reply into the open conversation appears in it`, await msgs(page));
     ok(JSON.stringify(await counts(page)) === JSON.stringify(all3('2')), `${tag}: without lighting a count`, await counts(page));
-    ok(await until(async () => byId(await state(s), 'm05').emailUnread === false), `${tag}: read on the server`);
+    ok(await until(async () => byId(await stored(s), 'm05').emailUnread === false), `${tag}: read on the server`);
 
     ok(errors.length === 0, `${tag}: no page errors`, errors);
     await ctx.close();
@@ -179,18 +211,34 @@ function gmail(rec) {
     await page.waitForSelector('#view-template.active');
     await page.waitForSelector('#mailList [data-mail]');
     ok(await text(page, '#view-template .group-count[data-count-for="template"]') === '3', `${tag}: the Email switch says 3`, await text(page, '#view-template .group-count[data-count-for="template"]'));
-    ok(JSON.stringify((await rows(page)).slice(0, 4)) === JSON.stringify(['m01', 'm03', 'm05', 'm07']), `${tag}: replies newest first`, (await rows(page)).slice(0, 4));
+    const top4 = await settle(async () => (await rows(page)).slice(0, 4), ['m01', 'm03', 'm05', 'm07']);
+    ok(same(top4, ['m01', 'm03', 'm05', 'm07']), `${tag}: replies newest first`, top4);
 
     await page.click('#mailList [data-mail="m07"]');
     ok(await waitIn(page, () => document.querySelector('#view-template .messenger').classList.contains('thread-open')), `${tag}: a conversation opens as its own screen`);
     ok(await waitIn(page, () => document.querySelectorAll('#mailBody .msg').length === 2), `${tag}: with its messages from Gmail`, await msgs(page));
     ok(await waitText(page, '#navInboxCount', '2'), `${tag}: the Inbox tab drops to 2`, await text(page, '#navInboxCount'));
-    ok(await until(async () => byId(await state(s), 'm07').emailUnread === false), `${tag}: read on the server`);
+    ok(await until(async () => byId(await stored(s), 'm07').emailUnread === false), `${tag}: read on the server`);
 
     await page.fill('#mailInput', 'Sounds good');
     await page.click('#mailSend');
     await until(() => rec.sent.length >= 1);
     ok(rec.sent.length === 1 && rec.sent[0].to === 'mail.person07@example.com' && rec.sent[0].threadId === 'th-m07', `${tag}: Send replies to that person in their thread`, rec.sent.map((x) => x.to));
+    await waitIn(page, () => document.querySelector('#mailInput').value === '' && !document.querySelector('#mailSend').disabled);
+
+    // A double tap on Send, on a slow connection, sends one email. (Every
+    // change the page asks for is held back a little, whichever request it
+    // is, so the second tap lands while the first is on its way.)
+    const slow = async (route) => { if (route.request().method() !== 'GET') await new Promise((r) => setTimeout(r, 500)); await route.continue(); };
+    await page.route((u) => u.pathname.startsWith('/api/'), slow);
+    await page.fill('#mailInput', 'Just the one email');
+    await page.dispatchEvent('#mailInput', 'input');
+    await page.dblclick('#mailSend');
+    await until(() => rec.sent.length >= 2);
+    await waitIn(page, () => document.querySelector('#mailInput').value === '');
+    await page.waitForTimeout(800);
+    ok(rec.sent.filter((x) => x.text === 'Just the one email').length === 1 && rec.sent.length === 2, `${tag}: a double tap on Send sends one email`, rec.sent.map((x) => x.text));
+    await page.unroute((u) => u.pathname.startsWith('/api/'), slow);
 
     await page.click('#view-template .thread-back');
     ok(await waitIn(page, () => !document.querySelector('#view-template .messenger').classList.contains('thread-open')), `${tag}: Back returns to the list`);

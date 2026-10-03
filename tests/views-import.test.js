@@ -4,7 +4,7 @@
 // an email — with the row named), and importing adds exactly the new people,
 // with their details, says what it did, and leads to them on Candidates.
 const { startApp, launch, ok, done, crash } = require('./helpers');
-const { stubEverything, open, text, texts, waitIn, waitText, until, go, person } = require('./views-helpers');
+const { stubEverything, open, text, texts, waitIn, waitText, settle, same, until, go, person } = require('./views-helpers');
 
 const PASTE = [
   'Name,Email,Phone,Title,Company',
@@ -37,7 +37,7 @@ const PASTE_PHONE = [
     if (phone) {
       await page.click('#navMore');
       await page.waitForSelector('#moreSheet:not([hidden])');
-      const more = await texts(page, '#moreSheetButtons .more-label');
+      const more = await settle(() => texts(page, '#moreSheetButtons .more-label'), ['Import', 'Settings']);
       ok(more.includes('Import'), `${tag}: Import is under More`, more);
       await page.click('#moreSheetButtons [data-more="import"]');
     } else {
@@ -50,10 +50,11 @@ const PASTE_PHONE = [
     await page.waitForSelector('#mappingCard:not([hidden])');
 
     const rowsIn = phone ? 3 : 6;
-    ok(await text(page, '#previewCount') === `${rowsIn} rows · pasted rows`, `${tag}: the preview counts the pasted rows`, await text(page, '#previewCount'));
-    const heads = await texts(page, '#previewTable thead th');
-    ok(JSON.stringify(heads) === JSON.stringify(['Name', 'Email', 'Phone', 'Title', 'Company']), `${tag}: with the pasted columns`, heads);
-    ok((await texts(page, '#previewTable tbody tr')).length === Math.min(5, rowsIn), `${tag}: and the first rows`);
+    ok(await waitText(page, '#previewCount', `${rowsIn} rows · pasted rows`), `${tag}: the preview counts the pasted rows`, await text(page, '#previewCount'));
+    const heads = await settle(() => texts(page, '#previewTable thead th'), ['Name', 'Email', 'Phone', 'Title', 'Company']);
+    ok(same(heads, ['Name', 'Email', 'Phone', 'Title', 'Company']), `${tag}: with the pasted columns`, heads);
+    const firstRows = await settle(async () => (await texts(page, '#previewTable tbody tr td:first-child')), (phone ? ['Lia Phone', 'Max Phone', 'Ivan Import'] : ['Ivan Import', 'Jen Import', 'Ken Import', 'Existing Person', 'Jen Import']));
+    ok(same(firstRows, phone ? ['Lia Phone', 'Max Phone', 'Ivan Import'] : ['Ivan Import', 'Jen Import', 'Ken Import', 'Existing Person', 'Jen Import']), `${tag}: and the first rows`, firstRows);
     const mapped = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.map-select')].map((s) => [s.dataset.key, s.options[s.selectedIndex].textContent])));
     ok(mapped.email === 'Email' && mapped.name === 'Name' && mapped.phone === 'Phone' && mapped.role === 'Title' && mapped.company === 'Company',
       `${tag}: the columns are recognised`, mapped);
@@ -76,8 +77,9 @@ const PASTE_PHONE = [
       await page.click('#viewCandidatesBtn');
       await page.waitForSelector('#view-candidates.active');
       ok(await waitText(page, '#candCount', '4 candidates'), `${tag}: View candidates shows the whole list`, await text(page, '#candCount'));
-      const first = await page.evaluate(() => [...document.querySelectorAll('#candidateRows tr[data-id]')].slice(0, 3).map((r) => r.querySelector('[data-col="email"]').textContent.trim()).sort());
-      ok(JSON.stringify(first) === JSON.stringify(['ivan.import@example.com', 'jen.import@example.com', 'ken.import@example.com']), `${tag}: newest first, the people just imported on top`, first);
+      const NEWEST = ['ivan.import@example.com', 'jen.import@example.com', 'ken.import@example.com'];
+      const first = await settle(() => page.evaluate(() => [...document.querySelectorAll('#candidateRows tr[data-id]')].slice(0, 3).map((r) => r.querySelector('[data-col="email"]').textContent.trim()).sort()), NEWEST);
+      ok(same(first, NEWEST), `${tag}: newest first, the people just imported on top`, first);
       await go(page, 'dashboard');
       ok(await waitText(page, '#statTotal', '4'), `${tag}: the Dashboard count follows`, await text(page, '#statTotal'));
     } else {

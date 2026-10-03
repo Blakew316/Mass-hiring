@@ -2,7 +2,8 @@
 // phone: after a sign-out nothing is readable; signing in shows that team's
 // list; switching to the other team (Sign out, or the team name in the page
 // header) never shows the first team's people anywhere — Dashboard,
-// Candidates, Texting, Email, the bell, the attachment list. The server side
+// Candidates, Texting, Email, the bell, the attachment list — nor does a
+// reload, signed in to the other team or signed out. The server side
 // of the same promise: a tag from one team's state never earns the other
 // team a "nothing changed", and one team cannot open the other's
 // conversations.
@@ -40,8 +41,8 @@ const RAN = ['Ran Alder', 'Ran Birch', 'Ran Cedar'];
   const mavTag = mavState.headers.get('etag');
   const ranState = await fetch(`${s.base}/api/state`, { headers: { cookie: rangerCookie, 'If-None-Match': mavTag } });
   const ranBody = ranState.status === 200 ? await ranState.json() : null;
-  ok(ranState.status === 200 && ranBody && ranBody.candidates.map((c) => c.name).join() === RAN.join(), "one team's tag never answers the other team with 'unchanged'", ranState.status);
-  ok(ranBody && ranBody.team.id === 'team-ranger' && !JSON.stringify(ranBody).includes('Mav '), "and the other team's state has none of the first team's people");
+  ok(ranState.status === 200 && ranBody, "one team's tag never answers the other team with 'unchanged'", ranState.status);
+  ok(ranBody && ranBody.team && ranBody.team.id === 'team-ranger' && !/Mav |mav\.|th-mav/.test(JSON.stringify(ranBody)), "and the other team's state is its own, with none of the first team's people");
   const again = await fetch(`${s.base}/api/state`, { headers: { cookie: rangerCookie, 'If-None-Match': ranState.headers.get('etag') } });
   ok(again.status === 304, "a team's own unchanged state is a 304", again.status);
   const peek = await fetch(`${s.base}/api/texts/thread?id=mav1`, { headers: { cookie: rangerCookie } });
@@ -68,6 +69,28 @@ const RAN = ['Ran Alder', 'Ran Birch', 'Ran Cedar'];
     await page.waitForSelector('#bellPanel', { state: 'hidden' });
     return [...out];
   };
+  // Sign out from wherever the page puts it: the sidebar on a laptop,
+  // Settings (under More) on a phone.
+  const signOut = async (page, phone) => {
+    if (phone) {
+      await page.click('#navMore');
+      await page.waitForSelector('#moreSheet:not([hidden])');
+      await page.click('#moreSheetButtons [data-more="settings"]');
+      await page.waitForSelector('#view-settings.active');
+    }
+    await page.click('#signOutBtn');
+    await page.waitForSelector('#loginScreen:not([hidden])');
+  };
+  // Only the sign-in screen can be seen: whatever the page underneath still
+  // holds, it is covered from corner to corner.
+  const onlySignIn = (page) => page.evaluate(() => {
+    const w = innerWidth;
+    const h = innerHeight;
+    return [[5, 5], [w / 2, h / 2], [w - 5, h - 5], [5, h - 5], [w - 5, 5]].every(([x, y]) => {
+      const el = document.elementFromPoint(x, y);
+      return Boolean(el && el.closest('#loginScreen'));
+    });
+  });
   const signIn = async (page, teamId, pin) => {
     await page.waitForSelector('#loginScreen:not([hidden])');
     await waitIn(page, () => document.querySelectorAll('#teamPicker [data-team]').length === 2);
@@ -105,6 +128,7 @@ const RAN = ['Ran Alder', 'Ran Birch', 'Ran Cedar'];
     }
     await page.click('#signOutBtn');
     ok(await waitIn(page, () => !document.querySelector('#loginScreen').hidden), `${tag}: signing out shows the sign-in screen`);
+    ok(await onlySignIn(page), `${tag}: covering everything that was on screen`);
     ok(await page.evaluate(async () => (await fetch('/api/state')).status) === 401, `${tag}: and this browser can no longer read the team's data`);
     await waitIn(page, () => document.querySelectorAll('#teamPicker [data-team]').length === 2);
     const chips = await texts(page, '#teamPicker [data-team]');
@@ -133,6 +157,15 @@ const RAN = ['Ran Alder', 'Ran Birch', 'Ran Cedar'];
     await go(page, 'settings');
     ok(await text(page, '#attachList') === 'No attachments — emails go out as text only.', `${tag}: a new team has no attachment (not Maverick's flyer)`, await text(page, '#attachList'));
     ok(await page.inputValue('#teamName') === 'Team Ranger', `${tag}: Settings is Ranger's`, await page.inputValue('#teamName'));
+
+    // A reload stays in Ranger and brings back nothing of Maverick's.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await ready(page);
+    await go(page, 'dashboard');
+    ok(await waitText(page, '#statTotal', '3'), `${tag}: after a reload, still Ranger's 3 people`, await text(page, '#statTotal'));
+    ok(await teamShown() === (phone ? 'Ranger' : 'Team Ranger'), `${tag}: and still says Ranger`, await teamShown());
+    const reloadSeen = await namesOnScreen(page);
+    ok(reloadSeen.some((n) => /Ran/.test(n)) && !reloadSeen.some((n) => /Mav|mav\./.test(n)), `${tag}: with none of Maverick's people anywhere`, reloadSeen);
     await go(page, 'texting');
     await page.click('#convList [data-conv="ran2"]');
     await waitText(page, '#threadName', 'Ran Birch');
@@ -149,6 +182,17 @@ const RAN = ['Ran Alder', 'Ran Birch', 'Ran Cedar'];
     ok(backSeen.some((n) => /Mav/.test(n)) && !backSeen.some((n) => /Ran|ran\./.test(n)), `${tag}: and none of Ranger's`, backSeen);
     await go(page, 'texting');
     ok(!(await texts(page, '#convList .conv.on')).length, `${tag}: no conversation from the other team is selected in the list`);
+
+    // Signed out and reloaded, the device shows nobody from either team —
+    // not the list it last had, not behind the sign-in screen.
+    await signOut(page, phone);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    ok(await waitIn(page, () => { const l = document.querySelector('#loginScreen'); return l && !l.hidden; }, null, 10000), `${tag}: signed out, a reload shows the sign-in screen`);
+    await waitIn(page, () => document.querySelectorAll('#teamPicker [data-team]').length === 2);
+    await page.waitForTimeout(500);
+    ok(await onlySignIn(page), `${tag}: and only the sign-in screen`);
+    const leftover = await page.evaluate(() => document.body.innerText);
+    ok(!/Mav |Ran |mav\.|ran\./.test(leftover), `${tag}: with nobody from either team on the page`, (leftover.match(/.{0,30}(Mav |Ran |mav\.|ran\.).{0,30}/) || [''])[0]);
 
     ok(errors.length === 0, `${tag}: no page errors`, errors);
     await ctx.close();

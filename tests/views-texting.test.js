@@ -6,9 +6,10 @@
 // even when two conversations are opened in quick succession), a draft kept
 // per conversation, STOP honoured, and a poll that brings a new message —
 // including one into the conversation already on screen, which is read as
-// it arrives. Nothing leaves the queue: there is no relay.
+// it arrives without touching a half-typed reply. A double tap on Send sends
+// once. Nothing leaves the queue: there is no relay.
 const { startApp, launch, ok, done, crash, ago, R } = require('./helpers');
-const { stubEverything, open, text, texts, waitIn, waitText, until, poke, state, byId, person } = require('./views-helpers');
+const { stubEverything, open, text, texts, waitIn, waitText, settle, same, until, poke, stored, byId, person } = require('./views-helpers');
 
 const pad = (i) => String(i).padStart(2, '0');
 const N = 70;
@@ -78,25 +79,48 @@ const order = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `t${
     await page.waitForSelector('#view-texting.active');
     await page.waitForSelector('#convList [data-conv]');
 
-    ok(JSON.stringify(await rows(page)) === JSON.stringify(order(1, 60)), `${tag}: the first 60 conversations, newest first`, await rows(page));
-    ok(await text(page, '#convList .conv-more') === '10 more', `${tag}: and says how many more there are`, await text(page, '#convList .conv-more'));
-    ok(!(await rows(page)).includes('quiet'), `${tag}: someone never texted is not a conversation`);
-    ok(JSON.stringify(await unreadRows(page)) === JSON.stringify(['t02', 't05']), `${tag}: unread conversations are marked`, await unreadRows(page));
+    // A first screenful (today 60 of the 70), newest first, and how many more
+    // there are. How many make a screenful is the page's business; that they
+    // are the newest, in order, and that the rest are owed, is not.
+    const first = await rows(page);
+    const firstLen = first.length;
+    ok(firstLen >= 10 && firstLen < N && same(first, order(1, firstLen)), `${tag}: the first conversations, newest first`, first);
+    ok(await text(page, '#convList .conv-more') === `${N - firstLen} more`, `${tag}: and says how many more there are`, await text(page, '#convList .conv-more'));
+    ok(!first.includes('quiet'), `${tag}: someone never texted is not a conversation`);
+    const unreadFirst = await settle(() => unreadRows(page), ['t02', 't05']);
+    ok(same(unreadFirst, ['t02', 't05']), `${tag}: unread conversations are marked`, unreadFirst);
     const last = (id) => text(page, `#convList [data-conv="${id}"] .conv-last`);
     ok(await last('t01') === 'Reply from person 01', `${tag}: their last word is the preview`, await last('t01'));
     ok(await last('t04') === 'You: Following up 04', `${tag}: ours is marked "You:"`, await last('t04'));
     ok(await last('t03') === 'You: Checking in 03', `${tag}: a tapback is not the preview`, await last('t03'));
-    ok(JSON.stringify(await counts(page)) === JSON.stringify({ list: '3', inbox: '3', switch: '3', bell: '3' }), `${tag}: every unread count says 3`, await counts(page));
+    const three = await settle(() => counts(page), { list: '3', inbox: '3', switch: '3', bell: '3' });
+    ok(same(three, { list: '3', inbox: '3', switch: '3', bell: '3' }), `${tag}: every unread count says 3`, three);
 
     await page.click('[data-conv-tab="unread"]');
-    ok(JSON.stringify(await rows(page)) === JSON.stringify(['t02', 't05', 't65']), `${tag}: Unread lists all three, including one beyond the first page`, await rows(page));
+    const unreadTab = await settle(() => rows(page), ['t02', 't05', 't65']);
+    ok(same(unreadTab, ['t02', 't05', 't65']), `${tag}: Unread lists all three, including one beyond the first page`, unreadTab);
     await page.click('[data-conv-tab="all"]');
+    await settle(() => rows(page), first);
 
-    // Scrolled to the bottom, the list grows, in the same order.
-    await page.evaluate(() => { const l = document.querySelector('#convList'); l.scrollTop = l.scrollHeight; l.dispatchEvent(new Event('scroll')); });
-    await waitIn(page, () => document.querySelectorAll('#convList [data-conv]').length >= 70);
-    ok(JSON.stringify(await rows(page)) === JSON.stringify(order(1, 70)), `${tag}: scrolling down loads the rest, in order`, (await rows(page)).slice(-12));
+    // Scrolled to the bottom, the list grows, in the same order — as many
+    // times as it takes.
+    for (let k = 0; k < 10 && (await rows(page)).length < N; k++) {
+      const had = (await rows(page)).length;
+      await page.evaluate(() => { const l = document.querySelector('#convList'); l.scrollTop = l.scrollHeight; l.dispatchEvent(new Event('scroll')); });
+      await waitIn(page, (n) => document.querySelectorAll('#convList [data-conv]').length > n, had, 3000);
+    }
+    ok(same(await rows(page), order(1, N)), `${tag}: scrolling down loads the rest, in order`, (await rows(page)).slice(-12));
     ok(await text(page, '#convList .conv-more') === null, `${tag}: and nothing is left to load`);
+
+    // A poll that lands while scrolled down (something changed elsewhere, so
+    // the list is drawn again) keeps the whole list and where it was.
+    const scrolled = await page.evaluate(() => document.querySelector('#convList').scrollTop);
+    await s.store.update((d) => { d.candidates.find((x) => x.id === 'quiet').notes = 'Changed elsewhere'; });
+    await poke(page);
+    await page.waitForTimeout(200);
+    const kept = await page.evaluate(() => document.querySelector('#convList').scrollTop);
+    ok(scrolled > 0 && Math.abs(kept - scrolled) < 50, `${tag}: a poll does not throw the list back to the top`, { scrolled, kept });
+    ok(same(await rows(page), order(1, N)), `${tag}: nor shorten it`, (await rows(page)).length);
 
     // Search covers every conversation: by name, by number however typed, by the last message.
     // Typing is debounced, so each search waits for the list it should produce.
@@ -113,19 +137,19 @@ const order = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `t${
     await page.click('[data-conv-tab="unread"]');
     ok(JSON.stringify(await search('Person01', ['t01'])) === JSON.stringify(['t01']), `${tag}: search looks past the Unread filter`, await rows(page));
     await page.click('[data-conv-tab="all"]');
-    ok(JSON.stringify(await search('', order(1, 60))) === JSON.stringify(order(1, 60)), `${tag}: clearing the search brings the list back`, (await rows(page)).length);
+    ok(same(await search('', first), first), `${tag}: clearing the search brings the list back`, (await rows(page)).length);
 
     // Opening one: its messages, and it is read — here, everywhere, and on the server.
     await openConv(page, 't02');
     ok(await waitText(page, '#threadName', 'Text Person02'), `${tag}: opening a conversation shows who it is with`, await text(page, '#threadName'));
-    await waitIn(page, () => document.querySelectorAll('#threadBody .msg').length === 2);
-    ok(JSON.stringify(await bubbles(page)) === JSON.stringify(['> Hi 02, worth a quick call this week?', '< Tell me more 02']), `${tag}: and its messages, oldest first`, await bubbles(page));
+    const b02 = await settle(() => bubbles(page), ['> Hi 02, worth a quick call this week?', '< Tell me more 02']);
+    ok(same(b02, ['> Hi 02, worth a quick call this week?', '< Tell me more 02']), `${tag}: and its messages, oldest first`, b02);
     ok(await text(page, '#threadSub') === '(617) 555-0202', `${tag}: with their number`, await text(page, '#threadSub'));
-    await waitIn(page, () => document.querySelector('#convUnreadN').textContent === '2');
-    ok(JSON.stringify(await counts(page)) === JSON.stringify({ list: '2', inbox: '2', switch: '2', bell: '2' }), `${tag}: every unread count drops to 2`, await counts(page));
-    ok(!(await unreadRows(page)).includes('t02'), `${tag}: its row is no longer unread`);
-    ok(await until(async () => byId(await state(s), 't02').textUnread === false), `${tag}: the server has it read`);
-    ok(byId(await state(s), 't05').textUnread === true, `${tag}: nobody else was marked read`);
+    const two = await settle(() => counts(page), { list: '2', inbox: '2', switch: '2', bell: '2' });
+    ok(same(two, { list: '2', inbox: '2', switch: '2', bell: '2' }), `${tag}: every unread count drops to 2`, two);
+    ok(same(await settle(() => unreadRows(page), ['t05']), ['t05']), `${tag}: its row is no longer unread`, await unreadRows(page));
+    ok(await until(async () => byId(await stored(s), 't02').textUnread === false), `${tag}: the server has it read`);
+    ok(byId(await stored(s), 't05').textUnread === true, `${tag}: nobody else was marked read`);
     ok(/offline/.test(await text(page, '#threadNote')), `${tag}: the thread says replies wait for the Mac`, await text(page, '#threadNote'));
 
     // Replying: queued for this person.
@@ -143,8 +167,8 @@ const order = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `t${
     await openConv(page, 't08');
     await openConv(page, 't04');
     ok(await waitText(page, '#threadName', 'Text Person04'), `${tag}: the last one opened is the one shown`, await text(page, '#threadName'));
-    await waitIn(page, () => /Following up 04/.test(document.querySelector('#threadBody').textContent));
-    ok(JSON.stringify(await bubbles(page)) === JSON.stringify(['> Hi 04, worth a quick call this week?', '> Following up 04']), `${tag}: with its own messages`, await bubbles(page));
+    const b04 = await settle(() => bubbles(page), ['> Hi 04, worth a quick call this week?', '> Following up 04']);
+    ok(same(b04, ['> Hi 04, worth a quick call this week?', '> Following up 04']), `${tag}: with its own messages`, b04);
     await page.fill('#threadInput', 'Still interested?');
     await page.press('#threadInput', 'Enter');
     q = await until(async () => { const x = await queued(); return x.length === 2 ? x : null; });
@@ -183,13 +207,17 @@ const order = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `t${
     });
     await poke(page);
     ok(await waitIn(page, () => document.querySelector('#convList [data-conv]').dataset.conv === 't70'), `${tag}: a new message moves its conversation to the top`, (await rows(page)).slice(0, 3));
-    ok(await last('t70') === 'Just saw this, call me', `${tag}: with the new message as its preview`, await last('t70'));
-    ok((await unreadRows(page)).includes('t70'), `${tag}: marked unread`);
-    ok(JSON.stringify(await counts(page)) === JSON.stringify({ list: '3', inbox: '3', switch: '3', bell: '3' }), `${tag}: and counted with the two still unread`, await counts(page));
+    ok(await settle(() => last('t70'), 'Just saw this, call me') === 'Just saw this, call me', `${tag}: with the new message as its preview`, await last('t70'));
+    ok((await settle(() => unreadRows(page), ['t70', 't05'])).includes('t70'), `${tag}: marked unread`, await unreadRows(page));
+    const threeAgain = await settle(() => counts(page), { list: '3', inbox: '3', switch: '3', bell: '3' });
+    ok(same(threeAgain, { list: '3', inbox: '3', switch: '3', bell: '3' }), `${tag}: and counted with the two still unread`, threeAgain);
 
-    // A message into the conversation on screen is read as it arrives.
+    // A message into the conversation on screen is read as it arrives, and
+    // the reply being typed under it is left alone.
     await openConv(page, 't04');
     await waitText(page, '#threadName', 'Text Person04');
+    await page.fill('#threadInput', 'Half way through typing');
+    await page.dispatchEvent('#threadInput', 'input');
     const before = await counts(page);
     await s.store.update((d) => {
       const c = d.candidates.find((x) => x.id === 't04');
@@ -199,7 +227,11 @@ const order = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `t${
     await poke(page);
     ok(await waitIn(page, () => /Yes! Call me now/.test(document.querySelector('#threadBody').textContent)), `${tag}: a reply into the open conversation appears in it`, await bubbles(page));
     ok(JSON.stringify(await counts(page)) === JSON.stringify(before), `${tag}: and never lights a count for something already on screen`, { before, after: await counts(page) });
-    ok(await until(async () => byId(await state(s), 't04').textUnread === false), `${tag}: the server has it read`);
+    ok(await until(async () => byId(await stored(s), 't04').textUnread === false), `${tag}: the server has it read`);
+    ok(await page.inputValue('#threadInput') === 'Half way through typing', `${tag}: a poll never wipes a half-typed reply`, await page.inputValue('#threadInput'));
+    ok((await queued()).every((i) => i.text !== 'Half way through typing'), `${tag}: nor sends it`);
+    await page.fill('#threadInput', '');
+    await page.dispatchEvent('#threadInput', 'input');
 
     ok(errors.length === 0, `${tag}: no page errors`, errors);
     await ctx.close();
@@ -217,15 +249,16 @@ const order = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `t${
     await page.click('#view-template .group-tab[data-goto="texting"]');
     await page.waitForSelector('#view-texting.active');
     await page.waitForSelector('#convList [data-conv]');
-    ok(JSON.stringify((await rows(page)).slice(0, 6)) === JSON.stringify(order(1, 6)), `${tag}: conversations newest first`, (await rows(page)).slice(0, 6));
-    ok(JSON.stringify(await unreadRows(page)) === JSON.stringify(['t02', 't05']), `${tag}: unread marked`, await unreadRows(page));
+    const top6 = await settle(async () => (await rows(page)).slice(0, 6), order(1, 6));
+    ok(same(top6, order(1, 6)), `${tag}: conversations newest first`, top6);
+    ok(same(await settle(() => unreadRows(page), ['t02', 't05']), ['t02', 't05']), `${tag}: unread marked`, await unreadRows(page));
 
     await page.click('#convList [data-conv="t05"]');
     ok(await waitIn(page, () => document.querySelector('#view-texting .messenger').classList.contains('thread-open')), `${tag}: a conversation opens as its own screen`);
     ok(await waitText(page, '#threadName', 'Text Person05'), `${tag}: with who it is`, await text(page, '#threadName'));
     ok(await waitIn(page, () => /Tell me more 05/.test(document.querySelector('#threadBody').textContent)), `${tag}: and their messages`, await bubbles(page));
     ok(await waitText(page, '#navInboxCount', '2'), `${tag}: the Inbox tab drops to 2`, await text(page, '#navInboxCount'));
-    ok(await until(async () => byId(await state(s), 't05').textUnread === false), `${tag}: read on the server`);
+    ok(await until(async () => byId(await stored(s), 't05').textUnread === false), `${tag}: read on the server`);
 
     // On a phone the return key makes a new line; the button sends.
     await page.click('#threadInput');
@@ -237,6 +270,22 @@ const order = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `t${
     await page.click('#threadSend');
     const q = await until(async () => { const x = await queued(); return x.length ? x : null; });
     ok(q && q.length === 1 && q[0].id === 't05' && q[0].phone === '+16175550205' && q[0].text === 'See you\nat noon', `${tag}: the send button queues it for that person`, q);
+    await waitIn(page, () => document.querySelector('#threadInput').value === '' && !document.querySelector('#threadSend').disabled);
+
+    // A double tap on Send, on a slow connection, sends once. (Every change
+    // the page asks the server for is held back a little, whichever request
+    // it is, so the second tap lands while the first is still on its way.)
+    const slow = async (route) => { if (route.request().method() !== 'GET') await new Promise((r) => setTimeout(r, 500)); await route.continue(); };
+    await page.route((u) => u.pathname.startsWith('/api/'), slow);
+    await page.fill('#threadInput', 'Only once, please');
+    await page.dispatchEvent('#threadInput', 'input');
+    await page.dblclick('#threadSend');
+    const q2 = await until(async () => { const x = await queued(); return x.length >= 2 ? x : null; });
+    await waitIn(page, () => document.querySelector('#threadInput').value === '');
+    await page.waitForTimeout(800);
+    const once = (await queued()).filter((i) => i.text === 'Only once, please');
+    ok(q2 && once.length === 1 && once[0].id === 't05', `${tag}: a double tap on Send queues the text once`, await queued());
+    await page.unroute((u) => u.pathname.startsWith('/api/'), slow);
 
     await page.click('#view-texting .thread-back');
     ok(await waitIn(page, () => !document.querySelector('#view-texting .messenger').classList.contains('thread-open')), `${tag}: Back returns to the list`);

@@ -6,7 +6,7 @@
 // its tiles, and the signed list. On a phone both are reached from the Hiring
 // tab and its switch.
 const { startApp, launch, ok, done, crash, ago, R } = require('./helpers');
-const { stubEverything, open, text, texts, cells, waitIn, poke, person } = require('./views-helpers');
+const { stubEverything, open, text, texts, cells, waitIn, waitText, settle, same, poke, person } = require('./views-helpers');
 
 const DAY = 1440;
 const hire = (id, name, email, label, crmId) => ({
@@ -66,26 +66,25 @@ const hire = (id, name, email, label, crmId) => ({
     }
     await page.waitForSelector('#view-salesiq.active');
     ok(await waitIn(page, () => document.querySelectorAll('#siq-roster-list .cand-row').length === 5), `${tag}: Sales IQ draws its list`, await roster(page));
-    ok(JSON.stringify(await roster(page)) === JSON.stringify([
-      'Quinn Added | Not sent', 'Rae Added | Not sent', 'Sol Invited | Sent', 'Tia Done | Completed · 88/100', 'Uma Done | Completed · 55/100',
-    ]), `${tag}: each with where they are and their score`, await roster(page));
-    ok(await iqStats(page) === '0 2 1 2', `${tag}: the tiles count upcoming, not sent, sent and completed`, await iqStats(page));
-    ok(await text(page, '#siq-cand-count') === '5', `${tag}: and the list says 5`, await text(page, '#siq-cand-count'));
-    const reports = await page.evaluate(() => [...document.querySelectorAll('#siq-report-list .row-name')].map((n) => n.textContent.trim()));
-    ok(JSON.stringify(reports) === JSON.stringify(['Tia Done', 'Uma Done']), `${tag}: the reports are listed`, reports);
+    const ROSTER = ['Quinn Added | Not sent', 'Rae Added | Not sent', 'Sol Invited | Sent', 'Tia Done | Completed · 88/100', 'Uma Done | Completed · 55/100'];
+    ok(same(await settle(() => roster(page), ROSTER), ROSTER), `${tag}: each with where they are and their score`, await roster(page));
+    ok(await settle(() => iqStats(page), '0 2 1 2') === '0 2 1 2', `${tag}: the tiles count upcoming, not sent, sent and completed`, await iqStats(page));
+    ok(await waitText(page, '#siq-cand-count', '5'), `${tag}: and the list says 5`, await text(page, '#siq-cand-count'));
+    const reports = await settle(() => page.evaluate(() => [...document.querySelectorAll('#siq-report-list .row-name')].map((n) => n.textContent.trim())), ['Tia Done', 'Uma Done']);
+    ok(same(reports, ['Tia Done', 'Uma Done']), `${tag}: the reports are listed`, reports);
     await page.click('#siq-cand-filter [data-filter="completed"]');
-    ok(JSON.stringify(await roster(page)) === JSON.stringify(['Tia Done | Completed · 88/100', 'Uma Done | Completed · 55/100']), `${tag}: Done shows only those who finished`, await roster(page));
+    ok(same(await settle(() => roster(page), [ROSTER[3], ROSTER[4]]), [ROSTER[3], ROSTER[4]]), `${tag}: Done shows only those who finished`, await roster(page));
     await page.click('#siq-stats [data-stat="added"]');
-    ok(JSON.stringify(await roster(page)) === JSON.stringify(['Quinn Added | Not sent', 'Rae Added | Not sent']), `${tag}: the Not sent tile filters to them`, await roster(page));
+    ok(same(await settle(() => roster(page), [ROSTER[0], ROSTER[1]]), [ROSTER[0], ROSTER[1]]), `${tag}: the Not sent tile filters to them`, await roster(page));
     await page.click('#siq-cand-filter [data-filter="all"]');
-    ok((await roster(page)).length === 5, `${tag}: All shows everyone again`);
+    ok(same(await settle(() => roster(page), ROSTER), ROSTER), `${tag}: All shows everyone again`, await roster(page));
 
     // Somebody added elsewhere appears when the page looks again.
     await salesiq.update((doc) => { doc.candidates.unshift({ id: 'cq6', name: 'Zed Newcomer', email: 'zed.newcomer@example.com', status: 'added', added: new Date().toISOString(), source: 'manual' }); });
     await poke(page);
     ok(await waitIn(page, () => document.querySelectorAll('#siq-roster-list .cand-row').length === 6), `${tag}: a person added elsewhere appears on the next look`, await roster(page));
     ok((await roster(page))[0] === 'Zed Newcomer | Not sent', `${tag}: at the top`, (await roster(page))[0]);
-    ok(await iqStats(page) === '0 3 1 2', `${tag}: and is counted`, await iqStats(page));
+    ok(await settle(() => iqStats(page), '0 3 1 2') === '0 3 1 2', `${tag}: and is counted`, await iqStats(page));
 
     // ---- Onboarding docs ----
     if (phone) {
@@ -96,25 +95,29 @@ const hire = (id, name, email, label, crmId) => ({
     }
     await page.waitForSelector('#view-onboarding.active');
     ok(await waitIn(page, () => document.querySelectorAll('#wh-pipeline-board .candidate-card').length === 4), `${tag}: Onboarding docs draws its pipeline`, await texts(page, '#wh-pipeline-board .candidate-name'));
-    const stages = await page.evaluate(() => [...document.querySelectorAll('#wh-pipeline-board .stage')].map((st) =>
-      `${st.querySelector('.stage-name').textContent.trim()} ${st.querySelector('.stage-count').textContent.trim()}: ${[...st.querySelectorAll('.candidate-name')].map((n) => n.textContent.trim()).join(', ')}`));
-    ok(JSON.stringify(stages) === JSON.stringify(['Added 3: Vic Pipeline, Wes Sent, Xan Signed', 'Uploaded 1: Yul Uploaded']), `${tag}: grouped by how they came, added from Candidates first`, stages);
+    const STAGES = ['Added 3: Vic Pipeline, Wes Sent, Xan Signed', 'Uploaded 1: Yul Uploaded'];
+    const stages = await settle(() => page.evaluate(() => [...document.querySelectorAll('#wh-pipeline-board .stage')].map((st) =>
+      `${st.querySelector('.stage-name').textContent.trim()} ${st.querySelector('.stage-count').textContent.trim()}: ${[...st.querySelectorAll('.candidate-name')].map((n) => n.textContent.trim()).join(', ')}`)), STAGES);
+    ok(same(stages, STAGES), `${tag}: grouped by how they came, added from Candidates first`, stages);
     const meta = (id) => page.evaluate((x) => document.querySelector(`#wh-pipeline-board .candidate-card[data-id="${x}"] .candidate-meta`).textContent.replace(/\s+/g, ' ').trim(), id);
     ok(/Packet sent .* awaiting signature/.test(await meta('hire-2')), `${tag}: a sent packet says it is awaiting signature`, await meta('hire-2'));
     ok(/Paperwork signed/.test(await meta('hire-3')), `${tag}: a signed one says so`, await meta('hire-3'));
     ok(!/Packet sent|Paperwork signed/.test(await meta('hire-1')), `${tag}: one not sent says neither`, await meta('hire-1'));
-    const stats = await page.evaluate(() => [...document.querySelectorAll('#wh-pipeline-stats .stat')].map((st) => `${st.querySelector('.wh-stat-value').textContent.trim()} ${st.querySelector('.label-full').textContent.trim()}`));
-    ok(JSON.stringify(stats) === JSON.stringify(['4 Candidates', '2 Packets sent', '1 Awaiting signature', '1 Signed & complete']), `${tag}: its tiles count them`, stats);
-    const signed = await texts(page, '#wh-signed-list .signed-name');
-    ok(JSON.stringify(signed) === JSON.stringify(['Xan Signed']), `${tag}: the signed list has the one who signed`, signed);
+    const STATS = ['4 Candidates', '2 Packets sent', '1 Awaiting signature', '1 Signed & complete'];
+    const stats = await settle(() => page.evaluate(() => [...document.querySelectorAll('#wh-pipeline-stats .stat')].map((st) => `${st.querySelector('.wh-stat-value').textContent.trim()} ${st.querySelector('.label-full').textContent.trim()}`)), STATS);
+    ok(same(stats, STATS), `${tag}: its tiles count them`, stats);
+    const signed = await settle(() => texts(page, '#wh-signed-list .signed-name'), ['Xan Signed']);
+    ok(same(signed, ['Xan Signed']), `${tag}: the signed list has the one who signed`, signed);
 
     // The Dashboard's trackers agree with both pages.
     await page.evaluate(() => document.querySelector('.nav-item[data-view="dashboard"]').click());
     await page.waitForSelector('#view-dashboard.active');
-    const iq = await cells(page, '#iqTrackerGrid .today-cell');
-    ok(JSON.stringify(iq) === JSON.stringify(['6 On Sales IQ', '3 Not sent', '1 Awaiting results', '2 Completed']), `${tag}: the Dashboard's Sales IQ tracker agrees`, iq);
-    const onb = await cells(page, '#onbTrackerGrid .today-cell');
-    ok(JSON.stringify(onb) === JSON.stringify(['4 On the pipeline', '2 Packet not sent', '1 Awaiting signature', '1 Signed']), `${tag}: and the Onboarding docs one`, onb);
+    const IQ = ['6 On Sales IQ', '3 Not sent', '1 Awaiting results', '2 Completed'];
+    const iq = await settle(() => cells(page, '#iqTrackerGrid .today-cell'), IQ);
+    ok(same(iq, IQ), `${tag}: the Dashboard's Sales IQ tracker agrees`, iq);
+    const ONB = ['4 On the pipeline', '2 Packet not sent', '1 Awaiting signature', '1 Signed'];
+    const onb = await settle(() => cells(page, '#onbTrackerGrid .today-cell'), ONB);
+    ok(same(onb, ONB), `${tag}: and the Onboarding docs one`, onb);
 
     // The Hiring tab goes back to the one of the two last open.
     if (phone) {

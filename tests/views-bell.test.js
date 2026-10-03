@@ -6,7 +6,7 @@
 // lands meanwhile stays news, lights the bell again and rings it. It does
 // not ring when the page opens with unread already waiting.
 const { startApp, launch, ok, done, crash, ago } = require('./helpers');
-const { stubEverything, open, text, texts, waitIn, waitText, until, poke, state, byId, person } = require('./views-helpers');
+const { stubEverything, open, quiet, text, texts, waitIn, waitText, settle, same, until, poke, stored, byId, person } = require('./views-helpers');
 
 const DAY = 1440;
 function people() {
@@ -75,19 +75,20 @@ const RING_WATCH = () => {
   {
     const tag = 'laptop';
     const { ctx, page, errors } = await open(browser, s, { init: RING_WATCH });
-    ok(await bellN(page) === '4', `${tag}: the bell counts unread on both channels`, await bellN(page));
+    ok(await settle(() => bellN(page), '4') === '4', `${tag}: the bell counts unread on both channels`, await bellN(page));
     ok(await page.evaluate(() => document.querySelector('.bell').classList.contains('lit')), `${tag}: and is lit`);
     ok(await page.evaluate(() => window.__rings) === 0, `${tag}: opening the app with unread waiting does not ring it`);
 
     await openBell(page);
-    const fresh = await panelRows(page, 'New');
-    ok(JSON.stringify(fresh) === JSON.stringify([
+    const NEW = [
       'Bell Texter | Can we talk? | Text', 'Bell Emailer | Interested! Tell me more. | Email',
       'Bell Both | Text from both | Text', 'Bell Both | Email from both | Email',
-    ]), `${tag}: New lists each unread conversation, newest first, one per channel`, fresh);
-    const earlier = await panelRows(page, 'Earlier');
-    ok(JSON.stringify(earlier) === JSON.stringify([1, 2, 3, 4, 5].map((k) => `Earlier Person${k} | Earlier reply ${k} | Text`)),
-      `${tag}: Earlier: the newest five read this week, nothing older`, earlier);
+    ];
+    const fresh = await settle(() => panelRows(page, 'New'), NEW);
+    ok(same(fresh, NEW), `${tag}: New lists each unread conversation, newest first, one per channel`, fresh);
+    const EARLIER = [1, 2, 3, 4, 5].map((k) => `Earlier Person${k} | Earlier reply ${k} | Text`);
+    const earlier = await settle(() => panelRows(page, 'Earlier'), EARLIER);
+    ok(same(earlier, EARLIER), `${tag}: Earlier: the newest five read this week, nothing older`, earlier);
     ok(!(await page.isHidden('#bellClear')), `${tag}: Mark all read is offered`);
 
     // Opening an email entry: the Email page, that conversation, read.
@@ -97,7 +98,7 @@ const RING_WATCH = () => {
     ok(await page.evaluate(() => Boolean(document.querySelector('#view-template.active'))), `${tag}: on the Email page`);
     ok(await waitIn(page, () => /Interested! Tell me more/.test(document.querySelector('#mailBody').textContent)), `${tag}: showing the conversation`);
     ok(await waitIn(page, () => [...document.querySelectorAll('.bell')].find((x) => x.getClientRects().length).querySelector('.bell-n').textContent === '3'), `${tag}: the bell drops to 3`, await bellN(page));
-    ok(await until(async () => byId(await state(s), 'b2').emailUnread === false), `${tag}: read on the server`);
+    ok(await until(async () => byId(await stored(s), 'b2').emailUnread === false), `${tag}: read on the server`);
 
     // And a text entry: Texting, that conversation.
     await openBell(page);
@@ -106,41 +107,41 @@ const RING_WATCH = () => {
     ok(await page.evaluate(() => Boolean(document.querySelector('#view-texting.active'))), `${tag}: on the Texting page`);
     ok(await waitIn(page, () => /Can we talk\?/.test(document.querySelector('#threadBody').textContent)), `${tag}: with its messages`);
     ok(await until(async () => (await bellN(page)) === '2'), `${tag}: the bell drops to 2`, await bellN(page));
-    ok(await until(async () => byId(await state(s), 'b1').textUnread === false), `${tag}: read on the server`);
+    ok(await until(async () => byId(await stored(s), 'b1').textUnread === false), `${tag}: read on the server`);
 
     // Mark all read reads what was listed — not a reply that came in meanwhile.
     await page.evaluate(() => document.querySelector('.nav-item[data-view="dashboard"]').click());
     await openBell(page);
-    ok(JSON.stringify(await panelRows(page, 'New')) === JSON.stringify(['Bell Both | Text from both | Text', 'Bell Both | Email from both | Email']), `${tag}: what is left unread`, await panelRows(page, 'New'));
+    const left = ['Bell Both | Text from both | Text', 'Bell Both | Email from both | Email'];
+    ok(same(await settle(() => panelRows(page, 'New'), left), left), `${tag}: what is left unread`, await panelRows(page, 'New'));
     await s.store.update((d) => {
       const c = d.candidates.find((x) => x.id === 'b3');
       c.textThread.push({ dir: 'in', ts: new Date().toISOString(), text: 'Are you there?' });
       c.textUnread = true;
     });
-    const toldText = page.waitForResponse((r) => r.url().endsWith('/api/texts/seen'), { timeout: 8000 }).catch(() => null);
-    const toldEmail = page.waitForResponse((r) => r.url().endsWith('/api/emails/seen'), { timeout: 8000 }).catch(() => null);
     await page.click('#bellClear');
     ok(await until(async () => (await bellN(page)) === ''), `${tag}: Mark all read clears the count at once`, await bellN(page));
-    const [tt, te] = await Promise.all([toldText, toldEmail]);
-    ok(tt && te && tt.ok() && te.ok(), `${tag}: the server was told about both channels`);
-    ok(byId(await state(s), 'b3').emailUnread === false, `${tag}: the email is read on the server`);
-    ok(byId(await state(s), 'b3').textUnread === true, `${tag}: a text that landed after the list was drawn stays unread`);
+    ok(await until(async () => byId(await stored(s), 'b3').emailUnread === false), `${tag}: the email is read on the server`);
+    // Once the page has finished telling the server, the text that landed
+    // after the list was drawn is still unread there.
+    ok(await quiet(page), `${tag}: (the page has finished telling the server)`);
+    ok(byId(await stored(s), 'b3').textUnread === true, `${tag}: a text that landed after the list was drawn stays unread`);
     await page.keyboard.press('Escape');
     const rings = await page.evaluate(() => window.__rings);
     await poke(page);
     ok(await until(async () => (await bellN(page)) === '1'), `${tag}: and lights the bell again on the next look`, await bellN(page));
     ok(await page.evaluate(() => window.__rings) > rings, `${tag}: ringing it, since it is news`);
     await openBell(page);
-    ok(JSON.stringify(await panelRows(page, 'New')) === JSON.stringify(['Bell Both | Are you there? | Text']), `${tag}: listed with the new message`, await panelRows(page, 'New'));
+    ok(same(await settle(() => panelRows(page, 'New'), ['Bell Both | Are you there? | Text']), ['Bell Both | Are you there? | Text']), `${tag}: listed with the new message`, await panelRows(page, 'New'));
     await page.click('#bellBody .bell-row[data-bell-open="b3"][data-bell-ch="text"]');
     ok(await waitText(page, '#threadName', 'Bell Both'), `${tag}: opening it goes there`);
     ok(await until(async () => (await bellN(page)) === ''), `${tag}: and the bell is dark`, await bellN(page));
-    ok(await until(async () => byId(await state(s), 'b3').textUnread === false), `${tag}: read on the server`);
-    const quiet = await page.evaluate(() => window.__rings);
+    ok(await until(async () => byId(await stored(s), 'b3').textUnread === false), `${tag}: read on the server`);
+    const ringsSoFar = await page.evaluate(() => window.__rings);
     await poke(page);
-    ok(await page.evaluate(() => window.__rings) === quiet, `${tag}: nothing new, no ring`);
+    ok(await page.evaluate(() => window.__rings) === ringsSoFar, `${tag}: nothing new, no ring`);
     await openBell(page);
-    ok((await panelRows(page, 'New')).length === 0 && await page.isHidden('#bellClear'), `${tag}: nothing under New, no Mark all read`);
+    ok((await settle(async () => (await panelRows(page, 'New')).length, 0)) === 0 && await page.isHidden('#bellClear'), `${tag}: nothing under New, no Mark all read`, await panelRows(page, 'New'));
     // Clicking elsewhere puts it away.
     await page.click('.view.active .page-head h1');
     ok(await waitIn(page, () => document.querySelector('#bellPanel').hidden), `${tag}: a click elsewhere closes the panel`);
@@ -154,10 +155,11 @@ const RING_WATCH = () => {
   {
     const tag = 'phone';
     const { ctx, page, errors } = await open(browser, s, { phone: true });
-    ok(await bellN(page) === '4', `${tag}: the bell counts both channels`, await bellN(page));
+    ok(await settle(() => bellN(page), '4') === '4', `${tag}: the bell counts both channels`, await bellN(page));
+    ok(await text(page, '#navInboxCount') === '4', `${tag}: and the Inbox tab counts both too`, await text(page, '#navInboxCount'));
     await openBell(page);
     ok(await page.isVisible('#bellBackdrop'), `${tag}: the panel is a sheet over a dimmed page`);
-    ok((await panelRows(page, 'New')).length === 4, `${tag}: listing the four unread`, await panelRows(page, 'New'));
+    ok((await settle(async () => (await panelRows(page, 'New')).length, 4)) === 4, `${tag}: listing the four unread`, await panelRows(page, 'New'));
     await page.click('#bellClose');
     ok(await waitIn(page, () => document.querySelector('#bellPanel').hidden && document.querySelector('#bellBackdrop').hidden), `${tag}: the close button puts it away`);
 
@@ -166,7 +168,7 @@ const RING_WATCH = () => {
     ok(await waitText(page, '#mailName', 'Bell Both'), `${tag}: an entry opens its conversation`, await text(page, '#mailName'));
     ok(await waitIn(page, () => document.querySelector('#view-template .messenger').classList.contains('thread-open')), `${tag}: as its own screen`);
     ok(await until(async () => (await bellN(page)) === '3'), `${tag}: the bell drops to 3`, await bellN(page));
-    ok(await until(async () => byId(await state(s), 'b3').emailUnread === false && byId(await state(s), 'b3').textUnread === true), `${tag}: only that channel is read`);
+    ok(await until(async () => byId(await stored(s), 'b3').emailUnread === false && byId(await stored(s), 'b3').textUnread === true), `${tag}: only that channel is read`);
 
     // From inside one conversation, the bell opens another in its place.
     await openBell(page);
@@ -179,7 +181,7 @@ const RING_WATCH = () => {
     await openBell(page);
     await page.click('#bellClear');
     ok(await until(async () => (await bellN(page)) === ''), `${tag}: Mark all read clears the count`, await bellN(page));
-    ok(await until(async () => { const st = await state(s); return st.candidates.every((c) => !c.textUnread && !c.emailUnread); }), `${tag}: everything is read on the server`);
+    ok(await until(async () => { const st = await stored(s); return st.candidates.every((c) => !c.textUnread && !c.emailUnread); }), `${tag}: everything is read on the server`);
     ok(await text(page, '#navInboxCount') === '', `${tag}: the Inbox tab has no count`, await text(page, '#navInboxCount'));
 
     ok(errors.length === 0, `${tag}: no page errors`, errors);

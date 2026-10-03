@@ -5,7 +5,7 @@
 // shows a thumbnail for an image attachment — the built-in flyer and one
 // added from the page.
 const { startApp, launch, ok, done, crash } = require('./helpers');
-const { stubEverything, open, text, texts, waitIn, until, poke, person } = require('./views-helpers');
+const { stubEverything, open, text, texts, waitIn, waitText, settle, same, until, poke, person } = require('./views-helpers');
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const toastSaid = (page, re) => waitIn(page, (src) => [...document.querySelectorAll('.toast')].some((t) => new RegExp(src).test(t.textContent)), re.source);
@@ -33,19 +33,19 @@ const toastSaid = (page, re) => waitIn(page, (src) => [...document.querySelector
     await page.waitForSelector('#view-settings.active');
 
     // What is saved is what the editors show.
-    ok(await page.inputValue('#tplSubject') === 'Hello {{firstName}} from the test', `${tag}: the email editor shows the saved subject`, await page.inputValue('#tplSubject'));
+    ok(await settle(() => page.inputValue('#tplSubject'), 'Hello {{firstName}} from the test') === 'Hello {{firstName}} from the test', `${tag}: the email editor shows the saved subject`, await page.inputValue('#tplSubject'));
     ok(await page.inputValue('#tplBody') === 'Body line one\nBody line two', `${tag}: and the saved body`, await page.inputValue('#tplBody'));
     ok(await page.inputValue('#tplName') === 'Main email', `${tag}: under its name`, await page.inputValue('#tplName'));
-    const opts = await texts(page, '#tplPreset option');
-    ok(JSON.stringify(opts) === JSON.stringify(['Main email — default', 'Houston AEs']), `${tag}: the saved templates are offered`, opts);
-    ok(await text(page, '#pvSubject') === 'Hello Jordan from the test', `${tag}: the preview fills in a sample name`, await text(page, '#pvSubject'));
+    const opts = await settle(() => texts(page, '#tplPreset option'), ['Main email — default', 'Houston AEs']);
+    ok(same(opts, ['Main email — default', 'Houston AEs']), `${tag}: the saved templates are offered`, opts);
+    ok(await waitText(page, '#pvSubject', 'Hello Jordan from the test'), `${tag}: the preview fills in a sample name`, await text(page, '#pvSubject'));
     ok(/Body line one/.test(await text(page, '#pvBody')) && /https:\/\/example\.com\/book/.test(await text(page, '#pvBody')), `${tag}: the preview has the body and the booking link`, await text(page, '#pvBody'));
     ok(await page.inputValue('#fuSubject') === 'Re: {{originalSubject}} (test)' && await page.inputValue('#fuBody') === 'Following up from the test', `${tag}: the follow-up editor shows the saved follow-up`);
     ok(await page.inputValue('#txBody') === 'Hi {{firstName}}, a test text.', `${tag}: the text editor shows the saved text`, await page.inputValue('#txBody'));
     ok(await page.inputValue('#setCalendlyUrl') === 'https://example.com/book' && await page.inputValue('#setFromName') === 'Test Sender', `${tag}: the settings form shows saved settings`);
 
     // The attachment: the built-in flyer, with its thumbnail.
-    ok(JSON.stringify(await texts(page, '#attachList .attach-name')) === JSON.stringify(['Account Executive.png']), `${tag}: the attachment is listed`, await texts(page, '#attachList .attach-name'));
+    ok(same(await settle(() => texts(page, '#attachList .attach-name'), ['Account Executive.png']), ['Account Executive.png']), `${tag}: the attachment is listed`, await texts(page, '#attachList .attach-name'));
     ok(await waitIn(page, () => { const i = document.querySelector('#attachList .attach-thumb img'); return i && i.getAttribute('src').startsWith('data:image/png;base64,'); }), `${tag}: with a thumbnail of the image`);
     ok(/Account Executive\.png/.test(await text(page, '#pvAttachments')), `${tag}: the preview says it goes with the email`, await text(page, '#pvAttachments'));
 
@@ -103,7 +103,7 @@ const toastSaid = (page, re) => waitIn(page, (src) => [...document.querySelector
     await page.waitForSelector('#moreSheet:not([hidden])');
     await page.click('#moreSheetButtons [data-more="settings"]');
     await page.waitForSelector('#view-settings.active');
-    ok(await page.inputValue('#tplBody') === 'New body from the browser for {{firstName}}', `${tag}: the email editor shows what was saved`, await page.inputValue('#tplBody'));
+    ok(await settle(() => page.inputValue('#tplBody'), 'New body from the browser for {{firstName}}') === 'New body from the browser for {{firstName}}', `${tag}: the email editor shows what was saved`, await page.inputValue('#tplBody'));
     ok(await page.inputValue('#fuBody') === 'A second note from the browser', `${tag}: the follow-up too`);
     ok(await page.inputValue('#txBody') === 'Hi {{firstName}}, texting from the browser.', `${tag}: and the text`);
     ok(await page.inputValue('#setCalendlyUrl') === 'https://example.com/book-again', `${tag}: and the settings`);

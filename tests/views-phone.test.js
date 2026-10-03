@@ -2,16 +2,21 @@
 // each tab goes, the More sheet, Inbox and Hiring each going back to the one
 // of their pair last used, the page living in the address bar (Back goes back
 // a page, a reload stays put), pulling the page down to refresh, a device
-// coming back online asking again, and the Offline marker. The laptop's
-// sidebar is checked for the same pages.
+// coming back online asking again, and the Offline marker. A conversation is
+// a screen of its own in the history: Back, or tapping the tab you are on,
+// closes it and stays on the page. The laptop's sidebar is checked for the
+// same pages.
 const { startApp, launch, ok, done, crash, ago } = require('./helpers');
-const { stubEverything, open, ready, text, texts, waitIn, waitText, poke, person } = require('./views-helpers');
+const { stubEverything, open, ready, text, texts, waitIn, waitText, settle, same, poke, person } = require('./views-helpers');
 
 (async () => {
   const s = await startApp({ offset: 152 });
   const rec = stubEverything();
   await s.store.update((d) => {
     d.candidates = Array.from({ length: 40 }, (_, i) => person(`p${i}`, `Phone Person${i}`, { addedAt: ago(5000 - i) }));
+    // One of them has a text conversation.
+    Object.assign(d.candidates[0], { phone: '(617) 555-0270', lastTextedAt: ago(90), textStatus: 'replied',
+      textThread: [{ dir: 'out', ts: ago(90), text: 'Hi, worth a call?' }, { dir: 'in', ts: ago(80), text: 'Maybe later' }] });
   });
   const browser = await launch();
 
@@ -33,29 +38,29 @@ const { stubEverything, open, ready, text, texts, waitIn, waitText, poke, person
     await tap('.nav-item[data-view="candidates"]', 'candidates', 'People');
     ok(await waitText(page, '#candCount', '40 candidates'), `${tag}: People is the candidate list`, await text(page, '#candCount'));
     await tap('.nav-group[data-group="inbox"]', 'template', 'Inbox');
-    const inboxSwitch = await texts(page, '#view-template .group-tab');
-    ok(JSON.stringify(inboxSwitch) === JSON.stringify(['Email', 'Texts']), `${tag}: Inbox switches between Email and Texts`, inboxSwitch);
-    ok(await text(page, '#view-template .group-title') === 'Inbox', `${tag}: under the title Inbox`, await text(page, '#view-template .group-title'));
+    const inboxSwitch = await settle(() => texts(page, '#view-template .group-tab'), ['Email', 'Texts']);
+    ok(same(inboxSwitch, ['Email', 'Texts']), `${tag}: Inbox switches between Email and Texts`, inboxSwitch);
+    ok(await waitText(page, '#view-template .group-title', 'Inbox'), `${tag}: under the title Inbox`, await text(page, '#view-template .group-title'));
     await page.click('#view-template .group-tab[data-goto="texting"]');
     ok(await waitIn(page, () => Boolean(document.querySelector('#view-texting.active'))) && JSON.stringify(await lit()) === '["Inbox"]', `${tag}: Texts is still the Inbox tab`, await lit());
     await tap('.nav-group[data-group="hiring"]', 'salesiq', 'Hiring');
-    const hiringSwitch = await texts(page, '#view-salesiq .group-tab');
-    ok(JSON.stringify(hiringSwitch) === JSON.stringify(['Sales IQ', 'Onboarding docs']), `${tag}: Hiring switches between Sales IQ and Onboarding docs`, hiringSwitch);
+    const hiringSwitch = await settle(() => texts(page, '#view-salesiq .group-tab'), ['Sales IQ', 'Onboarding docs']);
+    ok(same(hiringSwitch, ['Sales IQ', 'Onboarding docs']), `${tag}: Hiring switches between Sales IQ and Onboarding docs`, hiringSwitch);
     await tap('.nav-item[data-view="dashboard"]', 'dashboard', 'Home');
     await tap('.nav-group[data-group="inbox"]', 'texting', 'Inbox');
 
     // More: the pages with no tab of their own.
     await page.click('#navMore');
     await page.waitForSelector('#moreSheet:not([hidden])');
-    const more = await texts(page, '#moreSheetButtons .more-label');
-    ok(JSON.stringify(more) === JSON.stringify(['Import', 'Settings']), `${tag}: More lists Import and Settings`, more);
+    const more = await settle(() => texts(page, '#moreSheetButtons .more-label'), ['Import', 'Settings']);
+    ok(same(more, ['Import', 'Settings']), `${tag}: More lists Import and Settings`, more);
     await page.click('#moreSheetButtons [data-more="settings"]');
     ok(await waitIn(page, () => Boolean(document.querySelector('#view-settings.active'))), `${tag}: a page from More opens`);
     ok(await page.isHidden('#moreSheet'), `${tag}: and the sheet goes away`);
-    ok(JSON.stringify(await lit()) === '["More"]', `${tag}: More is lit while on one of its pages`, await lit());
+    ok(same(await settle(lit, ['More']), ['More']), `${tag}: More is lit while on one of its pages`, await lit());
     await page.click('#navMore');
     await page.waitForSelector('#moreSheet:not([hidden])');
-    ok(await page.evaluate(() => document.querySelector('#moreSheetButtons [data-more="settings"]').classList.contains('is-current')), `${tag}: the sheet marks the page you are on`);
+    ok(await waitIn(page, () => document.querySelector('#moreSheetButtons [data-more="settings"]').classList.contains('is-current')), `${tag}: the sheet marks the page you are on`);
     await page.click('#moreSheetButtons [data-more="import"]');
     ok(await waitIn(page, () => Boolean(document.querySelector('#view-import.active'))), `${tag}: Import from More`);
 
@@ -69,6 +74,23 @@ const { stubEverything, open, ready, text, texts, waitIn, waitText, poke, person
     await ready(page);
     ok(await waitIn(page, () => Boolean(document.querySelector('#view-texting.active'))), `${tag}: a reload stays on the page`, await active());
 
+    // A conversation is its own screen: Back closes it and stays on Texting.
+    const threadOpen = () => page.evaluate(() => document.querySelector('#view-texting .messenger').classList.contains('thread-open'));
+    await page.waitForSelector('#convList [data-conv="p0"]');
+    await page.click('#convList [data-conv="p0"]');
+    ok(await waitIn(page, () => document.querySelector('#view-texting .messenger').classList.contains('thread-open')), `${tag}: a conversation opens as its own screen`);
+    ok(await waitText(page, '#threadBody', /Maybe later/), `${tag}: with its messages`, await text(page, '#threadBody'));
+    await page.goBack();
+    ok(await waitIn(page, () => !document.querySelector('#view-texting .messenger').classList.contains('thread-open') && Boolean(document.querySelector('#view-texting.active'))),
+      `${tag}: Back closes the conversation and stays on Texting`, [await active(), await threadOpen()]);
+    // Tapping the tab you are on closes an open conversation first.
+    await page.click('#convList [data-conv="p0"]');
+    await waitIn(page, () => document.querySelector('#view-texting .messenger').classList.contains('thread-open'));
+    await page.click('.nav-group[data-group="inbox"]');
+    ok(await waitIn(page, () => !document.querySelector('#view-texting .messenger').classList.contains('thread-open') && Boolean(document.querySelector('#view-texting.active'))),
+      `${tag}: tapping the Inbox tab from inside a conversation goes back to the list`, [await active(), await threadOpen()]);
+    ok(JSON.stringify(await lit()) === '["Inbox"]', `${tag}: still on the Inbox tab`, await lit());
+
     // Tapping the tab you are on goes back to the top.
     await page.click('.nav-item[data-view="candidates"]');
     await page.waitForSelector('#view-candidates.active');
@@ -81,9 +103,10 @@ const { stubEverything, open, ready, text, texts, waitIn, waitText, poke, person
     // Pull down to refresh.
     await page.click('.nav-item[data-view="dashboard"]');
     await page.waitForSelector('#view-dashboard.active');
-    ok(await text(page, '#statTotal') === '40', `${tag}: 40 on the Dashboard`, await text(page, '#statTotal'));
+    ok(await waitText(page, '#statTotal', '40'), `${tag}: 40 on the Dashboard`, await text(page, '#statTotal'));
     await s.store.update((d) => { d.candidates.push(person('pnew', 'Pulled Person')); });
-    const asked = page.waitForRequest((r) => r.url().endsWith('/api/state'), { timeout: 8000 }).catch(() => null);
+    // Any request for the state counts as asking again, however it is put.
+    const asked = page.waitForRequest((r) => r.method() === 'GET' && new URL(r.url()).pathname.startsWith('/api/state'), { timeout: 8000 }).catch(() => null);
     const cdp = await ctx.newCDPSession(page);
     const x = 195;
     const y0 = 260;
@@ -117,8 +140,9 @@ const { stubEverything, open, ready, text, texts, waitIn, waitText, poke, person
   {
     const tag = 'laptop';
     const { ctx, page, errors } = await open(browser, s);
-    const side = await page.evaluate(() => [...document.querySelectorAll('.nav > .nav-item')].filter((t) => t.getClientRects().length).map((t) => t.querySelector('.nav-label').textContent.trim()));
-    ok(JSON.stringify(side) === JSON.stringify(['Dashboard', 'Candidates', 'Import', 'Email', 'Texting', 'Sales IQ', 'Onboarding docs', 'Settings']), `${tag}: the sidebar lists every page`, side);
+    const SIDE = ['Dashboard', 'Candidates', 'Import', 'Email', 'Texting', 'Sales IQ', 'Onboarding docs', 'Settings'];
+    const side = await settle(() => page.evaluate(() => [...document.querySelectorAll('.nav > .nav-item')].filter((t) => t.getClientRects().length).map((t) => t.querySelector('.nav-label').textContent.trim())), SIDE);
+    ok(same(side, SIDE), `${tag}: the sidebar lists every page`, side);
     for (const v of ['candidates', 'import', 'template', 'texting', 'salesiq', 'onboarding', 'settings', 'dashboard']) {
       await page.click(`.nav-item[data-view="${v}"]`);
       ok(await waitIn(page, (x) => Boolean(document.querySelector(`#view-${x}.active`)) && document.querySelector(`.nav-item[data-view="${x}"]`).classList.contains('active'), v), `${tag}: ${v} opens from the sidebar`);

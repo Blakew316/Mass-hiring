@@ -3,9 +3,11 @@
 // the Sales IQ and Onboarding docs trackers, the Candidate updates feed (its
 // folding, its channel chips and where its rows lead), the tiles' detail
 // lists (who is due a follow-up), and the follow-up counts the Email page
-// and Settings show — on a laptop and on a phone.
+// and Settings show — on a laptop and on a phone. Also: a status changed from
+// a tile's list moves every number, one the server refuses moves none, and a
+// poll that brings a change (or none) is drawn.
 const { startApp, launch, ok, done, crash, ago, R } = require('./helpers');
-const { stubEverything, open, text, texts, cells, waitIn, waitText, until, poke, go, state, byId, person } = require('./views-helpers');
+const { stubEverything, open, text, texts, cells, waitIn, waitText, settle, same, until, poke, go, stored, byId, person } = require('./views-helpers');
 
 const DAY = 1440;
 const soon = (days) => new Date(Date.now() + days * 86400000).toISOString();
@@ -91,60 +93,56 @@ const funnelRows = (page, sel) => page.evaluate((q) => [...document.querySelecto
     await s.store.update((d) => { d.candidates = list(); d.events = events(); });
     const { ctx, page, errors } = await open(browser, s, { phone });
 
+    // Each number is read once the page shows it (or after 5 s, to report
+    // what it shows instead), so a page that draws a moment later still passes.
+    const see = async (sel, want, msg) => { const got = await settle(() => text(page, sel), want); ok(got === want, `${tag}: ${msg} (${sel} reads "${want}")`, got); return got; };
+    const seeAll = async (get, want, msg) => { const got = await settle(get, want); ok(same(got, want), `${tag}: ${msg}`, got); return got; };
+
     // ---- the four tiles ----
-    ok(await text(page, '#statTotal') === '15', `${tag}: Candidates tile counts everyone`, await text(page, '#statTotal'));
-    ok(await text(page, '#statEmailed') === '13', `${tag}: Contacted counts anyone emailed or texted`, await text(page, '#statEmailed'));
-    ok(await text(page, '#statContactedSplit') === '8 emailed · 5 texted', `${tag}: Contacted splits into emailed and texted`, await text(page, '#statContactedSplit'));
-    ok(await text(page, '#statReplied') === '5', `${tag}: Replied counts a real reply on either channel (a bounce is not one)`, await text(page, '#statReplied'));
-    ok(await text(page, '#statRepliedSplit') === '2 by text', `${tag}: Replied says how many by text`, await text(page, '#statRepliedSplit'));
-    ok(await text(page, '#statBooked') === '2', `${tag}: Interviews booked without Calendly is everyone marked Booked`, await text(page, '#statBooked'));
-    ok(await text(page, '#statBookedSplit') === '', `${tag}: and says nothing under it`, await text(page, '#statBookedSplit'));
+    await see('#statTotal', '15', 'Candidates tile counts everyone');
+    await see('#statEmailed', '13', 'Contacted counts anyone emailed or texted');
+    await see('#statContactedSplit', '8 emailed · 5 texted', 'Contacted splits into emailed and texted');
+    await see('#statReplied', '5', 'Replied counts a real reply on either channel (a bounce is not one)');
+    await see('#statRepliedSplit', '2 by text', 'Replied says how many by text');
+    await see('#statBooked', '2', 'Interviews booked without Calendly is everyone marked Booked');
+    await see('#statBookedSplit', '', 'and says nothing under it');
 
     // ---- pipeline ----
-    const pipe = await texts(page, '#pipeline .pipe-row');
-    ok(JSON.stringify(pipe) === JSON.stringify(['Not contacted 6', 'Emailed 4', 'Replied 1', 'Booked 2', 'Not interested 1', 'Bounced 1']),
-      `${tag}: pipeline counts each status`, pipe);
+    await seeAll(() => texts(page, '#pipeline .pipe-row'), ['Not contacted 6', 'Emailed 4', 'Replied 1', 'Booked 2', 'Not interested 1', 'Bounced 1'], 'pipeline counts each status');
 
     // ---- channels: every row a subset of the one above, as a share of Sent ----
-    const email = await funnelRows(page, '#emailFunnel');
-    ok(JSON.stringify(email) === JSON.stringify(['Sent 8', 'Opened 5 63%', 'Replied 3 38%', 'Booked 1 13%', 'Bounced 1 13%']),
-      `${tag}: email funnel (booked counts only the emailed booking)`, email);
-    const textF = await funnelRows(page, '#textFunnel');
-    ok(JSON.stringify(textF) === JSON.stringify(['Sent 5', 'Delivered 4 80%', 'Read 3 60%', 'Replied 2 40%', 'No iMessage 1 20%']),
-      `${tag}: texting funnel (No iMessage counts inside Sent)`, textF);
-    ok(await text(page, '#chTextRelay') === 'Mac offline', `${tag}: the relay chip says the Mac is offline`, await text(page, '#chTextRelay'));
-    const today = await cells(page, '#textToday .today-cell');
-    ok(today.length === 4 && today[3] === '2 Replied to a text' && today[2] === '0 Waiting in the queue', `${tag}: Texting today`, today);
+    await seeAll(() => funnelRows(page, '#emailFunnel'), ['Sent 8', 'Opened 5 63%', 'Replied 3 38%', 'Booked 1 13%', 'Bounced 1 13%'],
+      'email funnel (booked counts only the emailed booking)');
+    await seeAll(() => funnelRows(page, '#textFunnel'), ['Sent 5', 'Delivered 4 80%', 'Read 3 60%', 'Replied 2 40%', 'No iMessage 1 20%'],
+      'texting funnel (No iMessage counts inside Sent)');
+    await see('#chTextRelay', 'Mac offline', 'the relay chip says the Mac is offline');
+    const today = await settle(async () => { const c = await cells(page, '#textToday .today-cell'); return [c.length, c[2], c[3]]; }, [4, '0 Waiting in the queue', '2 Replied to a text']);
+    ok(same(today, [4, '0 Waiting in the queue', '2 Replied to a text']), `${tag}: Texting today`, today);
     ok(/offline/.test(await text(page, '#textTodayNote')), `${tag}: Texting today says nothing sends while the Mac is offline`, await text(page, '#textTodayNote'));
 
     // ---- trackers ----
-    const iq = await cells(page, '#iqTrackerGrid .today-cell');
-    ok(JSON.stringify(iq) === JSON.stringify(['5 On Sales IQ', '2 Not sent', '1 Awaiting results', '2 Completed']), `${tag}: Sales IQ tracker`, iq);
-    const tiers = await texts(page, '#iqTrackerTiers .tier-pill');
-    ok(JSON.stringify(tiers) === JSON.stringify(['Elite 1', 'Strong 1']), `${tag}: Sales IQ tiers list only the tiers someone is in`, tiers);
-    const onb = await cells(page, '#onbTrackerGrid .today-cell');
-    ok(JSON.stringify(onb) === JSON.stringify(['3 On the pipeline', '1 Packet not sent', '1 Awaiting signature', '1 Signed']), `${tag}: Onboarding docs tracker (signed is not also awaiting)`, onb);
+    await seeAll(() => cells(page, '#iqTrackerGrid .today-cell'), ['5 On Sales IQ', '2 Not sent', '1 Awaiting results', '2 Completed'], 'Sales IQ tracker');
+    await seeAll(() => texts(page, '#iqTrackerTiers .tier-pill'), ['Elite 1', 'Strong 1'], 'Sales IQ tiers list only the tiers someone is in');
+    await seeAll(() => cells(page, '#onbTrackerGrid .today-cell'), ['3 On the pipeline', '1 Packet not sent', '1 Awaiting signature', '1 Signed'], 'Onboarding docs tracker (signed is not also awaiting)');
 
     // ---- Candidate updates ----
-    const feed = await texts(page, '#activityList .act-msg');
-    ok(JSON.stringify(feed) === JSON.stringify([
+    const FEED = [
       'Eli Fresh and 2 others opened your email.',
       'Ivy Booked booked an interview.',
       'Nia Reader read your text.',
       'Lou Texter replied to your text: “Sure, call me”',
       'Hal Replied replied: “Yes, I am interested. Call me Tuesday.”',
-    ]), `${tag}: the feed is newest first and a run of opens is one line`, feed);
-    const chips = await texts(page, '#feedFilters .feed-chip');
-    ok(JSON.stringify(chips) === JSON.stringify(['All7', 'Email4', 'Texting2']), `${tag}: feed chips count each channel's own updates`, chips);
+    ];
+    const feedNow = () => texts(page, '#activityList .act-msg');
+    await seeAll(feedNow, FEED, 'the feed is newest first and a run of opens is one line');
+    await seeAll(() => texts(page, '#feedFilters .feed-chip'), ['All7', 'Email4', 'Texting2'], "feed chips count each channel's own updates");
     await page.click('#feedFilters [data-feed="text"]');
-    const textOnly = await texts(page, '#activityList .act-msg');
-    ok(JSON.stringify(textOnly) === JSON.stringify(['Ivy Booked booked an interview.', 'Nia Reader read your text.', 'Lou Texter replied to your text: “Sure, call me”']),
-      `${tag}: the Texting chip shows texting news and bookings`, textOnly);
+    await seeAll(feedNow, ['Ivy Booked booked an interview.', 'Nia Reader read your text.', 'Lou Texter replied to your text: “Sure, call me”'],
+      'the Texting chip shows texting news and bookings');
     await page.click('#feedFilters [data-feed="email"]');
-    const emailOnly = await texts(page, '#activityList .act-msg');
-    ok(emailOnly.length === 3 && emailOnly[0].startsWith('Eli Fresh and 2 others') && emailOnly[2].startsWith('Hal Replied replied'), `${tag}: the Email chip shows email news and bookings`, emailOnly);
+    await seeAll(feedNow, [FEED[0], FEED[1], FEED[4]], 'the Email chip shows email news and bookings');
     await page.click('#feedFilters [data-feed="all"]');
-    ok((await texts(page, '#activityList .act-msg')).length === 5, `${tag}: All shows everything again`);
+    await seeAll(feedNow, FEED, 'All shows everything again');
 
     // A reply in the feed opens that conversation.
     await page.click('#activityList [data-feed-to="email"]');
@@ -159,9 +157,8 @@ const funnelRows = (page, sel) => page.evaluate((q) => [...document.querySelecto
     // ---- the tiles open their lists ----
     await page.click('.stat-card[data-tile="emailed"]');
     await page.waitForSelector('#tileModal:not([hidden])');
-    ok(await text(page, '#tileTitle') === 'Emailed · awaiting a reply (4)', `${tag}: Contacted opens everyone emailed and waiting`, await text(page, '#tileTitle'));
-    const waiting = await texts(page, '#tileList .tile-name');
-    ok(JSON.stringify(waiting) === JSON.stringify(['Eli Fresh', 'Gus Due', 'Dee Due', 'Fay Maxed']), `${tag}: most recently emailed first`, waiting);
+    ok(await waitText(page, '#tileTitle', 'Emailed · awaiting a reply (4)'), `${tag}: Contacted opens everyone emailed and waiting`, await text(page, '#tileTitle'));
+    await seeAll(() => texts(page, '#tileList .tile-name'), ['Eli Fresh', 'Gus Due', 'Dee Due', 'Fay Maxed'], 'most recently emailed first');
     const dueRows = await page.evaluate(() => [...document.querySelectorAll('#tileList .tile-row')].filter((r) => r.querySelector('.due-tag')).map((r) => r.querySelector('.tile-name').textContent.trim()));
     ok(JSON.stringify(dueRows) === JSON.stringify(['Gus Due', 'Dee Due']), `${tag}: due a follow-up: emailed 3+ days ago and under the limit`, dueRows);
     ok(/Follow up with 2/.test(await text(page, '#tileActions')), `${tag}: and offers to follow up with exactly them`, await text(page, '#tileActions'));
@@ -170,16 +167,15 @@ const funnelRows = (page, sel) => page.evaluate((q) => [...document.querySelecto
 
     await page.click('.stat-card[data-tile="replied"]');
     await page.waitForSelector('#tileModal:not([hidden])');
-    ok(await text(page, '#tileTitle') === 'Replied (1)', `${tag}: Replied opens the people at Replied`, await text(page, '#tileTitle'));
+    ok(await waitText(page, '#tileTitle', 'Replied (1)'), `${tag}: Replied opens the people at Replied`, await text(page, '#tileTitle'));
     ok(await text(page, '#tileList .reply-quote') === 'Yes, I am interested. Call me Tuesday.', `${tag}: with what they wrote`, await text(page, '#tileList .reply-quote'));
     await page.keyboard.press('Escape');
     await page.waitForSelector('#tileModal', { state: 'hidden' });
 
     await page.click('.stat-card[data-tile="booked"]');
     await page.waitForSelector('#tileModal:not([hidden])');
-    ok(await text(page, '#tileTitle') === 'Interviews booked (2)', `${tag}: Interviews booked opens everyone booked`, await text(page, '#tileTitle'));
-    const booked = await texts(page, '#tileList .tile-name');
-    ok(JSON.stringify(booked) === JSON.stringify(['Ivy Booked', 'Oz Booker']), `${tag}: both of them`, booked);
+    ok(await waitText(page, '#tileTitle', 'Interviews booked (2)'), `${tag}: Interviews booked opens everyone booked`, await text(page, '#tileTitle'));
+    await seeAll(() => texts(page, '#tileList .tile-name'), ['Ivy Booked', 'Oz Booker'], 'both of them');
     await page.keyboard.press('Escape');
     await page.waitForSelector('#tileModal', { state: 'hidden' });
 
@@ -191,38 +187,34 @@ const funnelRows = (page, sel) => page.evaluate((q) => [...document.querySelecto
     await go(page, 'dashboard');
 
     // A tracker number opens Candidates filtered to exactly those people.
+    const listed = () => page.evaluate(() => [...document.querySelectorAll('#candidateRows tr[data-id]')].map((r) => r.dataset.id).sort());
     await page.click('#iqTrackerGrid .tracker-cell:nth-child(4)');
     ok(await waitText(page, '#candCount', '2 of 15'), `${tag}: Sales IQ Completed opens Candidates filtered to them`, await text(page, '#candCount'));
-    const done2 = await page.evaluate(() => [...document.querySelectorAll('#candidateRows tr[data-id]')].map((r) => r.dataset.id).sort());
-    ok(JSON.stringify(done2) === JSON.stringify(['d08', 'd09']), `${tag}: Hal and Ivy`, done2);
+    await seeAll(listed, ['d08', 'd09'], 'Hal and Ivy');
     await go(page, 'dashboard');
     await page.click('#onbTrackerGrid .tracker-cell:nth-child(3)');
     ok(await waitText(page, '#candCount', '1 of 15'), `${tag}: Onboarding Awaiting signature opens Candidates filtered`, await text(page, '#candCount'));
-    const awaiting = await page.evaluate(() => [...document.querySelectorAll('#candidateRows tr[data-id]')].map((r) => r.dataset.id));
-    ok(JSON.stringify(awaiting) === JSON.stringify(['d15']), `${tag}: just Oz`, awaiting);
+    await seeAll(listed, ['d15'], 'just Oz');
 
     // ---- the follow-up and send buttons elsewhere ----
     await go(page, 'template');
-    ok(await text(page, '#emailFollowUpBtn') === 'Follow up with 2', `${tag}: Email page offers the 2 follow-ups`, await text(page, '#emailFollowUpBtn'));
-    ok(await text(page, '#emailAllBtn') === 'Email all 6 not contacted', `${tag}: and the 6 never contacted`, await text(page, '#emailAllBtn'));
+    await see('#emailFollowUpBtn', 'Follow up with 2', 'Email page offers the 2 follow-ups');
+    await see('#emailAllBtn', 'Email all 6 not contacted', 'and the 6 never contacted');
     await go(page, 'settings');
-    ok(await text(page, '#followUpDueBadge') === '2 due', `${tag}: Settings says 2 are due`, await text(page, '#followUpDueBadge'));
+    await see('#followUpDueBadge', '2 due', 'Settings says 2 are due');
     await go(page, 'dashboard');
 
     // ---- a status changed from a tile's list moves every number ----
     await page.click('.stat-card[data-tile="emailed"]');
     await page.waitForSelector('#tileModal:not([hidden])');
-    const changed = page.waitForResponse((r) => r.url().endsWith('/api/candidates/d04') && r.request().method() === 'PATCH', { timeout: 8000 }).catch(() => null);
     await page.selectOption('#tileList .tile-status[data-id="d04"]', 'replied');
-    ok(Boolean(await changed), `${tag}: changing a status in the list saves it`);
-    ok(await until(async () => byId(await state(s), 'd04').status === 'replied'), `${tag}: the server has the new status`);
+    ok(await until(async () => byId(await stored(s), 'd04').status === 'replied'), `${tag}: changing a status in the list saves it on the server`);
     await page.keyboard.press('Escape');
     await page.waitForSelector('#tileModal', { state: 'hidden' });
     ok(await waitText(page, '#statReplied', '6'), `${tag}: Replied goes up`, await text(page, '#statReplied'));
-    ok(await waitIn(page, () => document.querySelector('#pipeline').textContent.replace(/\s+/g, ' ').includes('Emailed 3')), `${tag}: the pipeline moves`, await texts(page, '#pipeline .pipe-row'));
-    ok((await texts(page, '#pipeline .pipe-row'))[2] === 'Replied 2', `${tag}: Replied 2 in the pipeline`, await texts(page, '#pipeline .pipe-row'));
+    await seeAll(() => texts(page, '#pipeline .pipe-row'), ['Not contacted 6', 'Emailed 3', 'Replied 2', 'Booked 2', 'Not interested 1', 'Bounced 1'], 'the pipeline moves: one from Emailed to Replied');
     await go(page, 'template');
-    ok(await text(page, '#emailFollowUpBtn') === 'Follow up with 1', `${tag}: and someone who replied is no longer due a follow-up`, await text(page, '#emailFollowUpBtn'));
+    ok(await waitText(page, '#emailFollowUpBtn', 'Follow up with 1'), `${tag}: and someone who replied is no longer due a follow-up`, await text(page, '#emailFollowUpBtn'));
     await go(page, 'dashboard');
 
     // ---- a poll that brings a booking ----
@@ -234,7 +226,39 @@ const funnelRows = (page, sel) => page.evaluate((q) => [...document.querySelecto
     await poke(page);
     ok(await waitText(page, '#statBooked', '3'), `${tag}: a booking that arrives shows on the next look`, await text(page, '#statBooked'));
     ok(await waitIn(page, () => (document.querySelector('#activityList .act-msg') || {}).textContent === 'Ava Newman booked an interview.'), `${tag}: at the top of the feed`, (await texts(page, '#activityList .act-msg'))[0]);
-    ok((await texts(page, '#pipeline .pipe-row'))[0] === 'Not contacted 5', `${tag}: and out of Not contacted`, await texts(page, '#pipeline .pipe-row'));
+    await seeAll(() => texts(page, '#pipeline .pipe-row'), ['Not contacted 5', 'Emailed 3', 'Replied 2', 'Booked 3', 'Not interested 1', 'Bounced 1'], 'and out of Not contacted into Booked');
+
+    // ---- a poll that brings nothing new leaves everything as it was ----
+    const before = { tiles: await texts(page, '.stat-card .stat-value'), pipe: await texts(page, '#pipeline .pipe-row'), feed: await feedNow() };
+    await poke(page);
+    await poke(page, 'visibilitychange');
+    const after = { tiles: await texts(page, '.stat-card .stat-value'), pipe: await texts(page, '#pipeline .pipe-row'), feed: await feedNow() };
+    ok(before.tiles.length === 4 && same(before, after), `${tag}: a look that finds nothing new leaves every number and the feed on screen`, { before, after });
+    ok(!(await texts(page, '.toast')).some((t) => /Couldn|fail/i.test(t)), `${tag}: and says nothing went wrong`, await texts(page, '.toast'));
+
+    // ---- a status change the server refuses moves nothing ----
+    // Gus was removed on another device a moment ago; this page still lists
+    // him. Marking him Replied cannot be saved, the page says so, and the
+    // Replied tile does not count him.
+    await page.click('.stat-card[data-tile="emailed"]');
+    await page.waitForSelector('#tileModal:not([hidden])');
+    await s.store.update((d) => { s.store.removeCandidate(d, 'd07'); });
+    await page.selectOption('#tileList .tile-status[data-id="d07"]', 'replied');
+    ok(await waitIn(page, () => [...document.querySelectorAll('.toast')].some((t) => /not found/i.test(t.textContent))), `${tag}: a change the server refuses says so`, await texts(page, '.toast'));
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#tileModal', { state: 'hidden' });
+    await page.waitForTimeout(300);
+    ok(await text(page, '#statReplied') === '6', `${tag}: and does not count as a reply`, await text(page, '#statReplied'));
+    ok(!(await stored(s)).candidates.some((c) => c.id === 'd07'), `${tag}: nor bring him back on the server`);
+    // ...and the next look takes him off every number.
+    await poke(page);
+    ok(await waitText(page, '#statTotal', '14'), `${tag}: someone removed elsewhere leaves the Candidates count on the next look`, await text(page, '#statTotal'));
+    await seeAll(() => texts(page, '#pipeline .pipe-row'), ['Not contacted 5', 'Emailed 2', 'Replied 2', 'Booked 3', 'Not interested 1', 'Bounced 1'], 'and the pipeline');
+    await go(page, 'template');
+    ok(await waitText(page, '#emailFollowUpBtn', 'No follow-ups due') && await page.isDisabled('#emailFollowUpBtn'), `${tag}: and nobody is left due a follow-up`, await text(page, '#emailFollowUpBtn'));
+    await go(page, 'settings');
+    await see('#followUpDueBadge', 'nobody due', 'Settings says nobody is due');
+    await go(page, 'dashboard');
 
     ok(errors.length === 0, `${tag}: no page errors`, errors);
     await ctx.close();

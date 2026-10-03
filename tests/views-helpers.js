@@ -64,12 +64,39 @@ async function open(browser, s, { phone = false, at = '/', cookie = s.cookie, si
   await ctx.route((u) => !u.href.startsWith(s.base), (r) => r.abort());
   if (init) await ctx.addInitScript(init);
   const page = await ctx.newPage();
+  track(page);
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('dialog', (d) => d.accept().catch(() => {}));
   await page.goto(s.base + at, { waitUntil: 'domcontentloaded' });
   if (signedIn) await ready(page);
   return { ctx, page, errors };
+}
+
+// Requests the page has asked the app for and not had an answer to yet, so a
+// test can wait for the page to finish talking to the server without knowing
+// which requests a change makes (see quiet()).
+const inflight = new WeakMap();
+function track(page) {
+  const n = { count: 0, last: Date.now() };
+  inflight.set(page, n);
+  const mine = (r) => /\/api\//.test(r.url());
+  page.on('request', (r) => { if (mine(r)) { n.count++; n.last = Date.now(); } });
+  const end = (r) => { if (mine(r)) { n.count = Math.max(0, n.count - 1); n.last = Date.now(); } };
+  page.on('requestfinished', end);
+  page.on('requestfailed', end);
+}
+// Wait until the page has had no request to the app outstanding for `still`
+// ms: whatever a click set off has reached the server and been answered.
+async function quiet(page, { still = 300, timeout = 8000 } = {}) {
+  const n = inflight.get(page);
+  if (!n) return false;
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    if (n.count === 0 && Date.now() - n.last >= still) return true;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return false;
 }
 
 // The app has its state on screen: the header controls are only mounted once
@@ -104,6 +131,21 @@ async function waitText(page, sel, want, timeout = 8000) {
   return got !== null;
 }
 
+// Wait until get() returns `want` (compared as JSON) and return what it last
+// returned, so a check that fails can say what the page showed instead. Reads
+// right after a click or a page load go through this: a page that draws a
+// moment later (a frame, an idle callback) is still drawing the right thing.
+async function settle(get, want, timeout = 5000) {
+  const w = JSON.stringify(want);
+  const end = Date.now() + timeout;
+  for (;;) {
+    const got = await get();
+    if (JSON.stringify(got) === w || Date.now() > end) return got;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
 // Wait on the server side.
 async function until(fn, timeout = 8000, every = 60) {
   const end = Date.now() + timeout;
@@ -117,7 +159,7 @@ async function until(fn, timeout = 8000, every = 60) {
 // What the page does when the device comes back online: it asks again.
 // Resolves once that answer has come back (whatever it was).
 async function poke(page, how = 'online') {
-  const answered = page.waitForResponse((r) => r.url().endsWith('/api/state'), { timeout: 10000 }).catch(() => null);
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname.startsWith('/api/state'), { timeout: 10000 }).catch(() => null);
   await page.evaluate((h) => {
     if (h === 'online') window.dispatchEvent(new Event('online'));
     else document.dispatchEvent(new Event('visibilitychange'));
@@ -134,8 +176,10 @@ async function go(page, view) {
   await page.waitForFunction((v) => document.querySelector(`#view-${v}.active`), view, { timeout: 5000 });
 }
 
-// The JSON the page reads, as the signed-in test sees it.
-async function state(s) { return (await s.json('GET', '/api/state')).body; }
+// What the server has stored for this team (read through the app's own store,
+// in the team the test is signed in to) — not what /api/state happens to send,
+// which a leaner payload may legitimately change.
+async function stored(s) { return s.store.load(); }
 const byId = (st, id) => (st.candidates || []).find((c) => c.id === id);
 
 // A made-up person. Phone numbers are 555 numbers; the 555-01xx block is the
@@ -150,4 +194,4 @@ function person(id, name, extra = {}) {
   };
 }
 
-module.exports = { stubEverything, open, ready, text, texts, cells, waitIn, waitText, until, poke, go, state, byId, person };
+module.exports = { stubEverything, open, ready, quiet, text, texts, cells, waitIn, waitText, settle, same, until, poke, go, stored, byId, person };
