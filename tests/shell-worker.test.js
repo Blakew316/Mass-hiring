@@ -4,9 +4,11 @@
 // touches /api, /auth or /webhooks: those still reach the server as if there
 // were no worker, so the session cookie, the conditional poll's 304, the
 // Google sign-in redirect and the open-tracking pixel all keep working. It
-// never answers for the paperwork portal or the questionnaire. A shell that
-// has been evicted gives the offline page, not a blank one. And a request that
-// fails offline stays failed: nothing replays it once the connection is back.
+// never answers for the paperwork portal or the questionnaire. An app opened
+// with no connection signs in by itself, in the same page, once the
+// connection is back. A shell that has been evicted gives the offline page,
+// not a blank one. And a request that fails offline stays failed: nothing
+// replays it once the connection is back.
 const { startApp, launch, ok, done, crash, ago } = require('./helpers');
 const { QUIET, openShell, frontDoor, precacheList, buildStamp, workerText, cacheContents, until } = require('./shell-helpers');
 
@@ -73,7 +75,16 @@ const LIVE = /^\/(api|auth|webhooks)(\/|$)/;
   fromWorker.length = 0; answeredByWorker.length = 0; responses.length = 0;
   const reloaded = await page.reload({ waitUntil: 'networkidle' });
   ok(reloaded.status() === 200 && reloaded.fromServiceWorker(), 'a page load is answered from the shell cache');
-  ok(['/app.js', '/styles.css', '/icons.js'].every((p) => answeredByWorker.some((u) => path(u) === p)), 'so are the scripts and stylesheets', answeredByWorker.map(path));
+  // Every script and stylesheet index.html loads from the site, whatever
+  // they are called.
+  const html = await (await fetch(`${s.base}/index.html`)).text();
+  const pageFiles = [...html.matchAll(/<(script|link)\b[^>]*>/g)].map((m) => m[0])
+    .filter((t) => /^<script/.test(t) || /\srel="stylesheet"/.test(t))
+    .map((t) => (t.match(/\s(?:src|href)="([^"]*)"/) || [])[1])
+    .filter((ref) => ref && ref.startsWith('/') && !ref.startsWith('//'))
+    .map((ref) => ref.split(/[?#]/)[0]);
+  const fromNetwork = pageFiles.filter((p) => !answeredByWorker.some((u) => path(u) === p));
+  ok(pageFiles.length >= 5 && fromNetwork.length === 0, `so is every script and stylesheet the page loads (${pageFiles.length})`, { fromNetwork, answered: answeredByWorker.map(path) });
   const dash = await page.waitForFunction(() => Boolean(document.querySelector('#view-dashboard.active')) && document.querySelector('#loginScreen').hidden, null, { timeout: 10000 }).then(() => true, () => false);
   ok(dash, 'the app signs in and draws the dashboard under the worker');
 
@@ -161,16 +172,40 @@ const LIVE = /^\/(api|auth|webhooks)(\/|$)/;
   ok(/^failed/.test(offFetch.add), 'a change made offline fails, visibly, to the page that made it', offFetch.add);
   ok(v.errors.length === 0, 'opening offline: no page errors', v.errors);
 
+  // ---------- the connection comes back ----------
+  // The app opened with no connection keeps trying on its own: once the
+  // network is back it signs in and shows the list, in the same page. Today
+  // that is the next retry, ten seconds after the first failure; the wait
+  // allows for the longest retry (thirty).
+  fromWorker.length = 0;
+  const seenAtReturn = door.seen.length;
+  const loadsOffline = v.loads();
+  door.setDown(false);
+  await ctx.setOffline(false);
+  const failuresAtReturn = v.failures.length;
+  const recovered = await page.waitForFunction(() => Boolean(document.querySelector('#view-dashboard.active'))
+    && document.querySelector('#loginScreen').hidden
+    && !document.documentElement.classList.contains('is-offline')
+    && [...document.querySelectorAll('.conn-lost')].every((el) => el.hidden)
+    && document.querySelector('#statTotal').textContent.trim() === '5', null, { timeout: 40000 }).then(() => true, () => false);
+  ok(recovered, 'opened offline, the app signs in by itself once the connection is back, shows the list, and stops saying Offline',
+    await page.evaluate(() => ({ offline: document.documentElement.classList.contains('is-offline'), total: (document.querySelector('#statTotal') || {}).textContent })));
+  ok(v.loads() === loadsOffline, 'without reloading the page', v.loads() - loadsOffline);
+  await page.waitForLoadState('networkidle');
+  ok(v.errors.length === 0, 'coming back online: no page errors', v.errors);
+  ok(v.failures.length === failuresAtReturn, 'and no request to the site failed once it was back', v.failures.slice(failuresAtReturn));
+
   // ---------- evicted ----------
+  door.setDown(true);
+  await ctx.setOffline(true);
   await page.evaluate(async () => { for (const n of await caches.keys()) if (n.startsWith('shell-')) await caches.delete(n); });
   const evicted = await page.reload({ waitUntil: 'load' });
   const offPage = await page.evaluate(() => ({ title: document.title, text: document.body.innerText, button: Boolean([...document.querySelectorAll('button')].find((b) => /try again/i.test(b.innerText))) }));
   ok(evicted && evicted.status() === 503 && /offline/i.test(offPage.title) && /No connection/.test(offPage.text) && offPage.button, 'with the shell evicted and no connection: the offline page, with a way to try again', { status: evicted && evicted.status(), ...offPage });
 
   // ---------- back online ----------
-  fromWorker.length = 0;
+  // What failed while there was no connection was meant to.
   v.failures.splice(failuresBefore);
-  const seenBefore = door.seen.length;
   door.setDown(false);
   await ctx.setOffline(false);
   await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle' }), page.click('text=Try again')]);
@@ -178,8 +213,9 @@ const LIVE = /^\/(api|auth|webhooks)(\/|$)/;
   ok(again && /WPI Outreach/.test(await page.title()), '"Try again" with the connection back opens the app');
   await page.waitForTimeout(1000);
   const db = await s.store.load();
-  ok(!db.candidates.some((c) => c.email === 'tunnel.person@example.com'), 'the change that failed offline was not replayed when the connection came back');
-  ok(!door.seen.slice(seenBefore).some((x) => x.method === 'POST' && /^\/api\/candidates/.test(x.url)), 'nothing sent it again', door.seen.slice(seenBefore).filter((x) => x.method === 'POST'));
+  ok(!db.candidates.some((c) => c.email === 'tunnel.person@example.com'), 'the change that failed offline was not replayed when the connection came back (twice)');
+  const resent = door.seen.slice(seenAtReturn).filter((x) => x.method === 'POST' && /^\/api\/candidates/.test(x.url));
+  ok(resent.length === 0, 'nothing sent it again', resent);
   ok(!fromWorker.some((x) => /^POST /.test(x)), 'the worker sent nothing of its own', fromWorker.filter((x) => /^POST /.test(x)));
   ok(v.failures.filter((f) => !/no-such-/.test(f)).length === 0, 'online, no request to the site failed (but the two addresses that do not exist)', v.failures);
 

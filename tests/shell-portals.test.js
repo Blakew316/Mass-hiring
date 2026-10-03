@@ -5,7 +5,7 @@
 // (questionnaire). The questionnaire keeps its own small service worker,
 // scoped to itself. Making a paperwork link never sends an email.
 const { R, startApp, launch, ok, done, crash } = require('./helpers');
-const { QUIET, openShell } = require('./shell-helpers');
+const { QUIET, openShell, until } = require('./shell-helpers');
 
 const OFFSET = 180;
 const local = (link) => { const u = new URL(link); return u.pathname + u.search; };
@@ -91,10 +91,12 @@ const local = (link) => { const u = new URL(link); return u.pathname + u.search;
       return b && !b.hidden && !b.disabled;
     }, null, { timeout: 10000 }).then(() => true, () => false);
     ok(ready, 'questionnaire, good link: it can be started');
-    const reg = await v.page.waitForFunction(async () => {
+    // Asked from node until it is there: waitForFunction would take the
+    // promise an async check returns as an answer and not wait at all.
+    const reg = await until(() => v.page.evaluate(async () => {
       const r = await navigator.serviceWorker.getRegistration();
       return r && r.active ? { scope: r.scope, script: r.active.scriptURL } : null;
-    }, null, { timeout: 10000 }).then((h) => h.jsonValue(), () => null);
+    }).catch(() => null), { timeout: 10000 });
     ok(reg && reg.scope === `${s.base}/assessment/` && reg.script === `${s.base}/assessment/sw.js`, 'questionnaire, good link: its own worker, scoped to the questionnaire', reg);
     ok(v.errors.length === 0 && v.failures.length === 0, 'questionnaire, good link: no page errors or failed requests', v.errors.concat(v.failures));
     await v.ctx.close();

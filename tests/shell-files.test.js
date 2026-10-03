@@ -8,7 +8,6 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { R, startApp, ok, done, crash } = require('./helpers');
 const {
@@ -45,7 +44,10 @@ function buildInCopy(mutate) {
   // ---------- the precache list ----------
   ok(Array.isArray(listed) && listed.length >= 10, 'the template has a precache list', listed);
   ok(JSON.stringify(precacheList(worker)) === JSON.stringify(listed), 'public/sw.js precaches the same files as the template');
-  for (const p of ['/', '/index.html', '/app.js', '/styles.css', '/mobile.css', '/icons.js', '/manifest.webmanifest', '/assets/logo.png', '/assets/logo-dark.png']) {
+  // The page under both its names, the manifest and both logos. Which scripts
+  // and stylesheets belong is decided below from what index.html loads, so a
+  // renamed or split script is judged by the page, not by a list kept here.
+  for (const p of ['/', '/index.html', '/manifest.webmanifest', '/assets/logo.png', '/assets/logo-dark.png']) {
     ok(listed.includes(p), `the shell includes ${p}`);
   }
   const missing = listed.filter((p) => !fs.existsSync(file(p)));
@@ -53,19 +55,22 @@ function buildInCopy(mutate) {
 
   // ---------- the build stamp ----------
   const stamp = buildStamp(worker);
-  ok(/^[0-9a-f]{10}$/.test(stamp || ''), 'public/sw.js carries a stamped build, not the placeholder', stamp);
-  const hash = crypto.createHash('sha1');
-  for (const p of listed.filter((x) => x !== '/')) hash.update(p).update(fs.readFileSync(file(p)));
-  const expected = hash.digest('hex').slice(0, 10);
-  ok(stamp === expected, 'the build stamp is the hash of the precached files as they are now (run npm run build:sw)', { stamp, expected });
-  ok(/GENERATED FILE/.test(worker) && /const BUILD = '[0-9a-f]{10}'/.test(worker), 'public/sw.js says it is generated');
+  ok(/^[0-9a-f]{6,}$/.test(stamp || ''), 'public/sw.js carries a stamped build, not the placeholder', stamp);
+  ok(/GENERATED FILE/.test(worker), 'public/sw.js says it is generated');
 
   const fresh = buildInCopy();
-  ok(fresh.status === 0 && fresh.out === worker, 'public/sw.js is byte for byte what scripts/build-sw.mjs makes of the current files', fresh.log);
+  ok(fresh.status === 0 && fresh.out === worker, 'public/sw.js is byte for byte what scripts/build-sw.mjs makes of the current files (run npm run build:sw)', fresh.log);
 
+  // The shell is served cache-first, so a file whose change did not change
+  // the build would stay old in every browser that has it, for good. Each
+  // one, changed on its own, must give a new build.
   const freshStamp = buildStamp(fresh.out);
-  const shellChanged = buildInCopy((dir) => fs.appendFileSync(path.join(dir, 'public/app.js'), '\n// a change\n'));
-  ok(freshStamp && shellChanged.status === 0 && buildStamp(shellChanged.out) !== freshStamp, 'a change to a shell file gives a new build', buildStamp(shellChanged.out));
+  const unstamped = [];
+  for (const p of listed.filter((x) => x !== '/')) {
+    const changed = buildInCopy((dir) => fs.appendFileSync(path.join(dir, 'public', p), p.endsWith('.png') ? Buffer.from([0]) : '\n/* a change */\n'));
+    if (!freshStamp || changed.status !== 0 || buildStamp(changed.out) === freshStamp) unstamped.push(p);
+  }
+  ok(unstamped.length === 0, `a change to any one shell file gives a new build (${listed.length - 1} files)`, unstamped);
   const serverOnly = buildInCopy((dir) => {
     fs.writeFileSync(path.join(dir, 'app.js'), '// a server-only change\n');
     fs.mkdirSync(path.join(dir, 'public/splash'), { recursive: true });
@@ -91,9 +96,11 @@ function buildInCopy(mutate) {
   const loaded = local.filter((l) => /^<script/.test(l.tag) || (/^<link/.test(l.tag) && /rel="stylesheet"/.test(l.tag))).map((l) => l.ref);
   const notCached = loaded.filter((r) => !listed.includes(r));
   ok(loaded.length >= 8 && notCached.length === 0, 'every script and stylesheet index.html loads is in the shell cache (else the offline app is half a page)', notCached);
-  const css = fs.readFileSync(R('public/styles.css'), 'utf8');
-  const cssRefs = [...css.matchAll(/url\(["']?(\/[^"')]+)["']?\)/g)].map((m) => m[1]);
-  ok(cssRefs.every((r) => listed.includes(r) && fs.existsSync(R(path.join('public', r)))), 'pictures styles.css draws are in the shell cache', cssRefs);
+  // Pictures the stylesheets draw from the site (the dark logo is one).
+  const cssRefs = loaded.filter((r) => r.endsWith('.css'))
+    .flatMap((r) => [...fs.readFileSync(R(path.join('public', r)), 'utf8').matchAll(/url\(["']?(\/[^/"')][^"')]*)["']?\)/g)].map((m) => m[1]));
+  ok(cssRefs.includes('/assets/logo-dark.png') && cssRefs.every((r) => listed.includes(r) && fs.existsSync(R(path.join('public', r)))),
+    'pictures the stylesheets draw (the dark logo among them) are in the shell cache', cssRefs);
   ok(local.some((l) => l.ref === '/assets/logo.png') && listed.includes('/assets/logo.png'), 'the logo the page shows is cached with the shell');
 
   const sizeErrors = [];

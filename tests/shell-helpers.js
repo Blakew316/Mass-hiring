@@ -6,8 +6,10 @@ const fs = require('fs');
 const { R, port } = require('./helpers');
 
 // Chromium's own background traffic (component updates, safe browsing) has
-// nothing to do with the app and only makes noise.
-const QUIET = ['--disable-background-networking', '--disable-component-update', '--no-first-run'];
+// nothing to do with the app and only makes noise. No proxy either: Chromium
+// takes one from the environment, and whatever it still sends of its own
+// would leave the machine through it. The app is on localhost and needs none.
+const QUIET = ['--disable-background-networking', '--disable-component-update', '--no-first-run', '--no-proxy-server'];
 
 // The precache list and the build stamp, read out of a worker script the way
 // scripts/build-sw.mjs reads the template.
