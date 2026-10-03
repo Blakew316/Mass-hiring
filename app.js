@@ -303,11 +303,14 @@ function followUpSettings(settings) {
   return { days, max };
 }
 function followUpDueIds(db, now = Date.now()) {
-  const { days, max } = followUpSettings(db.settings);
+  return db.candidates.filter(followUpDue(db.settings, now)).map((c) => c.id);
+}
+// The test itself, for one person, as of `now` (the compact list asks it of
+// each row in turn).
+function followUpDue(settings, now) {
+  const { days, max } = followUpSettings(settings);
   const cutoff = now - days * 24 * 3600 * 1000;
-  return db.candidates
-    .filter((c) => c.status === 'emailed' && c.lastEmailedAt && new Date(c.lastEmailedAt).getTime() <= cutoff && (c.followUpCount || 0) < max)
-    .map((c) => c.id);
+  return (c) => c.status === 'emailed' && c.lastEmailedAt && new Date(c.lastEmailedAt).getTime() <= cutoff && (c.followUpCount || 0) < max;
 }
 
 // Immediate sends (small selections) go out at most this many per request.
@@ -430,6 +433,8 @@ function partsOf(db) {
     withPhone: db.candidates.filter((c) => phone.normalize(c.phone)).length,
     events: feedWindow(db.events),
     timed: new Map(),          // window and opt-outs -> the clock-dependent lists
+    rows: null,                // the compact list's rows (listRows), made when first asked for
+    sides: new Map(),          // window and opt-outs -> what rides beside them (listSides)
   };
   if (Object.isFrozen(db)) stateParts.set(db, p);
   return p;
@@ -473,6 +478,240 @@ function spliceState(json, pieces) {
   return out + json.slice(from);
 }
 
+// ---------- the list in its compact form ----------
+// The page since the compact list (public/wire.js) asks for the state
+// without the list in it (/api/state?v=2), keeps its own copy of the list,
+// and asks only for the buckets of it that have changed
+// (/api/candidates/sync); the whole list, compact, is GET /api/candidates?v=2.
+// Everything here is worked out from the shared read-only copy of the
+// document and kept beside it (partsOf), like the state's own parts: the
+// rows once per stored version, and what rides beside them — the texting
+// order and its reasons, who cannot be texted and why, who is due a
+// follow-up — once per ten-minute window and opt-out list, which they
+// depend on. A version of the list is the team, the code, the stored
+// version and a hash of those side values: a deploy, a save, or a window
+// that moves anybody's place in the texting order or makes them due, each
+// give a new one; a window that changes nothing gives the same.
+const wire = require('./public/wire');
+// Every field a person has on the page, in publicCandidate()'s order — the
+// stored ones it lets through, then those it works out — and then the ones
+// that ride beside them. Read off publicCandidate() itself, so a field added
+// there travels without anyone having to remember this list; read the first
+// time a list is made rather than at start-up, which most instances (and the
+// unchanged poll) never need.
+const SIDE_FIELDS = ['score', 'reason', 'blocked', 'due'];
+let wireFields = null;
+function wireSchema() {
+  if (!wireFields) {
+    const derived = Object.keys(publicCandidate({ id: '' })).filter((k) => !CANDIDATE_FIELDS.includes(k));
+    const fields = [...CANDIDATE_FIELDS, ...derived, ...SIDE_FIELDS];
+    wireFields = { fields, k: fields.length - SIDE_FIELDS.length };
+  }
+  return wireFields;
+}
+const cut = (text, len) => sha1(text).slice(0, len);
+
+// The rows, once per stored version: each person as the text their bucket's
+// digest is taken over, their bucket, and the list's order.
+function listRows(db, p) {
+  if (p.rows) return p.rows;
+  const { fields, k } = wireSchema();
+  const cs = db.candidates;
+  const n = cs.length;
+  const nb = wire.bucketCount(n);
+  const ids = new Array(n);
+  const texts = new Array(n);
+  const bk = new Uint16Array(n);
+  const byBucket = Array.from({ length: nb }, () => []);
+  const all = crypto.createHash('sha1');
+  for (let i = 0; i < n; i++) {
+    const c = cs[i];
+    ids[i] = c.id;
+    texts[i] = wire.candText(fields, k, publicCandidate(c), true);
+    all.update(texts[i]);
+    bk[i] = wire.bucketOf(c.id, nb);
+    byBucket[bk[i]].push(i);
+  }
+  p.rows = {
+    n, nb, ids, texts, bk, byBucket,
+    o: cut(ids.map(String).join('\n'), wire.LONG),
+    hash: all.digest('base64url'),
+    // Two people under one id cannot be told apart by a delta: such a list
+    // is only ever sent whole.
+    dup: new Set(ids).size !== n,
+  };
+  return p.rows;
+}
+
+// What rides beside each person for one window and opt-out list: exactly what
+// textPriority() and followUpDueIds() say about them, row by row.
+function listSides(db, p, now, optOut) {
+  const key = `${now}|${optOut.join(',')}`;
+  let t = p.sides.get(key);
+  if (t) return t;
+  const entries = priority.ranked(db.candidates, { maxFollowUps: followUpSettings(db.settings).max, optOut, now });
+  const rankedRow = new Map(entries.map((e) => [e.c, e]));
+  const rankedId = new Set(entries.map((e) => e.id));
+  const asked = new Set(optOut);
+  const due = followUpDue(db.settings, now);
+  const { fields, k } = wireSchema();
+  const n = db.candidates.length;
+  const sides = new Array(n);
+  const texts = new Array(n);
+  const all = crypto.createHash('sha1');
+  for (let i = 0; i < n; i++) {
+    const c = db.candidates[i];
+    const e = rankedRow.get(c);
+    let s = null;
+    if (e) s = { score: e.score, reason: e.reason };
+    else if (!rankedId.has(c.id)) {
+      const why = priority.blockedReason(c, { optOut: asked });
+      if (why && why !== 'no phone number') s = { blocked: why };
+    }
+    if (due(c)) { if (!s) s = {}; s.due = true; }
+    sides[i] = s;
+    texts[i] = wire.sideText(fields, k, s);
+    all.update(texts[i]).update('\n');
+  }
+  // The page puts the texting order back together from the scores, ties
+  // broken by id code unit by code unit. Ties the server broke otherwise
+  // (an id with capitals or punctuation, which localeCompare orders its own
+  // way) mean the order is sent as it is (ro).
+  let exotic = false;
+  for (let i = 1; i < entries.length && !exotic; i++) {
+    const a = entries[i - 1]; const b = entries[i];
+    if (a.score === b.score && !(String(a.id) < String(b.id))) exotic = true;
+  }
+  const order = entries.map((e) => e.id);
+  t = { sides, texts, hash: all.digest('base64url'), rn: cut(order.map(String).join('\n'), wire.LONG), order, exotic, list: null };
+  if (p.sides.size >= 2) p.sides.clear();
+  p.sides.set(key, t);
+  return t;
+}
+
+// The version of the list for these sides.
+function listVersionOf(db, p, sides) {
+  const stored = store.versionOf(db) || `c:${listRows(db, p).hash}`;
+  return sha1(`${tenant.current() || '-'}:${codeVersion()}:${stored}:${sides.hash}`);
+}
+
+// Rows and sides together: every bucket's digest and the digest of those.
+function compactList(db, p, sides) {
+  if (sides.list) return sides.list;
+  const rows = listRows(db, p);
+  const d = new Array(rows.nb);
+  for (let b = 0; b < rows.nb; b++) {
+    const h = crypto.createHash('sha1');
+    for (const i of rows.byBucket[b]) h.update(rows.texts[i]).update(sides.texts[i]).update('\n');
+    d[b] = h.digest('base64url').slice(0, wire.DIGEST);
+  }
+  const all = d.join('');
+  sides.list = { db, rows, sides, d, all, rh: cut(all, wire.LONG), v: listVersionOf(db, p, sides), full: null };
+  return sides.list;
+}
+
+// Everything a page needs to know about the list to tell whether its copy is
+// current, and to check it.
+function listHeader(L, withOrder) {
+  return {
+    fmt: wire.FORMAT, t: tenant.current(), v: L.v, nb: L.rows.nb, n: L.rows.n, o: L.rows.o, rh: L.rh, rn: L.sides.rn,
+    ...(withOrder || L.sides.exotic ? { ro: L.sides.order } : {}),
+  };
+}
+// The given rows, packed. The person is made again from the stored record
+// rather than kept beside it all the time: a delta is a few dozen people.
+function packRows(L, idx) {
+  const { fields, k } = wireSchema();
+  const cs = L.db.candidates;
+  return wire.pack(fields, k, idx.map((i) => [publicCandidate(cs[i]), L.sides.sides[i]]));
+}
+// The whole list, as JSON, kept per version (and made again for a page that
+// has asked for the texting order outright).
+function fullListBody(L, withOrder) {
+  const make = () => JSON.stringify({ ...listHeader(L, withOrder), d: L.all, ...packRows(L, L.rows.ids.map((_, i) => i)) });
+  if (withOrder && !L.sides.exotic) return make();
+  if (L.full === null) L.full = make();
+  return L.full;
+}
+
+// The list for this request's team, as of now.
+async function compactNow() {
+  const [db, textQ] = await Promise.all([store.read(), textQueue.loadQ()]);
+  const p = partsOf(db);
+  const sides = listSides(db, p, displayNow(), (textQ && textQ.optOut) || []);
+  return compactList(db, p, sides);
+}
+
+// Answer only to the format this server writes: a page that asks for another
+// is told so, and falls back to what it can read.
+const wireFormat = (req) => req.query.v === undefined || req.query.v === String(wire.FORMAT);
+
+app.get('/api/candidates', asyncRoute(async (req, res) => {
+  if (req.query.v !== String(wire.FORMAT)) return res.status(400).json({ error: `This server sends the list as ?v=${wire.FORMAT}.`, fmt: wire.FORMAT });
+  const L = await compactNow();
+  const withOrder = req.query.ro === '1';
+  const etag = fullListTag(L, withOrder);
+  res.set('ETag', etag);
+  res.set('Cache-Control', 'no-cache, private');
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  return res.type('application/json').send(fullListBody(L, withOrder));
+}));
+// The team is in the version, so this tag can never answer for another team.
+// The function keeps the compressed body under it (netlify/src/api.mjs).
+const fullListTag = (L, withOrder) => `W/"c2-${L.v}${withOrder ? '-r' : ''}"`;
+
+// The page's copy against the server's: { same }, the buckets that differ,
+// or — for a copy of another team's list, cut differently, too far behind,
+// or that cannot be patched (the order moved without anybody's bucket
+// changing, or two people share an id) — the whole list. The team is the
+// session's and nothing in the body changes it: a copy that says it is
+// another team's is answered with this team's whole list.
+app.post('/api/candidates/sync', asyncRoute(async (req, res) => {
+  if (!wireFormat(req)) return res.status(400).json({ error: `This server sends the list as ?v=${wire.FORMAT}.`, fmt: wire.FORMAT });
+  const L = await compactNow();
+  res.set('Cache-Control', 'no-store');
+  const ask = req.body && typeof req.body === 'object' ? req.body : {};
+  const withOrder = ask.ro === 1 || ask.ro === true;
+  const { nb } = L.rows;
+  const whole = () => res.set('ETag', fullListTag(L, withOrder)).type('application/json').send(fullListBody(L, withOrder));
+  if (ask.t !== tenant.current() || ask.nb !== nb || typeof ask.b !== 'string' || ask.b.length !== nb * wire.DIGEST || L.rows.dup) return whole();
+  const ch = [];
+  for (let b = 0; b < nb; b++) if (ask.b.slice(b * wire.DIGEST, (b + 1) * wire.DIGEST) !== L.d[b]) ch.push(b);
+  const moved = ask.o !== L.rows.o;
+  if (!ch.length && !moved) return res.json({ ...listHeader(L, withOrder), same: true });
+  if (!ch.length || ch.length * 2 > nb) return whole();
+  const idx = ch.flatMap((b) => L.rows.byBucket[b]);
+  return res.json({
+    ...listHeader(L, withOrder),
+    ch,
+    d: ch.map((b) => L.d[b]).join(''),
+    ...(moved ? { p: idx } : {}),
+    ...packRows(L, idx),
+  });
+}));
+
+// The state without the list (?v=2): the same answer as below, less the
+// candidates, the texting order and the follow-up due list, with what the
+// page needs to bring its copy of the list up to date instead. Its tag is
+// the list's version and the rest of the state, so an unchanged poll is
+// still answered 304 without the list being worked out at all.
+function sendSlimState(req, res, db, parts, payload, now, optOut) {
+  const sides = listSides(db, parts, now, optOut);
+  const v = listVersionOf(db, parts, sides);
+  const { candidates, ...rest } = payload;
+  delete rest.followUp.dueIds;
+  delete rest.texting.priority;
+  const stable = JSON.stringify(rest, (k, val) => (k === 'lastSeenAt' || k === 'lastSyncAt' ? null : val));
+  const etag = `W/"${sha1(`${tenant.current() || '-'}:${codeVersion()}:s${wire.FORMAT}:${v}:${stable}`)}"`;
+  res.set('ETag', etag);
+  res.set('Cache-Control', 'no-cache, private');
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  const L = compactList(db, parts, sides);
+  const h = listHeader(L, false);
+  const cands = { v: h.v, n: h.n, nb: h.nb, o: h.o, rh: h.rh, rn: h.rn, t: h.t };
+  return res.type('application/json').send(JSON.stringify({ cands, ...rest }));
+}
+
 app.get('/api/state', asyncRoute(async (req, res) => {
   // Independent reads. On Netlify Blobs each one is its own round trip, so
   // awaiting them in a line made this route as slow as the sum of them. All
@@ -504,7 +743,13 @@ app.get('/api/state', asyncRoute(async (req, res) => {
   // Derived from the status above rather than fetching it a second time.
   const sendingNow = await mailer.sendStatus(db.settings, googleStatus);
   const parts = partsOf(db);
-  const timed = timedParts(db, parts, displayNow(now), (textQ && textQ.optOut) || []);
+  // The page since the compact list asks without the list (sendSlimState);
+  // any other answer is the one this route has always given, byte for byte,
+  // for a page left open across a deploy — or a newer page asking a server
+  // older than itself, which reads it as it always did.
+  const slim = req.query.v === String(wire.FORMAT);
+  const optOut = (textQ && textQ.optOut) || [];
+  const timed = slim ? null : timedParts(db, parts, displayNow(now), optOut);
   // Everything but the three big parts, which stay empty until the tag has
   // been settled.
   const payload = {
@@ -555,6 +800,7 @@ app.get('/api/state', asyncRoute(async (req, res) => {
     // And with their onboarding paperwork: packet sent, and signed.
     onboarding: onboarding.summary(onb),
   };
+  if (slim) return sendSlimState(req, res, db, parts, payload, displayNow(now), optOut);
 
   // The browser asks for this every 30 seconds and most of the time nothing
   // has changed, so an unchanged poll costs 304 bytes instead of megabytes —

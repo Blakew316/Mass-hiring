@@ -29,6 +29,20 @@ async function serverSide(s) {
   const t304 = [];
   for (let i = 0; i < 5; i++) { const t = performance.now(); const r = await fetch(s.base + '/api/state', { headers: { cookie: s.cookie, 'if-none-match': etag } }); await r.arrayBuffer(); t304.push(performance.now() - t); out.notModifiedStatus = r.status; }
   out.state304Ms = r0(med(t304));
+  // What a page since the compact list asks for instead (a server without it
+  // answers the first with the old state and the second with a 404), so both
+  // copies go into the browser runs with the answers their pages ask for
+  // already made.
+  const asked = async (url, headers = {}) => { const t = performance.now(); const r = await fetch(s.base + url, { headers: { cookie: s.cookie, 'accept-encoding': 'gzip', ...headers } }); const b = Buffer.from(await r.arrayBuffer()); return { ms: performance.now() - t, status: r.status, tag: r.headers.get('etag'), bytes: b.length }; };
+  const slim = []; let slimTag = '';
+  for (let i = 0; i < 5; i++) { const r = await asked('/api/state?v=2'); slim.push(r.ms); slimTag = r.tag; out.slimStateRawBytes = r.bytes; }
+  out.slimStateMs = r0(med(slim));
+  const slim304 = [];
+  for (let i = 0; i < 5; i++) { const r = await asked('/api/state?v=2', { 'if-none-match': slimTag }); slim304.push(r.ms); out.slimNotModifiedStatus = r.status; }
+  out.slimState304Ms = r0(med(slim304));
+  const list = [];
+  for (let i = 0; i < 3; i++) { const r = await asked('/api/candidates?v=2'); list.push(r.ms); out.listStatus = r.status; out.listRawBytes = r.bytes; }
+  out.listMs = r0(med(list));
   return out;
 }
 
@@ -89,6 +103,9 @@ async function profile(browser, s, name) {
   await ctx.addCookies([{ name: cn, value: cv, domain: 'localhost', path: '/' }]);
   await ctx.addInitScript(() => {
     window.__lt = [];
+    // Room for every request of the run: past the default 250 the browser
+    // stops recording, and the polls below are measured from these entries.
+    try { performance.setResourceTimingBufferSize(5000); } catch {}
     try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push(e.duration); }).observe({ type: 'longtask', buffered: true }); } catch {}
   });
   const page = await ctx.newPage();
@@ -129,22 +146,53 @@ async function profile(browser, s, name) {
     return { paintMs: Math.round(performance.now() - t) };
   });
   await page.keyboard.press('Escape').catch(() => {});
-  // A poll that brings a change (one candidate replied) on the Dashboard.
+  // A poll that brings nothing new, then one that brings a change (someone
+  // who was emailed replies) on the Dashboard: from the poll starting to the
+  // Replied count on screen changing (or, for nothing new, to the last
+  // answer), with what went over the wire and the main thread's time.
   await timeNav(page, 'dashboard');
-  await s.store.update((d) => { const c = d.candidates[100]; c.status = 'replied'; c.lastReplyAt = new Date().toISOString(); });
-  const pc0 = await cpu(cdp);
-  out.pollChange = await page.evaluate(async () => {
+  // The page's first reply check goes out about fifteen seconds after it
+  // loads, and on the made-up team it changes hundreds of people (no replies
+  // are found, so their reply times are cleared). A poll it lands just in
+  // front of is timed bringing a third of the list rather than one person,
+  // depending on how long the pages above took: let it land, and one poll
+  // not timed bring what it changed, first.
+  await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/api\/replies\/check/.test(e.name)), null, { timeout: 30000 }).catch(() => {});
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForTimeout(phone ? 12000 : 4000);
+  // Then the page's own half-minute poll: the two timed below go just after
+  // it, so it cannot land in the middle of one and be timed with it (two
+  // states fetched and drawn, counted as one poll).
+  const states = () => page.evaluate(() => performance.getEntriesByType('resource').filter((e) => /\/api\/state/.test(e.name)).length);
+  const ticked = await states();
+  for (const end = Date.now() + 32000; Date.now() < end && (await states()) === ticked;) await page.waitForTimeout(200);
+  await page.waitForTimeout(1500);
+  const pollOnce = (waitForChange) => page.evaluate(async (change) => {
     const before = performance.getEntriesByType('resource').length;
+    const shown = () => (document.querySelector('#statReplied') || {}).textContent;
+    const was = shown();
     const t = performance.now();
     window.dispatchEvent(new Event('online'));
-    for (let i = 0; i < 400; i++) {
-      await new Promise((r) => setTimeout(r, 25));
+    let doneAt = 0;
+    for (let i = 0; i < 1200 && !doneAt; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      if (change) { if (shown() !== was) doneAt = performance.now(); continue; }
       const got = performance.getEntriesByType('resource').slice(before).filter((e) => /\/api\/(state|candidates)/.test(e.name));
-      if (got.length && got.every((e) => e.responseEnd > 0)) { await new Promise((r) => setTimeout(r, 600)); const all = performance.getEntriesByType('resource').slice(before).filter((e) => /\/api\//.test(e.name)); return { totalMs: Math.round(performance.now() - t - 600), wireBytes: all.reduce((n, e) => n + (e.encodedBodySize || 0), 0), requests: all.map((e) => new URL(e.name).pathname) }; }
+      if (got.length && got.every((e) => e.responseEnd > 0)) doneAt = Math.max(...got.map((e) => e.responseEnd));
     }
-    return null;
-  });
+    await new Promise((r) => setTimeout(r, 800));
+    const all = performance.getEntriesByType('resource').slice(before).filter((e) => /\/api\//.test(e.name));
+    return { totalMs: doneAt ? Math.round(doneAt - t) : null, wireBytes: all.reduce((n, e) => n + (e.encodedBodySize || 0), 0), requests: all.map((e) => `${new URL(e.name).pathname}${new URL(e.name).search}`) };
+  }, waitForChange);
+  const ps0 = await cpu(cdp);
+  out.pollSame = await pollOnce(false);
+  if (out.pollSame) Object.assign(out.pollSame, cpuDelta(ps0, await cpu(cdp)));
+  await s.store.update((d) => { const c = d.candidates.find((x) => x.status === 'emailed'); c.status = 'replied'; c.lastReplyAt = new Date().toISOString(); });
+  const pc0 = await cpu(cdp);
+  out.pollChange = await pollOnce(true);
   if (out.pollChange) Object.assign(out.pollChange, cpuDelta(pc0, await cpu(cdp)));
+  await cdp.send('HeapProfiler.collectGarbage').catch(() => {});
+  out.heapAfterMB = await page.evaluate(() => (performance.memory ? +(performance.memory.usedJSHeapSize / 1e6).toFixed(1) : null));
   out.errors = errs.slice(0, 5);
   await ctx.close();
   return out;

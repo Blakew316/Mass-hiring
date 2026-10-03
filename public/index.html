@@ -8,6 +8,36 @@
      who needs it, and iOS ignores it half the time anyway. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>WPI Outreach · Hiring CRM</title>
+<script>
+/* The session, the state and the list, asked for at once and first of all —
+   before the stylesheets, the icons and the scripts, which come from the
+   shell cache anyway — instead of one after another once app.js has arrived
+   and started. The state and the list only when this browser was signed in
+   last time it looked (app.js keeps the hint): signed out, they would only be
+   refused. app.js takes each answer at most once, and only for the team it
+   turns out to be for; signed out, failed or another team's, it asks again.
+   Nothing here reads or keeps anything itself. */
+(function () {
+  if (!window.fetch || !window.AbortController || !window.performance) return;
+  var early = {};
+  function ask(name, url) {
+    var ctl = new AbortController();
+    var res = fetch(url, { credentials: 'same-origin', signal: ctl.signal });
+    res.catch(function () { /* app.js asks again */ });
+    early[name] = { res: res, ctl: ctl, at: performance.now() };
+  }
+  try {
+    ask('auth', '/api/auth/status');
+    var signedIn = false;
+    try { signedIn = localStorage.getItem('wp-signed-in') === '1'; } catch (e) { /* no storage */ }
+    if (signedIn) {
+      ask('state', '/api/state?v=2');
+      ask('list', '/api/candidates?v=2');
+    }
+    window.__early = early;
+  } catch (e) { /* app.js asks for everything itself */ }
+})();
+</script>
 
 <!-- ===== Installed app ===== -->
 <link rel="manifest" href="/manifest.webmanifest">
@@ -1721,6 +1751,8 @@
 
 <script src="/salesiq.js"></script>
 <script src="/onboarding.js"></script>
+<!-- The compact list's format, shared with the server (see its top). -->
+<script src="/wire.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
