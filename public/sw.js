@@ -27,7 +27,7 @@
  * the app is byte for byte the app it was before.
  */
 
-const BUILD = '8ad7d39e0c';
+const BUILD = 'a51365ede1';
 const SHELL = `shell-${BUILD}`;
 const ASSETS = 'assets-v1';
 const FONTS = 'fonts-v1';

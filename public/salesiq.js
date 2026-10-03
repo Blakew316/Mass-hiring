@@ -27,6 +27,26 @@
   const MIN = 60 * 1000;
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
+  // One Intl.DateTimeFormat for each way a date is written here.
+  // toLocaleDateString and its kin build a new one on every call, which is
+  // nearly all they cost, and the list writes a date or two on every row.
+  // Same words as theirs, "Invalid Date" included.
+  function dateFormat(options) {
+    let f = null;
+    return (d) => {
+      if (Number.isNaN(d.getTime())) return "Invalid Date";
+      if (!f) f = new Intl.DateTimeFormat(undefined, options);
+      return f.format(d);
+    };
+  }
+  const fmtClock = dateFormat({ hour: "numeric", minute: "2-digit" });
+  const fmtShortDay = dateFormat({ weekday: "short", month: "short", day: "numeric" });
+  const fmtWhen = dateFormat({ weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const fmtMonthDay = dateFormat({ month: "short", day: "numeric" });
+  const fmtLongDay = dateFormat({ weekday: "long", month: "short", day: "numeric" });
+  const fmtAdded = dateFormat({ month: "short", day: "numeric", year: "numeric" });
+  const fmtCompleted = dateFormat({ dateStyle: "medium", timeStyle: "short" });
+
   let candidates = [];
   let reports = [];
   let settings = { team: "", managerEmail: "" };
@@ -261,7 +281,7 @@
   }
 
   function clock(d) {
-    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return fmtClock(d);
   }
 
   function sameDay(a, b) {
@@ -274,7 +294,7 @@
     const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
     if (sameDay(d, now)) return `today at ${clock(d)}`;
     if (sameDay(d, tomorrow)) return `tomorrow at ${clock(d)}`;
-    return `on ${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} at ${clock(d)}`;
+    return `on ${fmtShortDay(d)} at ${clock(d)}`;
   }
 
   // From just before the start until an hour after (the same window the
@@ -435,11 +455,11 @@
   function formatWhen(iso) {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    return fmtWhen(d);
   }
 
   function clockParts(d) {
-    const parts = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }).split(/\s+/);
+    const parts = fmtClock(d).split(/\s+/);
     return { time: parts[0], ampm: parts.slice(1).join(" ") };
   }
 
@@ -450,7 +470,7 @@
     const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
     if (same(d, now)) return "Today";
     if (same(d, new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1))) return "Tomorrow";
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return fmtMonthDay(d);
   }
 
   function ago(ms) {
@@ -486,7 +506,7 @@
     if (diff > 60 * MIN) {
       const rel = diff < 20 * 3600 * 1000
         ? `Starts in ${ago(diff)}`
-        : d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+        : fmtLongDay(d);
       return { key: "later", cls: "", at: d, rel, short: `Interview ${abs}`, long: `Interview ${abs}` };
     }
     if (diff > 5 * MIN) {
@@ -761,7 +781,7 @@
     const key = statusOf(c);
     const s = interviewState(c);
     const sending = sendingIds.has(c.id);
-    const added = c.added ? new Date(c.added).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+    const added = c.added ? fmtAdded(new Date(c.added)) : "";
     const source = c.source === "calendly" ? "Calendly booking" : c.source === "pipeline" ? "From your pipeline" : "";
     let scoreRow = "";
     if (key === "completed" && typeof c.score === "number") {
@@ -862,7 +882,7 @@
     reports.forEach((r) => {
       const name = r.name || r.email || "Unidentified candidate";
       const whenText = r.completedAt
-        ? new Date(r.completedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+        ? fmtCompleted(new Date(r.completedAt))
         : "";
       const dur = r.durationSec ? formatDuration(r.durationSec) : "—";
       const score = Math.max(0, Math.min(100, Number(r.score) || 0));
