@@ -59,9 +59,9 @@ async function checkLogo(page, sel, dark, label) {
   const bodyLum = lum(l.body);
   ok(dark ? bodyLum < 0.2 : bodyLum > 0.75, `${label}: the page is drawn ${dark ? 'dark' : 'light'}`, l.body);
   ok(l.shown, `${label}: the logo is on screen`, l.box);
-  if (dark) ok(/\/assets\/logo-dark\.png$/.test(l.drawn || ''), `${label}: the logo is the light-on-dark artwork`, l.drawn);
-  else ok(/\/assets\/logo\.png$/.test(l.drawn || ''), `${label}: the logo is the standard artwork`, l.drawn);
-  const url = dark ? '/assets/logo-dark.png' : '/assets/logo.png';
+  if (dark) ok(/\/assets\/logo-dark-510\.png$/.test(l.drawn || ''), `${label}: the logo is the light-on-dark artwork`, l.drawn);
+  else ok(/\/assets\/logo-510\.png$/.test(l.drawn || ''), `${label}: the logo is the standard artwork`, l.drawn);
+  const url = dark ? '/assets/logo-dark-510.png' : '/assets/logo-510.png';
   ok((await decodes(page, url)) > 100, `${label}: ${url} loads as a picture`);
   if (l.box && l.box.height > 0) {
     const ink = await inkIn(page, l.box);

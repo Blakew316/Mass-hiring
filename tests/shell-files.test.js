@@ -44,10 +44,11 @@ function buildInCopy(mutate) {
   // ---------- the precache list ----------
   ok(Array.isArray(listed) && listed.length >= 10, 'the template has a precache list', listed);
   ok(JSON.stringify(precacheList(worker)) === JSON.stringify(listed), 'public/sw.js precaches the same files as the template');
-  // The page under both its names, the manifest and both logos. Which scripts
-  // and stylesheets belong is decided below from what index.html loads, so a
-  // renamed or split script is judged by the page, not by a list kept here.
-  for (const p of ['/', '/index.html', '/manifest.webmanifest', '/assets/logo.png', '/assets/logo-dark.png']) {
+  // The page under both its names, the manifest and both logos (the 510-pixel
+  // copies the page shows). Which scripts and stylesheets belong is decided
+  // below from what index.html loads, so a renamed or split script is judged
+  // by the page, not by a list kept here.
+  for (const p of ['/', '/index.html', '/manifest.webmanifest', '/assets/logo-510.png', '/assets/logo-dark-510.png']) {
     ok(listed.includes(p), `the shell includes ${p}`);
   }
   const missing = listed.filter((p) => !fs.existsSync(file(p)));
@@ -96,12 +97,15 @@ function buildInCopy(mutate) {
   const loaded = local.filter((l) => /^<script/.test(l.tag) || (/^<link/.test(l.tag) && /rel="stylesheet"/.test(l.tag))).map((l) => l.ref);
   const notCached = loaded.filter((r) => !listed.includes(r));
   ok(loaded.length >= 8 && notCached.length === 0, 'every script and stylesheet index.html loads is in the shell cache (else the offline app is half a page)', notCached);
-  // Pictures the stylesheets draw from the site (the dark logo is one).
+  // Pictures the stylesheets draw from the site (the dark logo is one). The
+  // typeface they also point at is not a picture and is kept out of the
+  // shell on purpose (most devices never draw it): d-shell.test.js has it.
   const cssRefs = loaded.filter((r) => r.endsWith('.css'))
-    .flatMap((r) => [...fs.readFileSync(R(path.join('public', r)), 'utf8').matchAll(/url\(["']?(\/[^/"')][^"')]*)["']?\)/g)].map((m) => m[1]));
-  ok(cssRefs.includes('/assets/logo-dark.png') && cssRefs.every((r) => listed.includes(r) && fs.existsSync(R(path.join('public', r)))),
+    .flatMap((r) => [...fs.readFileSync(R(path.join('public', r)), 'utf8').matchAll(/url\(["']?(\/[^/"')][^"')]*)["']?\)/g)].map((m) => m[1]))
+    .filter((r) => !r.startsWith('/assets/fonts/'));
+  ok(cssRefs.includes('/assets/logo-dark-510.png') && cssRefs.every((r) => listed.includes(r) && fs.existsSync(R(path.join('public', r)))),
     'pictures the stylesheets draw (the dark logo among them) are in the shell cache', cssRefs);
-  ok(local.some((l) => l.ref === '/assets/logo.png') && listed.includes('/assets/logo.png'), 'the logo the page shows is cached with the shell');
+  ok(local.some((l) => l.ref === '/assets/logo-510.png') && listed.includes('/assets/logo-510.png'), 'the logo the page shows is cached with the shell');
 
   const sizeErrors = [];
   for (const l of local.filter((x) => /rel="(apple-touch-icon|icon)"/.test(x.tag) && attr(x.tag, 'sizes'))) {

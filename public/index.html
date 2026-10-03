@@ -83,9 +83,8 @@
 <link rel="apple-touch-startup-image" media="(prefers-color-scheme: dark) and (device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/splash/1536x2048-dark.png">
 <!-- splash:end -->
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Nothing in the page comes from another site: Inter, the one web font,
+     is served from here (see the top of styles.css). -->
 <link rel="stylesheet" href="/styles.css">
 <!-- Everything in here is inside a media query, so on a desktop it changes
      nothing. It loads second so its phone rules win on equal specificity. -->
@@ -118,7 +117,7 @@
   <!-- ================= Sidebar ================= -->
   <aside class="sidebar">
     <div class="brand">
-      <img src="/assets/logo.png" alt="Wholesale Payments" class="brand-logo">
+      <img src="/assets/logo-510.png" alt="Wholesale Payments" class="brand-logo">
       <div class="brand-sub">Hiring CRM</div>
     </div>
     <nav class="nav">
@@ -1589,7 +1588,7 @@
 <!-- ===== Setup gate: public deploy without a password ===== -->
 <div class="login-screen" id="setupScreen" hidden>
   <div class="login-card setup-card-gate">
-    <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
+    <img src="/assets/logo-510.png" alt="Wholesale Payments" class="login-logo" loading="lazy" decoding="async">
     <h2>Set the admin password first</h2>
     <p class="muted">This site is public, and the app can send email from your account, so it won't run until an admin password is set. It is what lets you create and delete teams — each team then signs in with a PIN of its own.</p>
     <ol class="setup-steps">
@@ -1604,10 +1603,12 @@
 
 <!-- ===== Sign-in (shown only when APP_PASSWORD is set) ===== -->
 <!-- Two cards in one screen: sign in to a team, or make a new one. Only ever
-     one of them is on show. -->
+     one of them is on show. The logo is the 510-pixel copy, sharp at 170
+     wide on any screen (scripts/build-small-logos.mjs); on the cards that
+     are not the first thing shown it waits until they are (loading="lazy"). -->
 <div class="login-screen" id="loginScreen" hidden>
   <form class="login-card" id="loginForm">
-    <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
+    <img src="/assets/logo-510.png" alt="Wholesale Payments" class="login-logo">
     <h2>Hiring CRM</h2>
     <p class="muted" id="loginIntro">Enter your team's PIN to continue.</p>
     <!-- Filled in from /api/auth/status. Hidden entirely while there is only
@@ -1624,7 +1625,7 @@
   </form>
 
   <form class="login-card" id="newTeamForm" hidden>
-    <img src="/assets/logo.png" alt="Wholesale Payments" class="login-logo">
+    <img src="/assets/logo-510.png" alt="Wholesale Payments" class="login-logo" loading="lazy" decoding="async">
     <h2>New team</h2>
     <p class="muted">A new team starts empty — its own candidates, templates and connections, and nothing carried over from anyone else.</p>
     <input type="text" id="newTeamName" class="input" placeholder="Team name" autocomplete="off" maxlength="40">
@@ -1702,10 +1703,11 @@
      Over the whole window, this site's tab bar included, as they were over
      WPI Hire's own page. The hint is WPI Hire's "Add to Home Screen" nudge
      for iPhone Safari, which has no install prompt of its own — offered for
-     this whole app now, once, and never again after it is dismissed. -->
+     this whole app now, once, and never again after it is dismissed. Its icon
+     is fetched only if it is ever shown (loading="lazy"). -->
 <div class="wph-layer" id="wh-layer">
   <div id="wh-install-hint" class="install-hint" hidden>
-    <img src="/icons/app-light-120.png" alt="" class="install-icon" />
+    <img src="/icons/app-light-120.png" alt="" class="install-icon" loading="lazy" decoding="async" />
     <div class="install-copy">
       <strong>Add WPI Outreach to your Home Screen</strong>
       <span>Tap <svg class="install-share" viewBox="0 0 24 24" aria-label="Share"><path d="M12 16V3m0 0L8 7m4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg> then <em>Add to Home Screen</em></span>

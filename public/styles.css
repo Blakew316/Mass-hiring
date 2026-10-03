@@ -10,6 +10,62 @@
    one is on. If you add a colour, name it up there first.
    ===================================================================== */
 
+/* Inter, served from this site. It used to come from a Google Fonts
+   stylesheet, which held up the first paint of every load (a connection to
+   another site, then a stylesheet, before anything could be drawn) for a
+   face most screens never draw: every stack here names Apple's own face
+   first, and --font below reaches system-ui before Inter. The one place it
+   is drawn is the Onboarding docs page (--wh-font in onboarding.css), on
+   anything that is not an Apple device.
+
+   These are Google's own files: Inter v20, latin and latin-ext, under the
+   SIL Open Font License (public/assets/fonts/OFL.txt). They are declared
+   the way Google's stylesheet declared them — one variable file per
+   alphabet, once for each of the four weights — so a weight in between is
+   still drawn at the nearest of the four. A browser downloads a file only
+   when text on screen needs a letter in its range, and each file's name
+   carries its version, so netlify.toml lets browsers keep it for a year. */
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("/assets/fonts/inter-v20-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
   --navy: #141b4d;
   --navy-soft: #3a4270;
@@ -171,9 +227,15 @@
 
 /* The wordmark is dark navy. Same artwork, lifted off the black. Both places
    it appears: the sidebar, and the sign-in and setup screens — which are the
-   first thing anyone sees, and were showing navy-on-near-black. */
+   first thing anyone sees, and were showing navy-on-near-black. The 510-pixel
+   copy, like the light one in index.html (scripts/build-small-logos.mjs). */
 :root[data-theme="dark"] .brand-logo,
-:root[data-theme="dark"] .login-logo { content: url("/assets/logo-dark.png"); }
+:root[data-theme="dark"] .login-logo { content: url("/assets/logo-dark-510.png"); }
+/* Both logos' boxes keep the masters' shape, 1125 by 540. The 510-pixel
+   copies round to 245 high, a fifteenth of a pixel taller at 170 wide, which
+   is enough to move a line of the sign-in card by a pixel; and a box whose
+   shape is known is laid out before the picture arrives. */
+.brand-logo, .login-logo { aspect-ratio: 1125 / 540; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }

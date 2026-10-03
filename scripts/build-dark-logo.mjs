@@ -10,6 +10,7 @@
  * swapping the RGB of the solid pixels keeps the edges smooth.
  *
  * Run after replacing the logo:  node scripts/build-dark-logo.mjs
+ * and then build-small-logos.mjs, which makes the copies the page shows.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

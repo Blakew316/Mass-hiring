@@ -28,7 +28,9 @@
 const BUILD = '__BUILD__';
 const SHELL = `shell-${BUILD}`;
 const ASSETS = 'assets-v1';
-const FONTS = 'fonts-v1';
+// v2: Inter from this site. fonts-v1 held Google's copies of it, which
+// nothing asks for any more, so activation clears it away.
+const FONTS = 'fonts-v2';
 
 /* The whole client. If one of these is missing the app is a blank page, and if
  * one is a different version from the others it is subtly and silently wrong —
@@ -46,8 +48,10 @@ const PRECACHE = [
   '/onboarding.css',
   '/onboarding.js',
   '/manifest.webmanifest',
-  '/assets/logo.png',
-  '/assets/logo-dark.png',
+  // The 510-pixel copies the page shows (scripts/build-small-logos.mjs), not
+  // the 1125-pixel masters beside them.
+  '/assets/logo-510.png',
+  '/assets/logo-dark-510.png',
 ];
 
 /* Not a cached file: a cached file can be evicted, and then the page that says
@@ -91,8 +95,10 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    // Only the shells: assets-v1 and fonts-v1 outlive a version bump on purpose.
-    await Promise.all(names.filter((n) => n.startsWith('shell-') && n !== SHELL).map((n) => caches.delete(n)));
+    // Only the old shells, and the old font cache: assets-v1 and the current
+    // fonts outlive a version bump on purpose.
+    const old = (n) => (n.startsWith('shell-') && n !== SHELL) || n === 'fonts-v1';
+    await Promise.all(names.filter(old).map((n) => caches.delete(n)));
     await self.clients.claim();
   })());
 });
@@ -141,22 +147,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (!sameOrigin) {
-    // Fonts, and only fonts. Cache-first, and kept out of the install so one
-    // slow CDN cannot stop the app being installable at all.
-    if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
-      event.respondWith((async () => {
-        const hit = await caches.match(req);
-        if (hit) return hit;
-        try {
-          const res = await fetch(req);
-          if (storable(res)) (await caches.open(FONTS)).put(req, res.clone());
-          return res;
-        } catch { return hit || Response.error(); }
-      })());
-    }
-    return;
-  }
+  // Another site: not this worker's business. The shell asks for nothing off
+  // this origin, and anything else goes to the network untouched.
+  if (!sameOrigin) return;
 
   // (3) The shell itself. Cache-first from the version cache, never
   //     stale-while-revalidate: revalidating these one at a time is exactly
@@ -167,6 +160,23 @@ self.addEventListener('fetch', (event) => {
       const hit = await caches.match(url.pathname);
       if (hit) return hit;
       try { return await fetch(req); } catch { return offline(); }
+    })());
+    return;
+  }
+
+  // (3b) The typeface. A font file's name carries its version and never
+  //      changes under it, so the first copy fetched is good for ever:
+  //      cache-first, never fetched again. Kept out of the install, because
+  //      most devices never draw it (see the top of styles.css).
+  if (url.pathname.startsWith('/assets/fonts/')) {
+    event.respondWith((async () => {
+      const hit = await caches.match(req);
+      if (hit) return hit;
+      try {
+        const res = await fetch(req);
+        if (storable(res)) (await caches.open(FONTS)).put(req, res.clone());
+        return res;
+      } catch { return Response.error(); }
     })());
     return;
   }
