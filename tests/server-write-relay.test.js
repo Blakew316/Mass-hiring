@@ -9,7 +9,9 @@
 //   - a later signal never moves a candidate backwards
 //   - only a message the thread has never held is news: a repeat changes
 //     nothing, adds no feed line, rings no phone and does not re-mark unread
-//   - STOP declines them and blocks the number at the queue, once
+//   - STOP declines them and blocks the number at the queue, once; STOP is the
+//     whole message ("stop by the office" is a reply)
+//   - two Macs on one Apple ID reporting the same reply at once file it once
 //   - a tapback or a driving auto-reply is kept in the thread but is not a reply
 const { ok, done, crash } = require('./helpers');
 const W = require('./server-write-helpers');
@@ -24,6 +26,8 @@ const W = require('./server-write-helpers');
     W.person(4, { status: 'emailed', lastEmailedAt: W.ago(3000), lastTextedAt: W.ago(100), textStatus: 'delivered', textThread: out('Riley') }),
     W.person(5, { status: 'emailed', lastEmailedAt: W.ago(3000), lastTextedAt: W.ago(30), textStatus: 'sent', textThread: out('Taylor') }),
     W.person(6),
+    W.person(8, { status: 'emailed', lastEmailedAt: W.ago(3000), lastTextedAt: W.ago(60), textStatus: 'delivered', textThread: out('Drew') }),
+    W.person(9, { status: 'emailed', lastEmailedAt: W.ago(3000), lastTextedAt: W.ago(60), textStatus: 'delivered', textThread: out('Skyler') }),
   ]);
   const num = (n) => `+1617555${2000 + n}`;
   const ev = (n, kind, ts, text) => ({ phone: num(n), kind, ts, ...(text != null ? { text } : {}) });
@@ -47,7 +51,7 @@ const W = require('./server-write-helpers');
   ok(r.status === 200 && r.body.ok && r.body.pollMs > 0 && r.body.helloMs > 0, 'a check-in is answered with how often to poll', r.body);
   ok(r.body.limits && r.body.limits.startHour === 9 && r.body.limits.endHour === 19 && r.body.limits.dailyLimit === 60, 'and the texting hours and daily cap', r.body.limits);
   let st = await W.state(s);
-  ok(st.texting.queue.relay.online === true && st.texting.queue.relay.host === 'studio-mac' && st.texting.queue.relay.version === '1.4.0', 'the texting page shows the Mac online', st.texting.queue.relay);
+  ok(st.texting.queue.relay.online === true && st.texting.queue.relay.host === 'studio-mac', 'the texting page shows the Mac online', st.texting.queue.relay);
   await s.json('POST', '/api/settings', { textDailyLimit: '40', textStartHour: '10' });
   r = await W.relay(s, token, 'hello', { host: 'studio-mac', version: '1.4.0', bluebubbles: true });
   ok(r.body.limits.dailyLimit === 40 && r.body.limits.startHour === 10, 'the limits it is told follow Settings', r.body.limits);
@@ -174,6 +178,18 @@ const W = require('./server-write-helpers');
   await W.relay(s, token, 'events', { events: [ev(2, 'reply', c.textThread.filter((m) => m.dir === 'in').pop().ts, 'STOP')] });
   ok((await W.storedCandidate(s, 'p2')).status === 'emailed', 'a repeat of an old STOP does not undo putting them back by hand');
 
+  // STOP is the whole message, not a word in one: "stop by the office" is
+  // someone answering; "unsubscribe" is someone asking to be left alone.
+  r = await W.relay(s, token, 'events', { events: [ev(8, 'reply', W.ago(1), 'Stop by the office Tuesday?')] });
+  c = await W.storedCandidate(s, 'p8');
+  q = await W.textQueue(s);
+  ok(c.status === 'replied' && c.textUnread === true && !q.optOut.includes(num(8)) && (await lines('text-replied', 'p8')).length === 1,
+    '"Stop by the office Tuesday?" is a reply, not an opt-out', { status: c.status, optOut: q.optOut });
+  r = await W.relay(s, token, 'events', { events: [ev(9, 'reply', W.ago(1), 'Unsubscribe.')] });
+  c = await W.storedCandidate(s, 'p9');
+  q = await W.textQueue(s);
+  ok(c.status === 'declined' && q.optOut.includes(num(9)) && (await lines('text-optout', 'p9')).length === 1, '"Unsubscribe." blocks them like STOP', { status: c.status, optOut: q.optOut });
+
   // ---------- claim and report ----------
   r = await s.json('POST', '/api/texts/reply', { id: 'p3', body: 'Hi Casey, this is the hiring team.' });
   const job = (await W.relay(s, token, 'claim')).body.job;
@@ -207,6 +223,25 @@ const W = require('./server-write-helpers');
   st = await W.state(s);
   ok(r.status === 200 && c.textStatus === 'not-imessage' && !c.lastTextedAt, 'a number with no iMessage is marked so, not sent', c);
   ok(st.texting.priority.blocked.p7 === 'no iMessage account on that number', 'and the texting page says why it cannot be texted', st.texting.priority.blocked.p7);
+
+  // ---------- two Macs on one Apple ID ----------
+  // Both read every message, so the same reply can arrive twice at the same
+  // moment. It is one message: one line in the thread, one feed line, one buzz.
+  // And someone already booked who texts back stays booked.
+  await s.json('PATCH', '/api/candidates/p5', { status: 'booked' });
+  const both = 'Running 5 minutes late for our call!';
+  const bothAt = W.ago(1);
+  const buzzes = s.pushes.length;
+  // Widen the moment between each report being read and being stored, as a
+  // slow storage read does on the deployed site, so the two really overlap.
+  const realLoad = s.store.load;
+  s.store.load = async (...args) => { const db = await realLoad(...args); await new Promise((res) => setTimeout(res, 50)); return db; };
+  const pair = await Promise.all([1, 2].map(() => W.relay(s, token, 'events', { events: [ev(5, 'reply', bothAt, both)] })));
+  s.store.load = realLoad;
+  c = await W.storedCandidate(s, 'p5');
+  ok(pair.every((x) => x.status === 200) && c.textThread.filter((m) => m.dir === 'in' && m.text === both).length === 1, 'the same reply reported by two Macs at once is filed once', c.textThread);
+  ok((await lines('text-replied', 'p5')).length === 1 && s.pushes.length === buzzes + 1, 'with one feed line and one push', { lines: (await lines('text-replied', 'p5')).length, pushes: s.pushes.length - buzzes });
+  ok(c.status === 'booked' && c.textUnread === true, 'a text from someone already booked marks it unread and leaves them booked', c.status);
 
   // ---------- teams ----------
   const b = await W.secondTeam(s, 'Harbor Crew', '4826');

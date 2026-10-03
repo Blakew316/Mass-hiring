@@ -11,6 +11,8 @@
 //   - someone who already booked can still write back, and that is a reply,
 //     without undoing the booking
 //   - with Google not connected nothing is read and nothing changes
+//   - two checks at once (the scheduled worker and the dashboard) announce a
+//     reply once between them
 const { ok, done, crash } = require('./helpers');
 const W = require('./server-write-helpers');
 
@@ -19,7 +21,11 @@ const W = require('./server-write-helpers');
   const g = s.google;
   const threads = {};      // threadId -> Gmail messages (as the module reads them)
   const changed = new Set();
-  g.threadReplies = async (_settings, threadId) => ({ limited: false, replies: (threads[threadId] || []).map((m) => ({ ...m })) });
+  let slow = 0;           // ms Gmail takes to answer, to make two checks overlap
+  g.threadReplies = async (_settings, threadId) => {
+    if (slow) await new Promise((res) => setTimeout(res, slow));
+    return { limited: false, replies: (threads[threadId] || []).map((m) => ({ ...m })) };
+  };
   g.recentInboundThreads = async () => { const set = new Set(changed); set.complete = true; return set; };
   // What Gmail's module would say each message is, decided by its own rules.
   const msg = (id, from, subject, text, minutesAgo, headers = {}) => {
@@ -112,6 +118,22 @@ const W = require('./server-write-helpers');
   c = await W.storedCandidate(s, 'p5');
   ok(r.body.replies === 1 && c.emailUnread === true && (await replyLines('p5')).length === 1, 'a reply from someone already booked is still a reply', r.body);
   ok(c.status === 'booked' && c.bookedEvent === 'Intro call', 'and leaves them booked', c.status);
+
+  // ---------- two checks at once ----------
+  // The scheduled worker checks every minute and an open dashboard checks too,
+  // so two can be reading Gmail at the same moment. Which replies are new is
+  // decided when they are stored, so the reply is announced once between them.
+  await s.store.update((d) => { d.candidates.push(W.person(7, { status: 'emailed', gmailThreadId: 'th-7', lastEmailedAt: W.ago(600), lastSubject: 'Quick question' })); });
+  threads['th-7'] = [msg('d1', 'Jamie Rowan <jamie.rowan@example.com>', 'Re: Quick question', 'Yes please, send me the details.', 1)];
+  changed.add('th-7');
+  const pushesBoth = s.pushes.length;
+  slow = 60;
+  const both = await Promise.all([1, 2].map(() => s.json('POST', '/api/replies/check')));
+  slow = 0;
+  c = await W.storedCandidate(s, 'p7');
+  ok(both.every((x) => x.status === 200) && both[0].body.replies + both[1].body.replies === 1, 'two checks running at once find the reply once between them', both.map((x) => x.body));
+  ok((await replyLines('p7')).length === 1 && s.pushes.length === pushesBoth + 1 && c.status === 'replied' && c.emailUnread === true,
+    'with one line and one push', { lines: (await replyLines('p7')).length, pushes: s.pushes.length - pushesBoth });
 
   // ---------- Google not connected ----------
   threads['th-2'] = [msg('j1', 'Jordan Blake <jordan.blake@example.com>', 'Re: Quick question', 'Tell me more', 1)];

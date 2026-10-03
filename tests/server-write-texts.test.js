@@ -103,7 +103,8 @@ const W = require('./server-write-helpers');
   const typed = 'Great — does 3pm {{tomorrow}} work? Call me at (617) 555-2999';
   r = await s.json('POST', '/api/texts/reply', { id: 'p1', body: `  ${typed}  ` });
   ok(r.status === 200 && r.body.ok && r.body.queued === true, 'a reply is queued', r.body);
-  ok(r.body.relayOnline === false, 'and the page is told the Mac is not online yet', r.body);
+  st = await W.state(s);
+  ok(st.texting.queue.relay.online === false, 'and the page says the Mac is not online yet, so it will wait', st.texting.queue.relay);
   f = await flags();
   ok(f.p1.t === false, 'answering a thread marks it read', f);
   ok(f.p2.t === true, 'and only that thread', f);
@@ -120,7 +121,7 @@ const W = require('./server-write-helpers');
   ok(claim.body.job && claim.body.job.phone === '+16175552001', 'to their number', claim.body.job && claim.body.job.phone);
 
   r = await s.json('POST', '/api/texts/reply', { id: 'p2', body: 'Base is $60k plus commission.' });
-  ok(r.status === 200 && r.body.relayOnline === true, 'with the Mac checking in, the page is told it is online', r.body);
+  ok(r.status === 200 && r.body.ok && (await W.state(s)).texting.queue.relay.online === true, 'with the Mac checking in, a reply is queued and the page shows the Mac online', r.body);
   ok((await flags()).p2.t === false, 'that reply leaves their thread read');
 
   ok(s.outsideCalls.length === 0 && s.sentMail.length === 0, 'nothing reached the outside world', s.outsideCalls);

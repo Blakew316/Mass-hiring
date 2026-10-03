@@ -18,7 +18,9 @@ const MASK = '••••••••';
 
 (async () => {
   const s = await W.start(55);
-  await W.seed(s, [W.person(1)]);
+  // p2 was emailed 40 days ago and never answered: due a follow-up whenever
+  // follow-ups are allowed at all.
+  await W.seed(s, [W.person(1), W.person(2, { status: 'emailed', lastEmailedAt: W.ago(40 * 1440), lastSubject: 'Quick question' })]);
 
   // ---------- plain fields ----------
   let r = await s.json('POST', '/api/settings', {
@@ -67,13 +69,14 @@ const MASK = '••••••••';
   ok(Object.entries(want).every(([k, [, to]]) => set[k] === to), 'the clamped numbers are what is stored', Object.fromEntries(Object.keys(want).map((k) => [k, set[k]])));
   st = await W.state(s);
   ok(Object.entries(want).every(([k, [, to]]) => st.settings[k] === to), 'and what the page reads', Object.fromEntries(Object.keys(want).map((k) => [k, st.settings[k]])));
-  ok(st.queue.dailyLimit === 2000 && st.texting.queue.dailyLimit === 100 && st.followUp.days === 30 && st.followUp.max === 5, 'the queues use the clamped numbers', { email: st.queue.dailyLimit, text: st.texting.queue.dailyLimit, followUp: st.followUp });
+  ok(st.queue.dailyLimit === 2000 && st.texting.queue.dailyLimit === 100 && st.followUp.days === 30 && W.same(st.followUp.dueIds, ['p2']), 'the queues use the clamped numbers', { email: st.queue.dailyLimit, text: st.texting.queue.dailyLimit, followUp: st.followUp });
 
   r = await s.json('POST', '/api/settings', { dailyLimit: '300', perMinute: '20', followUpDays: '4', maxFollowUps: '0', textDailyLimit: '50', textMinGap: '60', textMaxGap: '120', textStartHour: '9', textEndHour: '18' });
   ok(r.body.adjusted.length === 0, 'numbers inside the range are taken as typed', r.body.adjusted);
   set = (await W.stored(s)).settings;
   ok(set.dailyLimit === '300' && set.maxFollowUps === '0' && set.textEndHour === '18', 'and stored as typed (a deliberate 0 included)', set);
-  ok((await W.state(s)).followUp.max === 0, 'a deliberate 0 means no follow-ups');
+  st = await W.state(s);
+  ok(st.followUp.days === 4 && st.followUp.dueIds.length === 0, 'a deliberate 0 means no follow-ups: nobody is due one', st.followUp);
 
   r = await s.json('POST', '/api/settings', { followUpDays: '2.6', perMinute: 'lots', dailyLimit: '' });
   const adj2 = Object.fromEntries(r.body.adjusted.map((a) => [a.key, a]));

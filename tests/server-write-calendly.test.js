@@ -10,6 +10,7 @@
 //   - a cancellation un-books them (back to replied or emailed) once
 //   - a status set by hand (declined) is not overridden by a booking
 //   - a Calendly failure is shown, and cleared by the next good sync
+//   - two syncs at once (the dashboard and Sales IQ) announce a booking once
 const crypto = require('crypto');
 const { ok, done, crash } = require('./helpers');
 const W = require('./server-write-helpers');
@@ -18,7 +19,9 @@ const W = require('./server-write-helpers');
   const s = await W.start(65);
   let listing = [];
   let failWith = null;
+  let slow = 0;           // ms Calendly takes to answer, to make two syncs overlap
   s.calendly.listInterviews = async () => {
+    if (slow) await new Promise((res) => setTimeout(res, slow));
     if (failWith) throw new Error(failWith);
     return { interviews: structuredClone(listing), skipped: [], complete: true, schedulingUrl: 'https://calendly.com/pat-example' };
   };
@@ -133,6 +136,18 @@ const W = require('./server-write-helpers');
   listing = [...listing, ev5];
   r = await s.json('POST', '/api/calendly/sync');
   ok(r.body.newBookings === 0 && (await lines('booked', 'p4')).length === 1 && s.pushes.length === 1, 'the sync that lists it next does not announce it again', r.body);
+
+  // ---------- two syncs at once ----------
+  // The dashboard's button and Sales IQ (which asks for a sync whenever it
+  // looks) can sync at the same moment. A new booking is announced once.
+  await s.store.update((d) => { d.candidates.push(W.person(5, { status: 'emailed', lastEmailedAt: W.ago(3000) })); });
+  const ev6 = event(6, { name: 'Taylor Reese', email: 'taylor.reese@example.com' });
+  listing = [...listing, ev6];
+  slow = 60;
+  const pair = await Promise.all([1, 2].map(() => s.json('POST', '/api/calendly/sync')));
+  slow = 0;
+  ok(pair.every((x) => x.body && x.body.ok) && pair[0].body.newBookings + pair[1].body.newBookings === 1, 'two syncs at once find the new booking once between them', pair.map((x) => x.body));
+  ok((await lines('booked', 'p5')).length === 1 && (await W.storedCandidate(s, 'p5')).status === 'booked' && s.pushes.length === 1, 'with one line, and still no push from a sync');
 
   ok(s.outsideCalls.length === 0 && s.sentMail.length === 0, 'nothing reached the outside world', s.outsideCalls);
   await s.close();

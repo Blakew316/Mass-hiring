@@ -55,13 +55,14 @@ function stubEverything() {
 }
 
 // The app, signed in to Team Maverick, with everything outside stubbed out
-// before app.js is first required.
-async function start(offset) {
+// before app.js is first required. wipe:false joins the data already there
+// (a second instance, see secondInstance below).
+async function start(offset, { wipe = true } = {}) {
   process.env.APP_PASSWORD = 'test-password';
   require(R('lib/tenant.js')).adopt('maverick');
   guardFetch();
   const mods = stubEverything();
-  const s = await startApp({ offset });
+  const s = await startApp({ offset, wipe });
   // startApp's own stubs replaced a few of ours (status, sendStatus, thread
   // reads); put the quiet versions back where they differ.
   mods.google.threadReplies = async () => ({ limited: false, replies: [] });
@@ -175,7 +176,97 @@ async function secondTeam(s, name = 'Harbor Crew', pin = '4826') {
   return { id, cookie, call, json, inTeam };
 }
 
+// The page's own 30-second poll (public/app.js refresh()): it keeps the tag of
+// the state on screen and asks "anything newer than this?". A 304 means no,
+// and the page goes on showing what it has — so a 304 after a write would
+// leave the change off the screen. Returns what the page would then show.
+// Like state() above, this is the one place to change if the way the page
+// polls changes (a compact list, deltas merged into the copy it keeps).
+function pagePoller(s, { base = s.base, cookie = s.cookie } = {}) {
+  let tag = '';
+  let shown = null;
+  return async function poll() {
+    const r = await fetch(`${base}/api/state`, { headers: { cookie, ...(tag ? { 'if-none-match': tag } : {}) } });
+    if (r.status === 304 && shown) return { fresh: false, state: shown };
+    if (r.status !== 200) throw new Error(`/api/state answered ${r.status}`);
+    shown = await r.json();
+    tag = r.headers.get('etag') || '';
+    return { fresh: true, state: shown };
+  };
+}
+
+// A second copy of the app in its own process, on its own port, sharing this
+// one's storage — as two instances of the deployed function do, or the
+// scheduled worker beside the dashboard. Nothing in it reaches the outside
+// world either (it runs start() too). Driven over HTTP like the first; a few
+// commands go in on stdin as JSON lines and are answered the same way:
+//   { cmd: 'gmail', threads, changed }  what its Gmail answers from now on
+//   { cmd: 'report' }                   { pushes, outside, mail } it recorded
+// Never send it two writes at once alongside the first instance: the local
+// file store's conditional write is atomic within one process only (on
+// Netlify Blobs it is atomic across instances), so a cross-process race
+// would test the test adapter, not the app.
+function secondInstance(offset) {
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [__filename, '--instance', String(offset)], { env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  let buf = '';
+  let errText = '';
+  const waiting = [];
+  const answers = [];
+  child.stderr.on('data', (d) => { errText = (errText + d).slice(-4000); });
+  child.stdout.on('data', (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith('{')) continue;   // the app's own logging
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+      if (!msg || !msg.__instance) continue;
+      if (waiting.length) waiting.shift().resolve(msg); else answers.push(msg);
+    }
+  });
+  const next = () => new Promise((resolve, reject) => {
+    if (answers.length) return resolve(answers.shift());
+    const t = setTimeout(() => reject(new Error(`second instance did not answer: ${errText}`)), 20000);
+    waiting.push({ resolve: (m) => { clearTimeout(t); resolve(m); } });
+  });
+  child.on('exit', (code) => { for (const w of waiting.splice(0)) w.resolve({ __instance: true, error: `exited ${code}: ${errText}` }); });
+  const ask = async (msg) => { child.stdin.write(`${JSON.stringify(msg)}\n`); return next(); };
+  return next().then((hello) => {
+    if (!hello.ready) throw new Error(`second instance did not start: ${hello.error || errText}`);
+    return {
+      base: hello.base,
+      ask,
+      stop: () => new Promise((resolve) => { child.once('exit', () => resolve()); child.stdin.end(); setTimeout(() => child.kill('SIGKILL'), 3000).unref(); }),
+    };
+  });
+}
+
+// Run as the second instance: node server-write-helpers.js --instance <offset>
+if (require.main === module && process.argv[2] === '--instance') {
+  const say = (o) => process.stdout.write(`${JSON.stringify({ __instance: true, ...o })}\n`);
+  (async () => {
+    const s = await start(Number(process.argv[3]), { wipe: false });
+    let threads = {};
+    let changed = [];
+    s.google.threadReplies = async (_settings, threadId) => ({ limited: false, replies: (threads[threadId] || []).map((m) => ({ ...m })) });
+    s.google.recentInboundThreads = async () => { const set = new Set(changed); set.complete = true; return set; };
+    const rl = require('readline').createInterface({ input: process.stdin });
+    rl.on('line', (line) => {
+      let m = {};
+      try { m = JSON.parse(line); } catch { return say({ error: 'bad command' }); }
+      if (m.cmd === 'gmail') { threads = m.threads || {}; changed = m.changed || []; return say({ ok: true }); }
+      if (m.cmd === 'report') return say({ pushes: s.pushes, outside: s.outsideCalls, mail: s.sentMail.length });
+      return say({ error: `unknown command ${m.cmd}` });
+    });
+    rl.on('close', () => { s.close().finally(() => process.exit(0)); });
+    say({ ready: true, base: s.base });
+  })().catch((e) => { say({ error: String((e && e.stack) || e) }); process.exit(2); });
+}
+
 module.exports = {
   start, person, seed, plain, same, state, pick, stored, storedCandidate, storedEvents,
-  textQueue, everything, relayToken, relay, secondTeam, pushes, sentMail, outsideCalls, ago,
+  textQueue, everything, relayToken, relay, secondTeam, pagePoller, secondInstance, pushes, sentMail, outsideCalls, ago,
 };
