@@ -98,7 +98,7 @@ const LABEL = { new: 'Not contacted', emailed: 'Emailed', replied: 'Replied', bo
   for (const [k, n] of Object.entries(texted)) ok(await pick('#textedFilter', k, countFor(n)) === countFor(n), `texting "${k}": ${n}`, await shown());
   const pips = await page.$$eval('#candidateRows [data-col="text"] .text-pip', (ps) => ps.map((p) => p.textContent.trim()));
   ok(pips.length === 50 && pips.every((t) => t === '+ add number' || t === 'bad number'), '  "No phone number": each row offers to add one or says the number is bad', [...new Set(pips)]);
-  ok(pips.filter((t) => t === 'bad number').length + pips.filter((t) => t === '+ add number').length === 50, '  (both kinds)');
+  ok(pips.includes('bad number') && pips.includes('+ add number'), '  (both kinds are there: no number at all, and one that cannot be texted)', [...new Set(pips)]);
   ok(JSON.stringify(await chips()) === JSON.stringify(['Texting: No phone number']), '  chip "Texting: No phone number"', await chips());
   await pick('#textedFilter', '1', countFor(5));
   ok(JSON.stringify((await ids()).sort()) === JSON.stringify(['e03', 'e04', 'e05', 'r03', 'r04']), 'Texted today: exactly the five texted in the last day', await ids());

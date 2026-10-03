@@ -307,8 +307,18 @@ async function openCandidates(page) {
 }
 
 // The add/edit window puts the cursor in its first field (or the number) a
-// moment after it opens; type only once it has, as a person would.
-const focused = (page, id) => page.waitForFunction((x) => document.activeElement && document.activeElement.id === x, id);
+// moment after it opens; type only once it has, as a person would. On a
+// laptop the first field is focused twice — as the window opens, and again
+// (selecting what is in it) 40 ms later — so seeing the cursor there is not
+// enough: a field filled in between had its text land in the first field
+// instead. Timers run in the order they fall due, so one set in the page now,
+// for later than that, runs after the window's own; wait it out, then check.
+async function focused(page, id) {
+  const there = (x) => document.activeElement && document.activeElement.id === x;
+  await page.waitForFunction(there, id);
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 250)));
+  await page.waitForFunction(there, id);
+}
 
 // A count shown as "n of total" or "N candidates".
 const countText = (page) => text(page, '#candCount');

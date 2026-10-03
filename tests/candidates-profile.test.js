@@ -24,7 +24,9 @@ const H = require('./candidates-helpers');
   async function open(id) {
     if (await isOpen()) { await page.keyboard.press('Escape'); }
     const q = B[id] ? B[id].email : id;
-    await page.fill('#searchInput', q);
+    // Typing the same search again would redraw the list a beat later (the
+    // box waits for typing to stop) — under whatever this test does next.
+    if (await page.$eval('#searchInput', (el) => el.value) !== q) await page.fill('#searchInput', q);
     await page.waitForFunction((x) => [...document.querySelectorAll('#candidateRows tr')].some((tr) => tr.dataset.id === x) && document.querySelectorAll('#candidateRows tr').length === 1, id);
     await page.click(`#candidateRows tr[data-id="${id}"] [data-col="company"]`);
     await page.waitForSelector('#profileModal:not([hidden])');
@@ -200,8 +202,7 @@ const H = require('./candidates-helpers');
   await open('e04');
   await page.mouse.click(5, 5);
   ok(await isOpen() === false, 'and a click outside it');
-  await page.focus('#candidateRows tr[data-id="e04"]');
-  await page.keyboard.press('Enter');
+  await page.press('#candidateRows tr[data-id="e04"]', 'Enter');
   ok(await isOpen() && (await read()).name === e04.name, 'Enter on a row opens it from the keyboard');
   await page.keyboard.press('Escape');
   await page.click('#candidateRows tr[data-id="e04"] .row-check');

@@ -100,6 +100,9 @@ const H = require('./candidates-helpers');
   await page.selectOption('#rankFilter', '');
 
   // ---- a save that fails ----
+  // Not pinned here: what the row's menu shows after the failure. Today it
+  // keeps the choice that was never saved (until the next new state redraws
+  // the list) — a known bug. Once it is put back, add that check here.
   const menuBefore = JSON.stringify(await stageMenu());
   await page.route('**/api/candidates/e10', (route) => (route.request().method() === 'PATCH'
     ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Could not save just now.' }) })
@@ -121,9 +124,12 @@ const H = require('./candidates-helpers');
   // What is on screen after a fresh look is what the server holds.
   await page.reload({ waitUntil: 'networkidle' });
   await H.openCandidates(page);
-  ok(await rowStatus('e10') === 'Emailed', 'reloaded, the row shows the status the server kept');
-  ok(JSON.stringify(await stageMenu()) === JSON.stringify(menuFor(n)), 'and every change that did save is still there', await stageMenu());
-  ok(await rowStatus('e34') === 'Replied' && await rowStatus('x12') === 'Bounced', 'row by row');
+  // Whatever it shows first, it must arrive at what the server holds.
+  const reloaded = await H.settle(page, async () => ({ e10: await rowStatus('e10').catch(() => null), menu: await stageMenu(), e34: await rowStatus('e34').catch(() => null), x12: await rowStatus('x12').catch(() => null) }),
+    { e10: 'Emailed', menu: menuFor(n), e34: 'Replied', x12: 'Bounced' });
+  ok(reloaded.e10 === 'Emailed', 'reloaded, the row shows the status the server kept', reloaded.e10);
+  ok(JSON.stringify(reloaded.menu) === JSON.stringify(menuFor(n)), 'and every change that did save is still there', reloaded.menu);
+  ok(reloaded.e34 === 'Replied' && reloaded.x12 === 'Bounced', 'row by row', reloaded);
 
   ok(errors.length === 0, 'no page errors', errors);
   ok(H.outside.length === 0, 'nothing reached the outside world', H.outside);
