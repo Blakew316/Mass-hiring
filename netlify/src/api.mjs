@@ -6,8 +6,15 @@
 // for it (including the endpoint strong-consistency reads need), whereas the
 // legacy exports.handler style does not.
 import { gzipSync } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 import serverless from 'serverless-http';
 import app from '../../app.js';
+import code from '../../lib/code-version.js';
+
+// Deployed, this file is the bundle that holds all of the server's code, and
+// lib/ is not there to be read: name it, so the state's tag can carry a
+// fingerprint of the code that built the answer (lib/code-version.js).
+code.useFile(fileURLToPath(import.meta.url));
 
 // PDFs (the onboarding documents and signed copies) come back as bytes; every
 // other response is text, exactly as before.
@@ -82,12 +89,19 @@ async function handle(request, url, context) {
   // thousand candidates has a /api/state bigger than that. JSON shrinks
   // about eightfold under gzip, and every browser asks for it.
   const size = typeof respBody === 'string' ? Buffer.byteLength(respBody) : respBody.length;
+  let sent = size;
   if (size > COMPRESS_OVER && /\bgzip\b/i.test(headers['accept-encoding'] || '')
       && !out.has('content-encoding') && /json|text|javascript/i.test(out.get('content-type') || '')) {
     respBody = gzipSync(respBody);
+    sent = respBody.length;
     out.set('content-encoding', 'gzip');
     out.delete('content-length');
     out.append('vary', 'Accept-Encoding');
+  }
+  // An answer nearing that limit is said so in the function log, with its
+  // size, while there is still room: past 6 MB it would simply fail.
+  if (sent > WARN_OVER) {
+    console.warn(`[api] ${request.method} ${url.pathname} answered ${mb(sent)}${sent !== size ? ` (${mb(size)} before compression)` : ''}; Netlify refuses an answer over 6 MB`);
   }
   // A 304 (the unchanged 30-second poll) or 204 must have no body at all —
   // Response() throws on even an empty string, which turned every unchanged
@@ -99,6 +113,9 @@ async function handle(request, url, context) {
 const NULL_BODY = new Set([101, 204, 205, 304]);
 
 const COMPRESS_OVER = 1024;
+
+const WARN_OVER = 4 * 1024 * 1024;
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
 
 export const config = {
   path: ['/api/*', '/auth/*', '/webhooks/*'],
