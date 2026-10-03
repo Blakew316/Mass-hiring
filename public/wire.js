@@ -93,7 +93,10 @@
   const rowText = (fields, k, c, s) => `${candText(fields, k, c)}${sideText(fields, k, s)}\n`;
 
   // sha1, as base64url, cut to `len` letters. The page's crypto.subtle; the
-  // server uses Node's own (app.js) and gives the same letters.
+  // server uses Node's own (app.js) and gives the same letters. A browser has
+  // crypto.subtle only on https or localhost: a page opened over plain http
+  // (the app on another machine on the same network) has none, cannot check
+  // anything against a digest, and so only ever asks for the whole list.
   const canDigest = () => Boolean(typeof crypto !== 'undefined' && crypto && crypto.subtle && typeof TextEncoder !== 'undefined');
   async function digest(text, len) {
     const bytes = new Uint8Array(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text)));
@@ -317,8 +320,13 @@
     const ids = cands.map((c) => c && c.id);
     const bk = new Uint16Array(ids.length);
     for (let i = 0; i < ids.length; i++) bk[i] = bucketOf(ids[i], msg.nb);
-    if (await digest(ids.map(String).join('\n'), LONG) !== msg.o) throw refused('its order is not the order it says');
-    if (await digest(d.join(''), LONG) !== msg.rh) throw refused('its digests are not the ones it says');
+    // Without crypto.subtle (canDigest) there is nothing to check these with,
+    // and the copy is never patched either: taken as it came, as the old
+    // state's list always was.
+    if (canDigest()) {
+      if (await digest(ids.map(String).join('\n'), LONG) !== msg.o) throw refused('its order is not the order it says');
+      if (await digest(d.join(''), LONG) !== msg.rh) throw refused('its digests are not the ones it says');
+    }
     return {
       t: msg.t, v: msg.v, nb: msg.nb, n: msg.n, o: msg.o, rh: msg.rh, rn: msg.rn, ro: Array.isArray(msg.ro) ? msg.ro : null,
       f: msg.f, k: msg.k, ids, cands, sides, bk, d, dup: new Set(ids).size !== ids.length,

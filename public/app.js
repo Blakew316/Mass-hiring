@@ -884,26 +884,45 @@
   const VERIFY_MAX = 60 * 60000;
   let verifyWait = VERIFY_MS;
   let verifyTimer = 0;
+  // No more than this much of the check at a time, idle moment or not: a
+  // browser's idle moment can be 50 ms, and a tap that lands in it waits for
+  // the end of it.
+  const SLICE_MS = 10;
+  // Safari (every iPhone) has no requestIdleCallback. A timer stands in, with
+  // a budget measured from when it runs: a stand-in that always said there was
+  // time left would have the check read all 33,000 people in one go — a
+  // second and a half, on a phone, of taps going unanswered.
   const idle = (fn) => (window.requestIdleCallback
     ? requestIdleCallback(fn, { timeout: 10000 })
-    : setTimeout(() => fn({ timeRemaining: () => 8, didTimeout: true }), 50));
+    : setTimeout(() => {
+      const until = performance.now() + SLICE_MS;
+      fn({ timeRemaining: () => Math.max(0, until - performance.now()), didTimeout: false });
+    }, 50));
   function scheduleVerify(soon = false) {
     if (verifyTimer || !Wire.canDigest()) return;
     verifyTimer = setTimeout(() => idle(() => checkIndex(list)), soon ? 30000 : verifyWait);
   }
+  // The copy being checked is still the one kept: the very copy, or the same
+  // rows under a newer version (Wire.adopt). The version often moves with
+  // nobody's row changing — a setting saved, a ten-minute window that moves
+  // nobody — and the first poll after a load usually lands just as the first
+  // check starts: begun again each time, the check would seldom finish.
+  const stillKept = (copy) => Boolean(copy && list) && (copy === list || (copy.cands === list.cands && copy.sides === list.sides && copy.d === list.d));
   function checkIndex(copy) {
-    if (!copy || copy !== list || document.hidden) { verifyTimer = 0; if (list) scheduleVerify(); return; }
+    if (!stillKept(copy) || document.hidden) { verifyTimer = 0; if (list) scheduleVerify(); return; }
     const groups = Array.from({ length: copy.nb }, () => []);
     for (let i = 0; i < copy.n; i++) groups[copy.bk[i]].push(i);
     idle((deadline) => checkBuckets(copy, groups, 0, [], deadline));
   }
   async function checkBuckets(copy, groups, from, bad, deadline) {
-    if (copy !== list) { verifyTimer = 0; scheduleVerify(); return; }
+    if (!stillKept(copy)) { verifyTimer = 0; scheduleVerify(); return; }
     const texts = [];
     let b = from;
+    // At least one bucket, then as many more as fit in this moment.
+    const until = performance.now() + Math.min(deadline.timeRemaining(), SLICE_MS);
     // The page's own edits come off for the reading, and go straight back on.
     withOverlaysLifted(() => {
-      while (b < copy.nb && (!texts.length || deadline.timeRemaining() > 2)) {
+      while (b < copy.nb && (!texts.length || performance.now() < until)) {
         texts.push([b, groups[b].map((i) => Wire.rowText(copy.f, copy.k, copy.cands[i], copy.sides[i])).join('')]);
         b += 1;
       }
@@ -913,7 +932,7 @@
     } catch { verifyTimer = 0; return; }
     if (b < copy.nb) { idle((d) => checkBuckets(copy, groups, b, bad, d)); return; }
     verifyTimer = 0;
-    if (copy !== list) { scheduleVerify(); return; }
+    if (!stillKept(copy)) { scheduleVerify(); return; }
     if (!bad.length) { verifyWait = VERIFY_MS; return; }
     for (const at of bad) distrust.add(at);
     verifyWait = Math.min(verifyWait * 2, VERIFY_MAX);
