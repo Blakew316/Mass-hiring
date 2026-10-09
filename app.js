@@ -617,8 +617,9 @@ function compactList(db, p, sides) {
 // Everything a page needs to know about the list to tell whether its copy is
 // current, and to check it.
 function listHeader(L, withOrder) {
+  const { fields, k } = wireSchema();
   return {
-    fmt: wire.FORMAT, t: tenant.current(), v: L.v, nb: L.rows.nb, n: L.rows.n, o: L.rows.o, rh: L.rh, rn: L.sides.rn,
+    fmt: wire.FORMAT, t: tenant.current(), v: L.v, nb: L.rows.nb, n: L.rows.n, o: L.rows.o, rh: L.rh, rn: L.sides.rn, fk: wire.fieldsKey(fields, k),
     ...(withOrder || L.sides.exotic ? { ro: L.sides.order } : {}),
   };
 }
@@ -751,7 +752,7 @@ function sendSlimState(req, res, db, parts, payload, now, optOut) {
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
   const L = compactList(db, parts, sides);
   const h = listHeader(L, false);
-  const cands = { v: h.v, n: h.n, nb: h.nb, o: h.o, rh: h.rh, rn: h.rn, t: h.t };
+  const cands = { v: h.v, n: h.n, nb: h.nb, o: h.o, rh: h.rh, rn: h.rn, t: h.t, fk: h.fk };
   return res.type('application/json').send(JSON.stringify({ cands, ...rest }));
 }
 

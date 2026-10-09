@@ -7,7 +7,8 @@
 //   - a copy altered on the device (with the key) is put right by the idle
 //     check against the server's digests, without the whole list, and what
 //     is kept of it is written again;
-//   - another team's copy, or one in another format, is never used;
+//   - another team's copy, one in another format, or one whose fields have
+//     since been renamed, is never used as it is;
 //   - a copy written over by something else (this team in another tab) is
 //     never patched as if it were this page's, and what is kept stays whole;
 //   - moving to another team keeps that team's copy in its place, and the
@@ -205,6 +206,17 @@ const groupKeys = (k) => Object.keys(k).filter((x) => /^g\d+$/.test(x));
     await alterKept(page, 'head', 'v.keep = 99; return v;');
     await reload();
     ok(lists().length === 1, 'another format: never used; the whole list is fetched', asked);
+
+    // ---- kept under fields since renamed (a copy kept across a deploy) ----
+    ok(Boolean(await keptWhen(page, (x) => x.head && x.head.keep === 1)), '(kept again)');
+    const rename = 'const m = typeof v === "string" ? JSON.parse(v) : v; m.f = m.f.map((x) => (x === "role" ? "jobRole" : x)); return typeof v === "string" ? JSON.stringify(m) : m;';
+    await alterKept(page, 'head', rename);
+    for (const gk of groupKeys(await keptNow(page))) await alterKept(page, gk, rename, keyRaw);
+    await reload();
+    ok(lists().length === 1, 'fields renamed since: the copy is not taken for current; the whole list is fetched', asked);
+    const roleShown = await page.$eval('#roleFilter', (e) => e.options.length > 2);
+    ok(roleShown, 'fields renamed since: the page has everyone\'s role, under the name it reads it by');
+    ok(Boolean(await keptWhen(page, (x) => x.head && x.head.f.includes('role') && !x.head.f.includes('jobRole'))), 'fields renamed since: and it is kept again under the fields it has');
 
     // ---- written over by something else ----
     ok(Boolean(await keptWhen(page, (x) => x.head && x.head.keep === 1)), '(kept again)');

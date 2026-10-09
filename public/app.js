@@ -785,8 +785,10 @@
   // kept; refresh() draws it only under a state of the same team.
   async function bringListUp(cands) {
     const team = cands.t;
-    // Another team's copy is never sent up, patched or drawn from.
-    if (list && list.t !== team) dropList();
+    // Another team's copy is never sent up, patched or drawn from; nor one
+    // whose fields have since been renamed (kept on the device across a
+    // deploy), whose digests would otherwise pass it for current.
+    if (list && (list.t !== team || (cands.fk !== undefined && Wire.fieldsKey(list.f, list.k) !== cands.fk))) dropList();
     const epoch = listEpoch;
     // Signed out while it was on its way: handed back for refresh() to drop,
     // never kept.
@@ -7551,7 +7553,7 @@
       allowKeeping(a.keepKey);
       // The copy this device kept, if it is this team's: the first state
       // then brings it up to date with a sync rather than the whole list.
-      await restoreKept(a.team.id).catch(() => false);
+      if (a.team) await restoreKept(a.team.id).catch(() => false);
       await refresh();
       keepIfNeeded();
       start();

@@ -457,10 +457,16 @@
     return out;
   }
 
+  // Which fields a list has, in a few letters: the digests are taken over
+  // the values alone, so a copy whose fields have since been renamed (a copy
+  // kept on the device across a deploy) would otherwise pass for current.
+  const fieldsKey = (f, k) => `${k}.${fnv1a(f.join('\u0000')).toString(36)}`;
   // "Nothing has changed since your copy" — the same people, order and
-  // digests, under a newer version.
+  // digests, under a newer version, with the same fields (a server that
+  // does not say which is taken at its word).
   function sameAs(list, info) {
-    return Boolean(list && info && info.t === list.t && info.nb === list.nb && info.n === list.n && info.o === list.o && info.rh === list.rh);
+    return Boolean(list && info && info.t === list.t && info.nb === list.nb && info.n === list.n && info.o === list.o && info.rh === list.rh
+      && (info.fk === undefined || (Array.isArray(list.f) && fieldsKey(list.f, list.k) === info.fk)));
   }
   const adopt = (list, info) => ({ ...list, v: info.v, rn: info.rn, ro: Array.isArray(info.ro) ? info.ro : list.ro });
 
@@ -578,7 +584,7 @@
     FORMAT, DIGEST, LONG, UNKNOWN, PART_ROWS, partsFor,
     fnv1a, bucketOf, bucketCount,
     candText, sideText, rowText, canDigest, digest,
-    pack, unpack, fromFull, fromParts, applyDelta, bucketTexts, sameAs, adopt, syncBody,
+    pack, unpack, fromFull, fromParts, applyDelta, bucketTexts, sameAs, adopt, syncBody, fieldsKey,
     rankOf, priorityOf, dueIdsOf, rankDigest,
     groupsFor, groupOf, groupDigests, keptHead, keptMembers, keptGroup, fromKept,
   };
