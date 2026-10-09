@@ -31,8 +31,8 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
   require(path.join(ROOT, 'lib/mailer.js')).sendStatus = async () => ({ ready: true, from: 'Blake Woodruff <blake@wholesalepayments.com>', via: 'gmail-api', reason: '' });
   const app = require(path.join(ROOT, 'app.js'));
   // The function gzips any text answer over 1 KB for a browser that accepts it,
-  // and keeps the last couple of whole compact lists compressed under their
-  // tag, as brotli for a browser that takes it (netlify/src/api.mjs).
+  // and keeps the last whole compact lists (or their parts) compressed under
+  // their tag, up to 16 MB, as brotli for a browser that takes it (netlify/src/api.mjs).
   const express = require(path.join(ROOT, 'node_modules/express'));
   const api = express();
   const zipped = new Map();
@@ -56,7 +56,9 @@ async function start({ ROOT, PORT, fixture = path.join(__dirname, 'fixture-data'
         if (hit && hit.size === buf.length) return send(hit.body);
         const z = make();
         zipped.set(key, { size: buf.length, body: z });
-        while (zipped.size > 2) zipped.delete(zipped.keys().next().value);
+        let bytes = 0;
+        for (const v of zipped.values()) bytes += v.body.length;
+        while (zipped.size > 1 && bytes > 16 * 1024 * 1024) { const k = zipped.keys().next().value; bytes -= zipped.get(k).body.length; zipped.delete(k); }
         return send(z);
       }
       return send(body);

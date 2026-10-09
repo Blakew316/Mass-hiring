@@ -791,7 +791,7 @@
       // window that moved nobody): nothing to ask for.
       if (Wire.sameAs(list, cands)) return keep(Wire.adopt(list, cands));
     }
-    if (!list || list.dup || !Wire.canDigest()) return wholeList(team, keep);
+    if (!list || list.dup || !Wire.canDigest()) return wholeList(team, keep, cands.n);
     const asked = new Set(distrust);
     // A network error or a timeout is said as one — the next poll tries
     // again — rather than fetching the whole list over a connection that has
@@ -800,6 +800,8 @@
     if (r.status === 401) throw authFailed();
     if (r.status !== 200 || !r.body) throw new Error(`Request failed (${r.status})`);
     const msg = r.body;
+    // Too many people to send whole in one answer: fetched in parts.
+    if (msg.whole) return wholeList(team, keep, msg.n);
     let next;
     try {
       if (msg.same) {
@@ -809,7 +811,7 @@
       else next = await Wire.fromFull(msg);
     } catch (err) {
       if (!err.refused) throw err;
-      return wholeList(team, keep);
+      return wholeList(team, keep, msg.n);
     }
     for (const b of asked) distrust.delete(b);
     keep(next);
@@ -817,23 +819,48 @@
     return next;
   }
 
-  async function wholeList(team, keep) {
-    const e = takeEarly('list');
-    let r = null;
-    if (e && !wantOrder) {
-      try {
-        r = await fetchJson(null, { ms: FULL_MS }, e);
-        if (r.status !== 200 || !r.body || r.body.t !== team) r = null;
-      } catch { r = null; }
+  // The whole list. Past Wire.PART_ROWS people it comes in parts, asked for
+  // all at once (one answer of the whole would pass Netlify's 6 MB limit, and
+  // parts are read as each arrives); a part of another version (the list
+  // changed while they were on their way) and all of them are asked again,
+  // once. How many parts a list this size takes is kept for index.html,
+  // which asks for them before the scripts arrive.
+  async function wholeList(team, keep, n) {
+    const ro = wantOrder ? '&ro=1' : '';
+    let msgs = await earlyList(team);
+    for (let tries = 0; !msgs; tries++) {
+      const of = Wire.partsFor(n);
+      const urls = of > 1
+        ? Array.from({ length: of }, (_, i) => `/api/candidates?v=2&part=${i}&of=${of}${ro}`)
+        : [`/api/candidates?v=2${ro}`];
+      const rs = await Promise.all(urls.map((url) => fetchJson(url, { ms: FULL_MS })));
+      for (const r of rs) {
+        if (r.status === 401) throw authFailed();
+        if (r.status !== 200 || !r.body) throw new Error(`Request failed (${r.status})`);
+      }
+      msgs = rs.map((r) => r.body);
+      if (tries < 1 && msgs.some((m) => m.v !== msgs[0].v)) { n = Math.max(...msgs.map((m) => m.n)); msgs = null; }
     }
-    if (!r) r = await fetchJson(`/api/candidates?v=2${wantOrder ? '&ro=1' : ''}`, { ms: FULL_MS });
-    if (r.status === 401) throw authFailed();
-    if (r.status !== 200 || !r.body) throw new Error(`Request failed (${r.status})`);
-    const copy = await Wire.fromFull(r.body);
+    const copy = await Wire.fromParts(msgs, team);
+    try { localStorage.setItem('wp-list-of', String(Wire.partsFor(copy.n))); } catch { /* no storage */ }
     distrust.clear();
     keep(copy);
     scheduleVerify(true);
     return copy;
+  }
+  // What index.html asked for: the whole list, or every part of it, all of
+  // one version and this team's; anything else and it is asked again.
+  async function earlyList(team) {
+    const es = [];
+    for (let i = 0, e; (e = takeEarly(i ? `list${i}` : 'list')); i++) es.push(e);
+    if (!es.length) return null;
+    if (wantOrder) { for (const e of es) e.ctl.abort(); return null; }
+    try {
+      const rs = await Promise.all(es.map((e) => fetchJson(null, { ms: FULL_MS }, e)));
+      const msgs = rs.map((r) => r.body);
+      if (rs.some((r) => r.status !== 200 || !r.body || r.body.t !== team || r.body.v !== msgs[0].v)) return null;
+      return msgs;
+    } catch { return null; }
   }
 
   // The texting order and the follow-up list for a copy, put together the

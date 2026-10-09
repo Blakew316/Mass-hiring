@@ -129,6 +129,8 @@ const NULL_BODY = new Set([101, 204, 205, 304]);
 // is gzipped as it always was.
 const LIST_TAG = /^W\/"c2-/;
 const zipped = new Map();          // encoding and tag -> { size, body }
+let zippedBytes = 0;
+const ZIPPED_MAX = 16 * 1024 * 1024;
 function compress(text, size, tag, encoding) {
   const key = tag ? `${encoding} ${tag}` : null;
   const hit = key ? zipped.get(key) : null;
@@ -137,9 +139,17 @@ function compress(text, size, tag, encoding) {
     ? brotliCompressSync(text, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: size } })
     : gzipSync(text);
   if (key) {
+    if (zipped.has(key)) zippedBytes -= zipped.get(key).body.length;
     zipped.delete(key);
     zipped.set(key, { size, body });
-    while (zipped.size > 2) zipped.delete(zipped.keys().next().value);
+    // The whole list or its parts for the last couple of versions: kept by
+    // size rather than count, now that a big list is several answers.
+    zippedBytes += body.length;
+    while (zipped.size > 1 && zippedBytes > ZIPPED_MAX) {
+      const oldest = zipped.keys().next().value;
+      zippedBytes -= zipped.get(oldest).body.length;
+      zipped.delete(oldest);
+    }
   }
   return body;
 }

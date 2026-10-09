@@ -634,6 +634,31 @@ function fullListBody(L, withOrder) {
   return L.full;
 }
 
+// One part of the whole list: the rows in list order cut into `of` equal
+// runs, each a message of its own carrying the whole list's header and
+// digests (Wire.fromParts puts them back together). A list of any size
+// travels this way in answers well under Netlify's 6 MB, asked for at once.
+const PARTS_KEPT = 24 * 1024 * 1024;
+function partBody(L, part, of, withOrder) {
+  const key = `${part}/${of}${withOrder ? 'r' : ''}`;
+  if (!L.parts) { L.parts = new Map(); L.partChars = 0; }
+  let body = L.parts.get(key);
+  if (body) return body;
+  const n = L.rows.ids.length;
+  const idx = [];
+  for (let i = Math.floor((part * n) / of), to = Math.floor(((part + 1) * n) / of); i < to; i++) idx.push(i);
+  body = JSON.stringify({ ...listHeader(L, withOrder), d: L.all, part, of, ...packRows(L, idx) });
+  L.parts.set(key, body);
+  // Whatever part counts are asked for, about one list's worth is kept.
+  L.partChars += body.length;
+  while (L.parts.size > 1 && L.partChars > PARTS_KEPT) {
+    const oldest = L.parts.keys().next().value;
+    L.partChars -= L.parts.get(oldest).length;
+    L.parts.delete(oldest);
+  }
+  return body;
+}
+
 // The list for this request's team, as of now.
 async function compactNow() {
   const [db, textQ] = await Promise.all([store.read(), textQueue.loadQ()]);
@@ -648,14 +673,21 @@ const wireFormat = (req) => req.query.v === undefined || req.query.v === String(
 
 app.get('/api/candidates', asyncRoute(async (req, res) => {
   if (req.query.v !== String(wire.FORMAT)) return res.status(400).json({ error: `This server sends the list as ?v=${wire.FORMAT}.`, fmt: wire.FORMAT });
+  const parted = req.query.of !== undefined || req.query.part !== undefined;
+  const of = parted ? Number(req.query.of) : 1;
+  const part = parted ? Number(req.query.part) : 0;
+  if (!Number.isInteger(of) || of < 1 || of > 64 || !Number.isInteger(part) || part < 0 || part >= of) {
+    return res.status(400).json({ error: 'Ask for a part of the list as part=<0..of-1>&of=<1..64>.' });
+  }
   const L = await compactNow();
   const withOrder = req.query.ro === '1';
-  const etag = fullListTag(L, withOrder);
+  const etag = parted ? partTag(L, part, of, withOrder) : fullListTag(L, withOrder);
   res.set('ETag', etag);
   res.set('Cache-Control', 'no-cache, private');
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
-  return res.type('application/json').send(fullListBody(L, withOrder));
+  return res.type('application/json').send(parted ? partBody(L, part, of, withOrder) : fullListBody(L, withOrder));
 }));
+const partTag = (L, part, of, withOrder) => `W/"c2-${L.v}-p${part}.${of}${withOrder ? '-r' : ''}"`;
 // The team is in the version, so this tag can never answer for another team.
 // The function keeps the compressed body under it (netlify/src/api.mjs).
 const fullListTag = (L, withOrder) => `W/"c2-${L.v}${withOrder ? '-r' : ''}"`;
@@ -673,7 +705,11 @@ app.post('/api/candidates/sync', asyncRoute(async (req, res) => {
   const ask = req.body && typeof req.body === 'object' ? req.body : {};
   const withOrder = ask.ro === 1 || ask.ro === true;
   const { nb } = L.rows;
-  const whole = () => res.set('ETag', fullListTag(L, withOrder)).type('application/json').send(fullListBody(L, withOrder));
+  // A list too big for one answer is not sent whole here: the page is told
+  // to fetch it in parts.
+  const whole = () => (L.rows.n > wire.PART_ROWS
+    ? res.json({ ...listHeader(L, withOrder), whole: true })
+    : res.set('ETag', fullListTag(L, withOrder)).type('application/json').send(fullListBody(L, withOrder)));
   if (ask.t !== tenant.current() || ask.nb !== nb || typeof ask.b !== 'string' || ask.b.length !== nb * wire.DIGEST || L.rows.dup) return whole();
   const ch = [];
   for (let b = 0; b < nb; b++) if (ask.b.slice(b * wire.DIGEST, (b + 1) * wire.DIGEST) !== L.d[b]) ch.push(b);
