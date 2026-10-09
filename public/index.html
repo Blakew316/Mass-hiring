@@ -1183,7 +1183,7 @@
             <div class="card-head"><h2><span class="card-ico tone-amber" data-icon="send" data-size="15"></span>Sending pace</h2></div>
             <div class="grid-2">
               <div><label class="label">Daily send limit</label><input type="number" id="setDailyLimit" class="input" min="20" max="2000" placeholder="1800"><div class="hint" id="dailyLimitHint">Up to 2,000 (Google Workspace). When it is reached the queue pauses and resumes by itself as the 24-hour window frees up.</div></div>
-              <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="60" placeholder="30"><div class="hint" id="perMinuteHint">Up to 60 (Gmail's API quota). Several emails are sent in parallel each minute to keep this pace.</div></div>
+              <div><label class="label">Emails per minute</label><input type="number" id="setPerMinute" class="input" min="1" max="45" placeholder="30"><div class="hint" id="perMinuteHint">Up to 45: Gmail gives each account a fixed allowance a minute, and the rest is kept for reading your email while a send runs. Several emails are sent in parallel each minute to keep this pace.</div></div>
               <div><label class="label">Follow up after (days)</label><input type="number" id="setFollowUpDays" class="input" min="1" max="30" placeholder="3"></div>
               <div><label class="label">Follow-ups per person (max)</label><input type="number" id="setMaxFollowUps" class="input" min="0" max="5" placeholder="2"></div>
             </div>

@@ -218,9 +218,9 @@ const SERVER_ONLY = ['messageId', 'threadId', 'sheetRow', 'city', 'altEmails', '
     && set.lastSheetUrl === 'https://docs.google.com/spreadsheets/d/example' && set.smtpUser === 'robin@example.com'
     && set.googleClientId === 'client-id-is-not-secret' && set.ntfyTopic === 'example-topic' && set.gmailSignature === false,
     'the settings the form shows come through as typed', set);
-  ok(set.dailyLimit === '2000' && set.perMinute === '60', 'the email pace is shown already clamped to what the queue will do', { dailyLimit: set.dailyLimit, perMinute: set.perMinute });
+  ok(set.dailyLimit === '2000' && set.perMinute === '45', 'the email pace is shown already clamped to what the queue will do', { dailyLimit: set.dailyLimit, perMinute: set.perMinute });
   ok(set.textDailyLimit === '100' && set.textMinGap === '20' && set.textStartHour === '23', 'the texting pace is shown already clamped', { textDailyLimit: set.textDailyLimit, textMinGap: set.textMinGap, textStartHour: set.textStartHour });
-  ok(S.queue.dailyLimit === 2000 && S.queue.dailyMax === 2000 && S.queue.perMinute === 60, 'the email queue reports the same pace', S.queue);
+  ok(S.queue.dailyLimit === 2000 && S.queue.dailyMax === 2000 && S.queue.perMinute === 45, 'the email queue reports the same pace', S.queue);
   ok(S.texting.queue.dailyLimit === 100 && S.texting.queue.minGap === 20 && S.texting.queue.startHour === 23, 'the text queue reports the same pace', S.texting.queue);
   ok(S.apollo.configured === true && S.calendly.syncEnabled === true && S.calendly.webhook === true && S.texting.tokenSet === true,
     'what is connected is said without saying the secret', { apollo: S.apollo, calendly: S.calendly, tokenSet: S.texting.tokenSet });

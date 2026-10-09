@@ -107,6 +107,24 @@ const { startApp, R, ok, done, crash } = require('./helpers');
     const j7 = await open();
     ok(!j7.stale, '(now current)');
 
+    // Never read from Gmail, but replies are stored: those, at once, without
+    // Gmail; Gmail busy behind them, they stay, said so with Gmail's words,
+    // and sending stands aside for the conversation.
+    await s.store.update((d) => {
+      d.candidates.push({ id: 'p2', name: 'Robin Madeup', email: 'robin.madeup@example.com', status: 'replied', gmailThreadId: 'th2b', lastSubject: 'Quick question', lastEmailedAt: new Date(Date.now() - 864e5).toISOString(), lastReplyAt: new Date().toISOString(),
+        replies: [{ id: 'rr1', from: 'Robin Madeup <robin.madeup@example.com>', date: new Date().toISOString(), text: 'Yes, call me tomorrow', kind: '', textFetched: true }], addedAt: new Date().toISOString() });
+    });
+    calls.gmail = 0;
+    const h1 = await (await realFetch(`${s.base}/api/emails/thread?id=p2`, { headers: { cookie: s.cookie } })).json();
+    ok(h1.partial && h1.stale && calls.gmail === 0 && h1.messages.length === 2 && h1.messages[1].text === 'Yes, call me tomorrow' && h1.messages[0].dir === 'out',
+      'opened for the first time: the email sent and the reply stored, at once, without asking Gmail', { asked: calls.gmail, n: h1.messages.length });
+    gmail = () => ({ status: 403, body: { error: { code: 403, message: "Quota exceeded for quota metric 'Queries' and limit 'Queries per minute per user'", errors: [{ reason: 'rateLimitExceeded' }] } } });
+    const h2 = await (await realFetch(`${s.base}/api/emails/thread?id=p2&fresh=1`, { headers: { cookie: s.cookie } })).json();
+    ok(h2.partial && h2.busy && h2.messages.length === 2 && /Queries per minute per user/.test(h2.detail || ''), 'Gmail busy behind them: they stay, with Gmail\'s own words', { busy: h2.busy, detail: h2.detail });
+    const yieldRec = await storage.getJson('gmail-yield');
+    ok(yieldRec && Date.parse(yieldRec.until) > Date.now() + 20000, 'and sending is asked to stand aside for half a minute', yieldRec);
+    gmail = () => thread;
+
     // The reply checks that run by themselves (the scheduled one, each open
     // page's every minute) take turns: one a minute between them.
     gmail = () => ({ status: 200, body: { messages: [] } });

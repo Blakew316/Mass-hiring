@@ -27,7 +27,7 @@
  * the app is byte for byte the app it was before.
  */
 
-const BUILD = '6a09a5b70e';
+const BUILD = 'd1c197a64b';
 const SHELL = `shell-${BUILD}`;
 const ASSETS = 'assets-v1';
 // v2: Inter from this site. fonts-v1 held Google's copies of it, which
