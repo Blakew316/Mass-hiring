@@ -2186,6 +2186,8 @@ app.get('/api/emails/thread', asyncRoute(async (req, res) => {
     res.json({
       ...base,
       messages: [],
+      // Gmail busy is said as busy, and the page asks again by itself.
+      ...(err.rateLimited ? { busy: true } : {}),
       unavailable: err.scope
         ? 'Reading email needs the extra Gmail permission — Settings → Google → Reconnect and tick every box.'
         : err.message,
