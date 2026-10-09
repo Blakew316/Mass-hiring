@@ -2191,6 +2191,11 @@ app.get('/api/emails/thread', asyncRoute(async (req, res) => {
   const current = keptBody && kept.sig === threadSig(c) && Date.now() - Date.parse(kept.at) < THREAD_FRESH_MS;
   const fresh = req.query.fresh === '1';
   if (keptBody && !fresh) return res.json({ ...base, ...keptBody, canReply: true, savedAt: kept.at, ...(current ? {} : { stale: true }) });
+  // Never read from Gmail yet: what the app itself holds of it (the email
+  // sent, every reply the reply check stored with its text), at once, and
+  // the page asks Gmail for the whole thread behind it.
+  const held = storedConversation(c);
+  if (!fresh && held.messages.some((m) => m.dir === 'in')) return res.json({ ...base, ...held, canReply: true, partial: true, stale: true });
   try {
     const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
     await storage.setJson(threadKey(c.gmailThreadId), { at: new Date().toISOString(), sig: threadSig(c), body: t }).catch(() => {});
@@ -2200,10 +2205,14 @@ app.get('/api/emails/thread', asyncRoute(async (req, res) => {
       await storage.del(threadKey(c.gmailThreadId)).catch(() => {});
       return res.json({ ...base, messages: [], unavailable: 'That conversation is no longer in Gmail.' });
     }
-    const busy = err.rateLimited ? { busy: true, ...(err.retryAt ? { retryAt: err.retryAt } : {}) } : {};
-    // Gmail busy, or a passing fault: the saved copy, if there is one. (A
-    // missing permission is said as one.)
+    const busy = err.rateLimited ? { busy: true, ...(err.retryAt ? { retryAt: err.retryAt } : {}), ...(err.gmailMessage ? { detail: err.gmailMessage } : {}) } : {};
+    // Someone is waiting on this conversation: sending (lib/queue.js) stands
+    // aside for half a minute, so Gmail has room for it.
+    if (err.rateLimited) await storage.setJson('gmail-yield', { until: new Date(Date.now() + 30 * 1000).toISOString() }).catch(() => {});
+    // Gmail busy, or a passing fault: the saved copy, if there is one, or what
+    // the app holds of the conversation. (A missing permission is said as one.)
     if (keptBody && !err.scope) return res.json({ ...base, ...keptBody, canReply: true, savedAt: kept.at, stale: true, ...busy });
+    if (!err.scope && held.messages.some((m) => m.dir === 'in')) return res.json({ ...base, ...held, canReply: true, partial: true, stale: true, ...busy });
     res.json({
       ...base,
       messages: [],
@@ -2215,6 +2224,20 @@ app.get('/api/emails/thread', asyncRoute(async (req, res) => {
     });
   }
 }));
+// What the app holds of a conversation without Gmail: the email sent (its
+// subject) and the replies the reply check stored, with their text — not
+// the whole thread, but never an empty pane while Gmail is out of reach.
+function storedConversation(c) {
+  const messages = [];
+  if (c.lastEmailedAt) {
+    messages.push({ id: 'sent', dir: 'out', from: '', date: c.lastEmailedAt, subject: c.lastSubject || '', messageId: '', snippet: '', text: c.lastSubject ? `Email sent: “${c.lastSubject}”` : 'Email sent', kind: '' });
+  }
+  for (const r of c.replies || []) {
+    messages.push({ id: r.id || '', dir: 'in', from: r.from || '', date: r.date || '', subject: '', messageId: '', snippet: r.snippet || '', text: r.text || r.snippet || '', kind: r.kind || '' });
+  }
+  messages.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return { messages, limited: false, lastMessageId: '', lastSubject: c.lastSubject || '' };
+}
 // Where a conversation's saved copy is kept (purged with the team:
 // lib/storage.js THREAD_PREFIX), and what about the person it is current for.
 const threadKey = (threadId) => `thread-${String(threadId).replace(/[^A-Za-z0-9_-]/g, '')}`;

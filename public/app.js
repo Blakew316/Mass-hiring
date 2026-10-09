@@ -5690,7 +5690,7 @@
       if (!showing) {
         $('#mailBody').innerHTML = `<p class="thread-loading">${got.retryAt && until > 5000
           ? `Gmail has asked this account to wait until ${esc(clockTime(got.retryAt))} before reading more email — this conversation will load then by itself.`
-          : 'Gmail is busy for a moment — this conversation will load by itself in a few seconds.'}</p>`;
+          : 'Gmail is busy for a moment — this conversation will load by itself in a few seconds.'}${got.detail ? `<br><small>Gmail: “${esc(got.detail)}”</small>` : ''}</p>`;
       }
       if (tries <= 5) setTimeout(() => { if (openMailId === id && seq === mailSeq) openMail(id, { markSeen, quiet: true }); }, wait);
       return;
@@ -5710,9 +5710,17 @@
       markRead('email', [{ c: mc, ts: newest(lastIn && lastIn.date, lastInTs(mc, 'email')) }]);
       renderMailList();
     }
-    // The saved copy was not the newest (something has happened since):
-    // the fresh one is asked for now, and drawn over it when it comes.
+    // The saved copy was not the newest (something has happened since), or
+    // only what the app holds of it: the whole one is asked for now, and
+    // drawn over it when it comes — and again, a little later each time,
+    // while Gmail is busy.
     if (got.stale && !fresh) openMail(id, { markSeen: false, quiet: true, fresh: true });
+    else if (fresh && got.busy) {
+      const tries = (openMail.freshTries = openMail.freshFor === id ? (openMail.freshTries || 0) + 1 : 1);
+      openMail.freshFor = id;
+      const until = got.retryAt ? Date.parse(got.retryAt) - Date.now() : 0;
+      if (tries <= 6) setTimeout(() => { if (openMailId === id && seq === mailSeq) openMail(id, { markSeen: false, quiet: true, fresh: true }); }, Math.min(60000, Math.max(4000 * tries, until + 500)));
+    } else if (openMail.freshFor === id) openMail.freshFor = null;
   }
   // The first few conversations on the list, read ahead one at a time while
   // the Email page is open, so the one tapped next is already here.
@@ -5779,9 +5787,18 @@
     const can = Boolean(mail.canReply);
     $('#mailInput').disabled = !can;
     $('#mailSend').disabled = !can;
-    $('#mailNote').textContent = can && mail.limited
-      ? 'Only previews are readable with the current Google permissions — Settings → Google → Reconnect and tick every box to see full messages.'
-      : '';
+    // Gmail's own words when it turned the read away, so the reason is never
+    // a guess.
+    const said = mail.busy && mail.detail ? ` (Gmail: “${mail.detail}”)` : '';
+    $('#mailNote').textContent = mail.partial
+      ? (mail.busy
+        ? `Showing the replies saved in the CRM — Gmail is busy, so the full conversation will load by itself in a moment.${said}`
+        : 'Showing the replies saved in the CRM — loading the full conversation from Gmail…')
+      : mail.busy && mail.stale
+        ? `Showing the copy saved earlier — Gmail is busy; anything newer will load by itself.${said}`
+        : can && mail.limited
+          ? 'Only previews are readable with the current Google permissions — Settings → Google → Reconnect and tick every box to see full messages.'
+          : '';
   }
 
   // As for texts: a second Cmd/Ctrl-Enter while the first email is still on

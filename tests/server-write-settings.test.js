@@ -55,7 +55,7 @@ const MASK = '••••••••';
   });
   const adj = Object.fromEntries((r.body.adjusted || []).map((a) => [a.key, a]));
   const want = {
-    dailyLimit: ['5000', '2000', 'Daily send limit'], perMinute: ['100', '60', 'Emails per minute'],
+    dailyLimit: ['5000', '2000', 'Daily send limit'], perMinute: ['100', '45', 'Emails per minute'],
     followUpDays: ['45', '30', 'Follow up after (days)'], maxFollowUps: ['9', '5', 'Follow-ups per person'],
     textDailyLimit: ['250', '100', 'Texts per day'], textMinGap: ['5', '20', 'Shortest gap between texts'],
     textMaxGap: ['99999', '1800', 'Longest gap between texts'], textStartHour: ['25', '23', 'Start texting at'], textEndHour: ['0', '1', 'Stop texting at'],
