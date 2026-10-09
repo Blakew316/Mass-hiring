@@ -472,6 +472,70 @@
     return { v: list.v, t: list.t, nb: list.nb, b, o: list.o };
   }
 
+  // ---------- the copy kept on the device ----------
+  // The page keeps its copy between visits (app.js), so that opening the app
+  // again costs a sync of what changed rather than the whole list. It is
+  // kept in groups of eight buckets, each group a message of its own (pack),
+  // with the list's order beside them as its ids: a change to one person is
+  // one bucket, so it rewrites one group of a few hundred people, and a group
+  // whose buckets' digests have not moved is the same text as before.
+  const KEEP_BUCKETS = 8;
+  const groupsFor = (nb) => Math.max(1, Math.ceil(nb / KEEP_BUCKETS));
+  const groupOf = (b) => Math.floor(b / KEEP_BUCKETS);
+  // What the groups are cut by, beside them: a group is the same text as
+  // before when these are.
+  const groupDigests = (list, g) => list.d.slice(g * KEEP_BUCKETS, (g + 1) * KEEP_BUCKETS).join('');
+  function keptHead(list) {
+    return { fmt: FORMAT, t: list.t, v: list.v, nb: list.nb, n: list.n, o: list.o, rh: list.rh, rn: list.rn, ro: list.ro, d: list.d.join(''), f: list.f, k: list.k };
+  }
+  // Who is in each group, by their place in the list.
+  function keptMembers(list) {
+    const out = Array.from({ length: groupsFor(list.nb) }, () => []);
+    for (let i = 0; i < list.n; i++) out[groupOf(list.bk[i])].push(i);
+    return out;
+  }
+  const keptGroup = (list, members) => pack(list.f, list.k, members.map((i) => [list.cands[i], list.sides[i]]));
+  // The copy put back together from what was kept, checked as a whole list
+  // is: every person once, in the group their id belongs to, in the order
+  // and with the digests the head says.
+  async function fromKept(head, ids, groups, team) {
+    baseChecks(head);
+    if (team && head.t !== team) throw refused('it is another team\'s list');
+    if (!Array.isArray(head.f) || !Number.isInteger(head.k)) throw refused('the list came in a form this page cannot read');
+    const d = digestsOf(head.d, head.nb);
+    if (!d) throw refused('its digests do not fit its buckets');
+    if (!Array.isArray(ids) || ids.length !== head.n || ids.some((id) => typeof id !== 'string' && typeof id !== 'number')) throw refused('its order is not a list of ids');
+    if (!Array.isArray(groups) || groups.length !== groupsFor(head.nb)) throw refused('its groups do not fit its buckets');
+    const at = new Map();
+    for (let i = 0; i < ids.length; i++) at.set(ids[i], i);
+    if (at.size !== ids.length) throw refused('it has two people under one id');
+    const cands = new Array(head.n);
+    const sides = new Array(head.n);
+    let placed = 0;
+    groups.forEach((msg, g) => {
+      if (!msg || !Array.isArray(msg.f) || !sameFields(head, msg)) throw refused('its groups are not of its fields');
+      const got = unpack(msg);
+      for (let j = 0; j < got.cands.length; j++) {
+        const c = got.cands[j];
+        const i = c ? at.get(c.id) : undefined;
+        if (i === undefined || cands[i] !== undefined || groupOf(bucketOf(c.id, head.nb)) !== g) throw refused('a person in it is not where the list has them');
+        cands[i] = c; sides[i] = got.sides[j];
+        placed += 1;
+      }
+    });
+    if (placed !== head.n) throw refused('it does not hold as many people as it says');
+    const bk = new Uint16Array(ids.length);
+    for (let i = 0; i < ids.length; i++) bk[i] = bucketOf(ids[i], head.nb);
+    if (canDigest()) {
+      if (await digest(ids.map(String).join('\n'), LONG) !== head.o) throw refused('its order is not the order it says');
+      if (await digest(d.join(''), LONG) !== head.rh) throw refused('its digests are not the ones it says');
+    }
+    return {
+      t: head.t, v: head.v, nb: head.nb, n: head.n, o: head.o, rh: head.rh, rn: head.rn, ro: Array.isArray(head.ro) ? head.ro : null,
+      f: head.f, k: head.k, ids, cands, sides, bk, d, dup: false,
+    };
+  }
+
   // ---------- what the page used to be sent beside the list ----------
   // The texting order: everyone with a score, best first, ties by id as the
   // server breaks them (by code unit — the server says when its own order
@@ -516,5 +580,6 @@
     candText, sideText, rowText, canDigest, digest,
     pack, unpack, fromFull, fromParts, applyDelta, bucketTexts, sameAs, adopt, syncBody,
     rankOf, priorityOf, dueIdsOf, rankDigest,
+    groupsFor, groupOf, groupDigests, keptHead, keptMembers, keptGroup, fromKept,
   };
 });

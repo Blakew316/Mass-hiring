@@ -35,7 +35,12 @@
       // A big list comes in parts (app.js wholeList): as many as it took last time.
       var of = 1;
       try { of = Math.min(64, Math.max(1, parseInt(localStorage.getItem('wp-list-of'), 10) || 1)); } catch (e) { /* no storage */ }
-      if (of > 1) for (var i = 0; i < of; i++) ask(i ? 'list' + i : 'list', '/api/candidates?v=2&part=' + i + '&of=' + of);
+      // Not at all when this device keeps a copy of it (app.js): a sync of
+      // what changed brings that up to date.
+      var kept = false;
+      try { kept = localStorage.getItem('wp-kept') === '1'; } catch (e) { /* no storage */ }
+      if (kept) { /* nothing to ask for */ }
+      else if (of > 1) for (var i = 0; i < of; i++) ask(i ? 'list' + i : 'list', '/api/candidates?v=2&part=' + i + '&of=' + of);
       else ask('list', '/api/candidates?v=2');
     }
     window.__early = early;

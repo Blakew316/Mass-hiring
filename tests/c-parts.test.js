@@ -65,7 +65,7 @@ const { Wire, people, body, fullCopy, sameCopy } = require('./c-helpers');
       'a sync that would send everything says "whole", in a few hundred bytes', { status: sync.status, bytes: sync.text.length, n: sync.json && sync.json.n });
 
     // The page: signed in, with nothing kept, then again with the count of
-    // parts kept from last time.
+    // parts kept from last time (and no copy of the list kept on the device).
     const browser = await launch();
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
     const [name, value] = s.cookie.split('=');
@@ -80,7 +80,14 @@ const { Wire, people, body, fullCopy, sameCopy } = require('./c-helpers');
     for (const round of ['first visit', 'next visit']) {
       asked = [];
       if (round === 'first visit') await page.goto(`${s.base}/#candidates`, { waitUntil: 'domcontentloaded' });
-      else await page.reload({ waitUntil: 'domcontentloaded' });
+      else {
+        // Without the copy this device keeps of the list, which would make
+        // asking for it at all unnecessary (e-kept.test.js): once it is
+        // kept, the page is told it is not.
+        await page.waitForFunction(() => localStorage.getItem('wp-kept') === '1', null, { timeout: 30000 });
+        await page.evaluate(() => localStorage.removeItem('wp-kept'));
+        await page.reload({ waitUntil: 'domcontentloaded' });
+      }
       await page.waitForSelector('#candidateRows tr[data-id]', { timeout: 60000 });
       await page.fill('#searchInput', last.email);
       await page.waitForSelector(`#candidateRows tr[data-id="${last.id}"]`, { timeout: 20000 }).catch(() => {});
