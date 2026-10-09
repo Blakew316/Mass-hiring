@@ -1110,9 +1110,21 @@
     return keepDbOpen;
   }
   // What was kept, as it was stored, read while the session is still being
-  // asked about: { head, ids, groups } or null. Only read when this browser
-  // says it keeps one.
-  let keptStored = keptHintOn() ? readKept() : null;
+  // asked about: { head, ids, groups, answer } or null. Only read when this
+  // browser says it keeps one. The moment the head is read, the server is
+  // asked what has changed since it (a sync from its digests alone), so the
+  // answer is on its way while the session is confirmed: a copy so far
+  // behind that the server would send the whole list anyway (a busy team's
+  // copy, a day old) is then never opened at all.
+  let keptStored = keptHintOn() ? readKept().then((kept) => {
+    if (kept && kept.head && Wire.canDigest() && kept.head.fmt === Wire.FORMAT && typeof kept.head.d === 'string') {
+      const { v, t, nb, d, o } = kept.head;
+      let signedInHere = false;
+      try { signedInHere = localStorage.getItem(SIGNED_IN_KEY) === '1' && lastTeam() === t; } catch { /* no storage */ }
+      if (signedInHere) kept.answer = fetchJson('/api/candidates/sync?v=2', { method: 'POST', body: { v, t, nb, b: d, o }, ms: SYNC_MS }).catch(() => null);
+    }
+    return kept;
+  }) : null;
   function readKept() {
     return keepDb().then((db) => db && new Promise((resolve) => {
       const tx = db.transaction(KEEP_STORE, 'readonly');
@@ -1137,6 +1149,9 @@
   }
   const fieldsSig = (list) => `${list.k}:${list.f.join('\u0000')}`;
   const keptShape = (list, wid) => ({ wid, t: list.t, v: list.v, nb: list.nb, fields: fieldsSig(list), o: list.o, groups: Array.from({ length: Wire.groupsFor(list.nb) }, (_, g) => Wire.groupDigests(list, g)) });
+  // What a stored head says is kept: what a write here goes on from.
+  const headShape = (head) => ({ wid: head.wid, t: head.t, v: head.v, nb: head.nb, fields: fieldsSig(head), o: head.o, groups: Wire.headGroupDigests(head) });
+  const KEEP_OPEN_BATCH = 32;          // groups opened at a time when it is put back
 
   // The kept copy as this page's copy, for `team` — the session's, as
   // /api/auth/status has just said. True when it was put back. Anything
@@ -1151,14 +1166,37 @@
     // hold the app up: after a few seconds the list is fetched instead.
     const kept = await Promise.race([waiting, new Promise((r) => setTimeout(() => r(null), KEEP_READ_MS))]);
     if (!kept) return false;
-    let copy;
+    const { head } = kept;
+    if (head.t !== team || head.fmt !== Wire.FORMAT || !Array.isArray(head.f)) { clearKept(); return false; }
+    // What the server said of it. Too far behind to patch (the server
+    // would send everything): not opened at all — a short list came whole
+    // in the answer and is used as it is; a long one is fetched in parts.
+    const got = kept.answer ? await kept.answer : null;
+    if (got && got.status === 401) return false;
+    const msg = got && got.status === 200 && got.body && got.body.t === team ? got.body : null;
+    let copy = null;
+    let moved = false;
     try {
-      const { head } = kept;
-      if (head.t !== team || head.fmt !== Wire.FORMAT) throw new Error('not this page\'s');
-      const key = await keepKey;
-      if (!key) return false;
-      const [ids, ...groups] = await Promise.all([kept.ids, ...kept.groups].map((rec) => unseal(key, rec)));
-      copy = await Wire.fromKept(head, JSON.parse(ids), groups.map((g) => JSON.parse(g)), team);
+      if (msg && !msg.same && !msg.ch) {
+        if (msg.whole) return false;
+        copy = await Wire.fromFull(msg, team);
+        moved = true;
+      } else {
+        const key = await keepKey;
+        if (!key) return false;
+        // A group at a time, each opened, read and let go before the next.
+        const build = Wire.keptBuilder(head, JSON.parse(await unseal(key, kept.ids)), team);
+        for (let g = 0; g < kept.groups.length; g += KEEP_OPEN_BATCH) {
+          const texts = await Promise.all(kept.groups.slice(g, g + KEEP_OPEN_BATCH).map((rec) => unseal(key, rec)));
+          texts.forEach((text, j2) => { build.add(g + j2, JSON.parse(text)); kept.groups[g + j2] = null; });
+        }
+        copy = await build.done();
+        // Brought up to date by the answer when it fits; otherwise the first
+        // state's sync does it.
+        if (msg && msg.same && Wire.sameAs(copy, msg)) { copy = Wire.adopt(copy, msg); moved = true; } else if (msg && msg.ch) {
+          try { copy = await Wire.applyDelta(copy, msg); moved = true; } catch { /* synced again below */ }
+        }
+      }
     } catch {
       clearKept();
       return false;
@@ -1167,7 +1205,8 @@
     if (epoch !== listEpoch || list || teamIdNow() !== team) return false;
     list = copy;
     distrust.clear();
-    keptAs = keptShape(copy, kept.head.wid);
+    keptAs = headShape(head);
+    if (moved) noteKept();
     scheduleVerify(true);
     dropEarlyList();
     return true;
@@ -1195,37 +1234,50 @@
     const withIds = whole || was.o !== copy.o;
     if (!whole && !want.length && !withIds && was.v === copy.v) return;
     let members = null;
-    const texts = new Map();
+    const sealed = new Map();          // group -> promise of its sealed record
+    let ids = null;
     let at = 0;
-    const run = { copy };
+    const key = keepKey;
+    const run = { copy, left: () => want.length - at };
     keepRun = run;
     // A group or more in each moment the page has nothing else to do, as
-    // the idle check does; put away, everything that is left at once.
+    // the idle check does — each packed and sealed in its own moment, so no
+    // moment holds more than a few hundred people's worth — then the order.
     const step = (deadline) => {
       if (keepRun !== run) return;
       if (epoch !== keepEpoch || !stillKept(copy) || !mayKeep()) { keepRun = null; if (epoch === keepEpoch && list) noteKept(); return; }
       if (!members && want.length) members = Wire.keptMembers(copy);
       // At least one group, then as many more as fit in this moment.
       const until = deadline ? performance.now() + Math.min(deadline.timeRemaining(), SLICE_MS) : Infinity;
-      if (at < want.length) {
+      const packed = at < want.length;
+      if (packed) {
         withOverlaysLifted(() => {
           do {
             const g = want[at++];
-            texts.set(g, JSON.stringify(Wire.keptGroup(copy, members[g])));
+            const text = JSON.stringify(Wire.keptGroup(copy, members[g]));
+            sealed.set(g, key.then((k) => seal(k, text)).catch(() => null));
           } while (at < want.length && performance.now() < until);
         });
       }
       if (at < want.length) { idle(step); return; }
+      if (withIds && ids === null) {
+        if (packed && deadline) { idle(step); return; }
+        const text = JSON.stringify(copy.ids);
+        ids = key.then((k) => seal(k, text)).catch(() => null);
+      }
       keepRun = null;
-      commitKept({ copy: list, groups, texts, ids: withIds ? JSON.stringify(copy.ids) : null, whole, was, epoch });
+      commitKept({ copy: list, groups, sealed, ids, whole, was, epoch });
     };
     run.step = step;
-    if (now) step(null); else idle(step);
+    if (now && want.length <= FLUSH_MAX) step(null); else idle(step);
   }
-  // Put away (another app, the tab closed): whatever is waiting is written
-  // now, while the page is still allowed to.
+  // Put away (another app, the phone locked): what is waiting is written
+  // now, while the page may still run — if it is small. A large write is
+  // left to finish in the page's idle moments when it is back: done all at
+  // once it would hold a phone for seconds, just as it is put away.
+  const FLUSH_MAX = 8;
   function flushKept() {
-    if (keepRun) { keepRun.step(null); return; }
+    if (keepRun) { if (keepRun.left() <= FLUSH_MAX) keepRun.step(null); return; }
     if (keepTimer) { clearTimeout(keepTimer); keepTimer = 0; writeKept(true); }
   }
   // Still signed in to this team in this browser, as far as any tab of it
@@ -1233,12 +1285,11 @@
   const browserSignedInTo = (team) => {
     try { return localStorage.getItem(SIGNED_IN_KEY) === '1' && lastTeam() === team; } catch { return false; }
   };
-  function commitKept({ copy, groups, texts, ids, whole, was, epoch }) {
+  function commitKept({ copy, groups, sealed, ids, whole, was, epoch }) {
     (async () => {
-      const key = await keepKey;
-      if (!key || epoch !== keepEpoch) return;
-      const sealedIds = ids !== null ? await seal(key, ids) : null;
-      const sealed = await Promise.all([...texts].map(async ([g, text]) => [g, await seal(key, text)]));
+      const sealedIds = ids !== null ? await ids : null;
+      const records = await Promise.all([...sealed].map(async ([g, rec]) => [g, await rec]));
+      if (epoch !== keepEpoch || (ids !== null && !sealedIds) || records.some(([, rec]) => !rec)) return;
       const db = await keepDb();
       if (!db || epoch !== keepEpoch || !mayKeep() || !browserSignedInTo(copy.t)) return;
       const wid = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -1247,17 +1298,20 @@
       const put = () => {
         st.put({ ...Wire.keptHead(copy), keep: KEEP_FORMAT, groups, wid, at: Date.now() }, 'head');
         if (sealedIds) st.put(sealedIds, 'ids');
-        for (const [g, rec] of sealed) st.put(rec, `g${g}`);
+        for (const [g, rec] of records) st.put(rec, `g${g}`);
       };
+      // What another tab of this team stored since this page last wrote: not
+      // written over piecemeal as if it were this page's, but gone on from —
+      // its head says what each of its groups holds.
+      let rebase = null;
       if (whole) { st.clear(); put(); } else {
-        // Only over what this page wrote itself: anything else there (another
-        // tab of the same team wrote since) and nothing is written now — the
-        // next change writes it all.
         const h = st.get('head');
         h.onsuccess = () => {
           const head = h.result;
-          if (!head || head.wid !== was.wid || head.groups !== groups) { tx.abort(); return; }
-          put();
+          if (head && head.wid === was.wid && head.groups === groups) { put(); return; }
+          if (head && head.keep === KEEP_FORMAT && head.fmt === Wire.FORMAT && head.t === copy.t && head.nb === copy.nb && head.groups === groups
+            && Array.isArray(head.f) && typeof head.d === 'string') rebase = headShape(head);
+          tx.abort();
         };
       }
       tx.oncomplete = () => {
@@ -1265,7 +1319,11 @@
         keptAs = keptShape(copy, wid);
         keptHint(true);
       };
-      tx.onabort = () => { if (epoch === keepEpoch) keptAs = null; };
+      tx.onabort = () => {
+        if (epoch !== keepEpoch) return;
+        keptAs = rebase;
+        if (rebase) noteKept();
+      };
     })().catch(() => { keptAs = null; });
   }
   // Signed out, another team, or a copy that would not do: nothing is kept.
@@ -1312,7 +1370,6 @@
     if (keepHeldAt && askedAt > keepHeldAt) { keepHeldAt = 0; keepIfNeeded(); }
   }
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushKept(); });
-  window.addEventListener('pagehide', flushKept);
 
   // ---------------- Connection ----------------
   // A failed poll used to fail in complete silence: the numbers on screen

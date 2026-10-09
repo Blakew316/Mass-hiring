@@ -102,6 +102,20 @@ const { Wire, people, body, fullCopy, sameCopy } = require('./c-helpers');
         ok(lists.length === of && lists.every((a, i) => a === `GET /api/candidates?v=2&part=${i}&of=${of}`), `${round}: the ${of} parts are asked for once each, before the scripts arrive`, asked);
       }
     }
+    // Kept on the device, then most of the list changed: the sync the page
+    // starts from the kept copy's digests says "whole", and the parts are
+    // fetched — the kept copy is not used.
+    await page.waitForFunction(() => localStorage.getItem('wp-kept') === '1', null, { timeout: 60000 });
+    await s.store.update((d) => { d.candidates.forEach((c, i) => { c.notes = `moved on ${i}`; }); });
+    asked = [];
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#candidateRows tr[data-id]', { timeout: 60000 });
+    await page.fill('#searchInput', last.email);
+    await page.waitForSelector(`#candidateRows tr[data-id="${last.id}"]`, { timeout: 20000 }).catch(() => {});
+    ok((await page.$$eval(`#candidateRows tr[data-id="${last.id}"]`, (r) => r.length)) === 1, 'kept, but far behind: the last person is drawn');
+    const parts2 = asked.filter((a) => a.startsWith('GET /api/candidates?'));
+    ok(asked.filter((a) => a.startsWith('POST /api/candidates/sync')).length === 1 && parts2.length === of && parts2.every((a) => a.includes(`of=${of}`)),
+      `kept, but far behind: one sync, answered "whole", then the ${of} parts`, asked);
     ok(errors.length === 0, 'no page errors', errors);
     await browser.close();
     ok(refused.length === 0, 'nothing went out', refused);

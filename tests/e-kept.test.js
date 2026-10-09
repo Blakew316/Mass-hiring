@@ -4,13 +4,15 @@
 //   - the next visit fetches none of it: one sync of what changed (a status,
 //     someone added) and the page shows the server's list, the change
 //     rewriting a group or two of the copy, not all of it;
+//   - a copy so far behind that the server sends the whole list is not used;
 //   - a copy altered on the device (with the key) is put right by the idle
 //     check against the server's digests, without the whole list, and what
 //     is kept of it is written again;
 //   - another team's copy, one in another format, or one whose fields have
 //     since been renamed, is never used as it is;
 //   - a copy written over by something else (this team in another tab) is
-//     never patched as if it were this page's, and what is kept stays whole;
+//     gone on from as that tab stored it, a group or two rewritten, and what
+//     is kept stays whole;
 //   - moving to another team keeps that team's copy in its place, and the
 //     first team's is not used for it nor it for the first;
 //   - signing out leaves nothing kept;
@@ -165,6 +167,18 @@ const groupKeys = (k) => Object.keys(k).filter((x) => /^g\d+$/.test(x));
     ok(k.head.n === 3001 && k.ids.iv !== before.ids.iv, 'next visit: what is kept is brought up to date', k.head && k.head.n);
     ok(rewritten.length >= 1 && rewritten.length <= 2, `next visit: a change to two people rewrites ${rewritten.length} of ${groups} groups`, rewritten);
 
+    // ---- a copy far behind (most of the list changed since) ----
+    await s.store.update((d) => { d.candidates.forEach((c, i) => { c.notes = `moved on ${i}`; }); });
+    const farChanged = crowd[42];
+    await body(s, 'PATCH', `/api/candidates/${farChanged.id}`, { status: 'declined' });
+    await reload();
+    ok(lists().length === 0 && syncs().length === 1, 'far behind: one sync, whose answer is the whole list (a short one), and nothing else', asked);
+    await page.fill('#searchInput', farChanged.email);
+    await waitIn(page, (x) => { const sel = document.querySelector(`#candidateRows tr[data-id="${x}"] .status-select`); return sel && sel.value === 'declined'; }, farChanged.id);
+    ok(await shownStatus(farChanged.id) === 'declined', 'far behind: the page shows the server\'s list', await shownStatus(farChanged.id));
+    await page.fill('#searchInput', '');
+    k = (await keptWhen(page, (x) => x.head && x.head.v !== k.head.v && x.head.n === 3001)) || await keptNow(page);
+
     // ---- a copy altered on the device ----
     const victim = crowd[2000];
     const g = `g${W.groupOf(W.bucketOf(victim.id, k.head.nb))}`;
@@ -221,22 +235,22 @@ const groupKeys = (k) => Object.keys(k).filter((x) => /^g\d+$/.test(x));
     // ---- written over by something else ----
     ok(Boolean(await keptWhen(page, (x) => x.head && x.head.keep === 1)), '(kept again)');
     await alterKept(page, 'head', 'v.wid = "another-tab"; return v;');
+    const byOther = await keptNow(page);
     const other = crowd[500];
     await body(s, 'PATCH', `/api/candidates/${other.id}`, { status: 'declined' });
     await poke(page);
     await page.fill('#searchInput', other.email);
     await waitIn(page, (x) => { const sel = document.querySelector(`#candidateRows tr[data-id="${x}"] .status-select`); return sel && sel.value === 'declined'; }, other.id);
     await page.fill('#searchInput', '');
-    await page.waitForTimeout(7000);
-    const after = await keptNow(page);
-    ok(after.head.wid === 'another-tab', 'written over: this page does not patch a copy it did not write', after.head.wid);
+    const after = await keptWhen(page, (x) => x.head && x.head.wid !== 'another-tab', 30000);
+    const redone = after ? groupKeys(after).filter((gk) => after[gk].iv !== byOther[gk].iv) : [];
+    ok(after && redone.length >= 1 && redone.length <= 2, `written over: this page goes on from what the other tab stored, rewriting ${redone.length} group(s), not all of them`, redone);
     await reload();
     ok(lists().length === 0, 'written over: the copy there is still whole, and used', asked);
     await page.fill('#searchInput', other.email);
     await waitIn(page, (x) => document.querySelectorAll(`#candidateRows tr[data-id="${x}"]`).length === 1, other.id);
     ok(await shownStatus(other.id) === 'declined', 'written over: and brought up to date by its sync', await shownStatus(other.id));
     await page.fill('#searchInput', '');
-    ok(Boolean(await keptWhen(page, (x) => x.head && x.head.wid !== 'another-tab')), 'written over: and then written whole by this page');
 
     // ---- another team ----
     const B = await addTeam(s, { name: 'Team Ranger', pin: '6391' });
