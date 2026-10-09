@@ -481,6 +481,8 @@
     thread = null;
     mail = null;
     mailShownSig = '';
+    // The conversations read on this page are the team's being left.
+    try { mailMemo.clear(); } catch { /* not declared yet: nothing read */ }
     // On a laptop each conversation column shows beside its list the whole
     // time, so the last conversation opened — its messages, the name over
     // them and a reply box addressed to that person — stayed on screen into
@@ -5638,9 +5640,15 @@
       ? rows.map(mailRow).join('') + moreRow(all.length - rows.length)
       : `<li class="conv-none">${mailSearch.trim() ? `No results for “${esc(mailSearch.trim())}”.` : mailFilter === 'unread' ? 'Nothing unread.' : mailFilter === 'replied' ? 'Nobody has replied by email yet.' : 'Nothing emailed yet.'}</li>`; });
     mailDrawn = drawnAs(all, rows, mailShown);
+    if (!warming) setTimeout(warmMail, 600);
   }
 
-  async function openMail(id, { markSeen = true, quiet = false } = {}) {
+  // Conversations already read on this page, shown the moment one is
+  // opened again (and those warmed ahead, below): the way a mail app shows
+  // its own copy and then catches up, rather than a blank pane until Gmail
+  // answers. Let go of with the rest of the team's state.
+  const mailMemo = new Map();        // candidate id -> the server's answer
+  async function openMail(id, { markSeen = true, quiet = false, fresh = false } = {}) {
     if (id !== openMailId) restoreDraft('email', id, $('#mailInput'));
     openMailId = id;
     mailLoading = true;
@@ -5648,33 +5656,51 @@
     renderMailList();
     $('#mailEmpty').hidden = true;
     $('#mailLive').hidden = false;
-    if (!quiet) $('#mailBody').innerHTML = '<p class="thread-loading">Reading the conversation from Gmail…</p>';
+    // What this page already has of it, drawn at once; the answer below
+    // replaces it.
+    const had = mailMemo.get(id);
+    if (!quiet && had && had.id === id) {
+      mail = had;
+      renderMail();
+    } else if (!quiet) $('#mailBody').innerHTML = '<p class="thread-loading">Reading the conversation from Gmail…</p>';
     // As for texts: only the latest request may draw.
     const seq = ++mailSeq;
     let got;
     try {
-      got = await api(`/api/emails/thread?id=${encodeURIComponent(id)}`);
+      got = await api(`/api/emails/thread?id=${encodeURIComponent(id)}${fresh ? '&fresh=1' : ''}`);
     } catch (e) {
       if (seq !== mailSeq || id !== openMailId) return;
       mailLoading = false;
-      if (quiet) return;
+      if (quiet || (mail && mail.id === id && (mail.messages || []).length)) return;
       mail = null;
       $('#mailBody').innerHTML = `<p class="thread-loading">${esc(e.message)}</p>`;
       return;
     }
     if (seq !== mailSeq || id !== openMailId) return;
-    // Gmail was only busy (its per-user rate limit): asked again by itself
-    // in a few seconds, a few times, while this conversation is still open.
-    if (got && got.busy) {
+    const showing = mail && mail.id === id && (mail.messages || []).length;
+    if (got && got.busy && !(got.messages || []).length) {
+      // Gmail busy and nothing saved to show: what is on screen stays, and
+      // the conversation is asked for again by itself — after the time Gmail
+      // named, if it named one — while it is still open.
       const tries = (openMail.busyTries = openMail.busyFor === id ? (openMail.busyTries || 0) + 1 : 1);
       openMail.busyFor = id;
-      if (tries <= 3) {
-        if (!quiet) $('#mailBody').innerHTML = '<p class="thread-loading">Gmail is busy for a moment — trying again…</p>';
-        setTimeout(() => { if (openMailId === id && seq === mailSeq) openMail(id, { markSeen, quiet: true }); }, 2500 * tries);
-        if (!quiet || !mail) return;
+      const until = got.retryAt ? Date.parse(got.retryAt) - Date.now() : 0;
+      const wait = Math.min(60000, Math.max(3000 * tries, until + 500));
+      mailLoading = false;
+      if (!showing) {
+        $('#mailBody').innerHTML = `<p class="thread-loading">${got.retryAt && until > 5000
+          ? `Gmail has asked this account to wait until ${esc(clockTime(got.retryAt))} before reading more email — this conversation will load then by itself.`
+          : 'Gmail is busy for a moment — this conversation will load by itself in a few seconds.'}</p>`;
       }
-    } else if (openMail.busyFor === id) openMail.busyFor = null;
+      if (tries <= 5) setTimeout(() => { if (openMailId === id && seq === mailSeq) openMail(id, { markSeen, quiet: true }); }, wait);
+      return;
+    }
+    if (openMail.busyFor === id) openMail.busyFor = null;
+    // A quiet re-read that came back with less than is on screen (Gmail
+    // trouble) leaves what is shown as it is.
+    if (quiet && showing && !(got.messages || []).length) { mailLoading = false; return; }
     mail = got;
+    mailMemo.set(id, got);
     mailLoading = false;
     const mc = candById(id);
     mailShownSig = mc ? mailSig(mc) : '';
@@ -5684,6 +5710,28 @@
       markRead('email', [{ c: mc, ts: newest(lastIn && lastIn.date, lastInTs(mc, 'email')) }]);
       renderMailList();
     }
+    // The saved copy was not the newest (something has happened since):
+    // the fresh one is asked for now, and drawn over it when it comes.
+    if (got.stale && !fresh) openMail(id, { markSeen: false, quiet: true, fresh: true });
+  }
+  // The first few conversations on the list, read ahead one at a time while
+  // the Email page is open, so the one tapped next is already here.
+  const WARM_AHEAD = 5;
+  let warming = false;
+  async function warmMail() {
+    if (warming || document.hidden || currentView !== 'template') return;
+    warming = true;
+    try {
+      const next = mailboxes().slice(0, WARM_AHEAD).filter((c) => c.gmailThreadId && !mailMemo.has(c.id));
+      for (const c of next) {
+        if (document.hidden || currentView !== 'template' || !signedIn) break;
+        let got = null;
+        try { got = await api(`/api/emails/thread?id=${encodeURIComponent(c.id)}`); } catch { break; }
+        if (!got || got.busy) break;
+        if ((got.messages || []).length && !mailMemo.has(c.id)) mailMemo.set(c.id, got);
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    } finally { warming = false; }
   }
   // What the list knew about a conversation when it was last read from
   // Gmail: when it changes, the copy on screen is out of date.
@@ -7585,7 +7633,7 @@
   async function checkReplies() {
     if (!signedIn || !state || !state.google.connected || document.hidden) return;
     try {
-      const r = await api('/api/replies/check', { method: 'POST' });
+      const r = await api('/api/replies/check', { method: 'POST', body: { background: true } });
       replyTextLimited = Boolean(r.scopeError);
       if (r.scopeError && !scopeHintShown && scopeHintDue()) {
         scopeHintShown = true;

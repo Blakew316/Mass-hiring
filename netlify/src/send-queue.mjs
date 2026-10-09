@@ -79,7 +79,7 @@ export default async () => {
       const budgetMs = REPLIES_STOP_AT_MS - (Date.now() - started);
       if (budgetMs < 1500) break;
       try {
-        const r = await tenant.run(team.id, () => replies.checkReplies({ budgetMs, waiting: 10, conversing: 3, backfill: 4 }));
+        const r = await tenant.run(team.id, () => replies.checkReplies({ budgetMs, waiting: 10, conversing: 3, backfill: 4, shared: true }));
         if (r.replies) console.log('[send-queue] replies', team.id, JSON.stringify(r));
       } catch (err) {
         console.error(`[send-queue] replies for ${team.id} failed:`, err && err.stack ? err.stack : err);

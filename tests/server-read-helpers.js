@@ -138,7 +138,9 @@ function dataSnapshot() {
   const dir = R('data');
   let files = [];
   try { files = fs.readdirSync(dir, { recursive: true }); } catch { return ''; }
-  return files.map(String).filter((f) => /\.(json|bin)$/.test(f)).sort()
+  // Saved copies of email conversations are the one thing a read keeps by
+  // design (app.js, GET /api/emails/thread): a cache, not the team's data.
+  return files.map(String).filter((f) => /\.(json|bin)$/.test(f) && !/(^|\/)thread-[^/]*\.json$/.test(f)).sort()
     .map((f) => { const st = fs.statSync(path.join(dir, f)); return `${f}:${st.size}:${st.mtimeMs}`; }).join('|');
 }
 

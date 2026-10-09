@@ -2178,22 +2178,48 @@ app.get('/api/emails/thread', asyncRoute(async (req, res) => {
   if (!c.gmailThreadId) {
     return res.json({ ...base, messages: [], unavailable: 'Nothing has been emailed to this person yet.' });
   }
+  // The copy saved the last time this conversation was read from Gmail:
+  // shown at once, the way a mail app shows its own copy, rather than every
+  // conversation opened being a fresh read of Gmail — which waited on Gmail,
+  // spent its limit on how fast one account is read, and showed nothing when
+  // that limit was reached. Read from Gmail again only when something has
+  // happened since (a reply, a send: sig) or it is a while old — then the
+  // saved copy is still sent at once, marked stale, and the page asks for the
+  // fresh one (fresh=1) without waiting on it.
+  const kept = await storage.getJson(threadKey(c.gmailThreadId)).catch(() => null);
+  const keptBody = kept && kept.body && Array.isArray(kept.body.messages) ? kept.body : null;
+  const current = keptBody && kept.sig === threadSig(c) && Date.now() - Date.parse(kept.at) < THREAD_FRESH_MS;
+  const fresh = req.query.fresh === '1';
+  if (keptBody && !fresh) return res.json({ ...base, ...keptBody, canReply: true, savedAt: kept.at, ...(current ? {} : { stale: true }) });
   try {
     const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
+    await storage.setJson(threadKey(c.gmailThreadId), { at: new Date().toISOString(), sig: threadSig(c), body: t }).catch(() => {});
     res.json({ ...base, ...t, canReply: true });
   } catch (err) {
-    if (err.gone) return res.json({ ...base, messages: [], unavailable: 'That conversation is no longer in Gmail.' });
+    if (err.gone) {
+      await storage.del(threadKey(c.gmailThreadId)).catch(() => {});
+      return res.json({ ...base, messages: [], unavailable: 'That conversation is no longer in Gmail.' });
+    }
+    const busy = err.rateLimited ? { busy: true, ...(err.retryAt ? { retryAt: err.retryAt } : {}) } : {};
+    // Gmail busy, or a passing fault: the saved copy, if there is one. (A
+    // missing permission is said as one.)
+    if (keptBody && !err.scope) return res.json({ ...base, ...keptBody, canReply: true, savedAt: kept.at, stale: true, ...busy });
     res.json({
       ...base,
       messages: [],
       // Gmail busy is said as busy, and the page asks again by itself.
-      ...(err.rateLimited ? { busy: true } : {}),
+      ...busy,
       unavailable: err.scope
         ? 'Reading email needs the extra Gmail permission — Settings → Google → Reconnect and tick every box.'
         : err.message,
     });
   }
 }));
+// Where a conversation's saved copy is kept (purged with the team:
+// lib/storage.js THREAD_PREFIX), and what about the person it is current for.
+const threadKey = (threadId) => `thread-${String(threadId).replace(/[^A-Za-z0-9_-]/g, '')}`;
+const threadSig = (c) => `${c.gmailThreadId}|${c.lastEmailedAt || ''}|${c.lastReplyAt || ''}|${(c.replies || []).length}|${c.emailReplies || 0}`;
+const THREAD_FRESH_MS = 15 * 60 * 1000;
 
 // Answer an email in its own thread. Gmail's threadId keeps it together on
 // our side; In-Reply-To/References are what keep it together in theirs.
@@ -2211,11 +2237,19 @@ app.post('/api/emails/reply', asyncRoute(async (req, res) => {
 
   let inReplyTo = c.messageId || '';
   let subject = c.lastSubject || '';
-  try {
-    const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
-    if (t.lastMessageId) inReplyTo = t.lastMessageId;
-    if (t.lastSubject) subject = t.lastSubject;
-  } catch { /* fall back to what was stored when we last sent */ }
+  // The saved copy of the conversation says which message to answer when it
+  // is current; Gmail is asked only when it is not.
+  const kept = await storage.getJson(threadKey(c.gmailThreadId)).catch(() => null);
+  if (kept && kept.body && kept.sig === threadSig(c) && kept.body.lastMessageId) {
+    inReplyTo = kept.body.lastMessageId;
+    if (kept.body.lastSubject) subject = kept.body.lastSubject;
+  } else {
+    try {
+      const t = await google.threadMessages(db.settings, c.gmailThreadId, g.email);
+      if (t.lastMessageId) inReplyTo = t.lastMessageId;
+      if (t.lastSubject) subject = t.lastSubject;
+    } catch { /* fall back to what was stored when we last sent */ }
+  }
   const re = /^re:/i.test(subject) ? subject : `Re: ${subject || 'Following up'}`;
   const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#141b4d;white-space:pre-wrap">${escapeHtml(body)}</div>`;
 
@@ -2469,8 +2503,11 @@ app.get('/webhooks/open/:token', asyncRoute(async (req, res) => {
 // ---------- Reply detection (Gmail thread headers, a few at a time) ----------
 // The checking itself lives in lib/replies.js, shared with the scheduled
 // worker so replies are noticed with the app closed too.
-app.post('/api/replies/check', asyncRoute(async (_req, res) => {
-  res.json(await replies.checkReplies());
+app.post('/api/replies/check', asyncRoute(async (req, res) => {
+  // Bounded like the scheduled one: an open page's check is never the reason
+  // a request runs long. A page's own minute-by-minute check (background)
+  // takes its turn with the scheduled one and every other open page.
+  res.json(await replies.checkReplies({ budgetMs: 8000, shared: Boolean(req.body && req.body.background) }));
 }));
 
 // ---------- Google OAuth ----------
