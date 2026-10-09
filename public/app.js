@@ -5663,6 +5663,17 @@
       return;
     }
     if (seq !== mailSeq || id !== openMailId) return;
+    // Gmail was only busy (its per-user rate limit): asked again by itself
+    // in a few seconds, a few times, while this conversation is still open.
+    if (got && got.busy) {
+      const tries = (openMail.busyTries = openMail.busyFor === id ? (openMail.busyTries || 0) + 1 : 1);
+      openMail.busyFor = id;
+      if (tries <= 3) {
+        if (!quiet) $('#mailBody').innerHTML = '<p class="thread-loading">Gmail is busy for a moment — trying again…</p>';
+        setTimeout(() => { if (openMailId === id && seq === mailSeq) openMail(id, { markSeen, quiet: true }); }, 2500 * tries);
+        if (!quiet || !mail) return;
+      }
+    } else if (openMail.busyFor === id) openMail.busyFor = null;
     mail = got;
     mailLoading = false;
     const mc = candById(id);
