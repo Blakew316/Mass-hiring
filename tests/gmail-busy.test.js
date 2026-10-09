@@ -9,7 +9,11 @@
 //     so, for the page to ask again) — never as "reconnect";
 //   - a real permission refusal is still a permission refusal, asked once;
 //   - the narrow metadata permission still falls back to headers;
-//   - a token refresh that times out is not "expired"; one Google refuses is.
+//   - a token refresh that times out is not "expired"; one Google refuses is;
+//   - a conversation read once is saved: opened again it comes at once
+//     without Gmail, marked stale when something has happened since, and
+//     still shown when Gmail is busy;
+//   - a time Gmail names to wait until is kept: nothing is asked before it.
 const { startApp, R, ok, done, crash } = require('./helpers');
 
 (async () => {
@@ -46,10 +50,10 @@ const { startApp, R, ok, done, crash } = require('./helpers');
   try {
     await storage.setJson('tokens', goodTokens);
 
-    gmail = (u, n) => (n <= 2 ? busy403 : thread);
+    gmail = (u, n) => (n <= 1 ? busy403 : thread);
     calls.gmail = 0;
     const t = await google.threadMessages(settings, 'th1', 'me@example.com');
-    ok(t.messages.length === 1 && calls.gmail === 3, 'busy twice, then read: the conversation comes back', { got: t.messages.length, asked: calls.gmail });
+    ok(t.messages.length === 1 && calls.gmail === 2, 'busy for a moment, then read: the conversation comes back', { got: t.messages.length, asked: calls.gmail });
 
     gmail = () => busy429;
     calls.gmail = 0;
@@ -57,7 +61,7 @@ const { startApp, R, ok, done, crash } = require('./helpers');
     let e1 = null;
     try { await google.threadMessages(settings, 'th1', 'me@example.com'); } catch (e) { e1 = e; }
     ok(e1 && e1.rateLimited && !e1.scope && /busy/i.test(e1.message) && !/reconnect/i.test(e1.message), 'still busy: said as busy, not as a missing permission', e1 && { rateLimited: e1.rateLimited, scope: e1.scope, message: e1.message });
-    ok(calls.gmail >= 3 && Date.now() - t0 < 8000, `still busy: asked ${calls.gmail} times, within the function's time`, { asked: calls.gmail, ms: Date.now() - t0 });
+    ok(calls.gmail === 2 && Date.now() - t0 < 3000, 'still busy: asked once more, not again and again (that itself keeps an account over the limit)', { asked: calls.gmail, ms: Date.now() - t0 });
 
     gmail = () => noScope;
     calls.gmail = 0;
@@ -81,8 +85,36 @@ const { startApp, R, ok, done, crash } = require('./helpers');
     const j = await r.json();
     ok(r.status === 200 && j.busy === true && /busy/i.test(j.unavailable) && !/reconnect/i.test(j.unavailable), 'the conversation route says Gmail is busy (for the page to ask again), not "reconnect"', j.unavailable);
     gmail = () => thread;
-    const j2 = await (await realFetch(`${s.base}/api/emails/thread?id=p1`, { headers: { cookie: s.cookie } })).json();
+    const open = async (q = '') => (await realFetch(`${s.base}/api/emails/thread?id=p1${q}`, { headers: { cookie: s.cookie } })).json();
+    const j2 = await open();
     ok(!j2.busy && j2.messages.length === 1, 'and once Gmail has room, the conversation is read', j2.unavailable);
+
+    // The saved copy.
+    calls.gmail = 0;
+    const j3 = await open();
+    ok(j3.messages.length === 1 && !j3.stale && calls.gmail === 0, 'opened again: the saved copy, at once, without asking Gmail', { asked: calls.gmail, stale: j3.stale });
+    await s.store.update((d) => { d.candidates[0].lastReplyAt = new Date().toISOString(); d.candidates[0].replies = [{ id: 'r9', from: 'pat.madeup@example.com', date: new Date().toISOString(), text: 'One more thing' }]; });
+    calls.gmail = 0;
+    const j4 = await open();
+    ok(j4.messages.length === 1 && j4.stale === true && calls.gmail === 0, 'a reply since: the saved copy at once, marked stale for the page to ask again', { asked: calls.gmail, stale: j4.stale });
+    gmail = () => busy403;
+    const j5 = await open('&fresh=1');
+    ok(j5.messages.length === 1 && j5.stale && j5.busy, 'asked fresh while Gmail is busy: the saved copy still, said to be busy', { busy: j5.busy, n: j5.messages.length });
+    gmail = () => thread;
+    calls.gmail = 0;
+    const j6 = await open('&fresh=1');
+    ok(j6.messages.length === 1 && !j6.stale && calls.gmail === 1, 'and fresh once Gmail has room, saved again');
+    const j7 = await open();
+    ok(!j7.stale, '(now current)');
+
+    // The reply checks that run by themselves (the scheduled one, each open
+    // page's every minute) take turns: one a minute between them.
+    gmail = () => ({ status: 200, body: { messages: [] } });
+    const check = async (b) => (await realFetch(`${s.base}/api/replies/check`, { method: 'POST', headers: { cookie: s.cookie, 'content-type': 'application/json' }, body: JSON.stringify(b) })).json();
+    const c1 = await check({ background: true });
+    const c2 = await check({ background: true });
+    const c3 = await check({});
+    ok(!c1.skipped && c2.skipped === true && !c3.skipped, 'a second background reply check within the minute is skipped; one asked for outright is not', { c1: c1.skipped, c2: c2.skipped, c3: c3.skipped });
 
     // The token refresh.
     await storage.setJson('tokens', { ...goodTokens, expires_at: Date.now() - 1000 });
@@ -99,6 +131,20 @@ const { startApp, R, ok, done, crash } = require('./helpers');
     calls.token = 0;
     const st3 = await google.status(settings);
     ok(st3.expired && !st3.connected && calls.token === 1, 'one Google refuses (revoked, expired) is expired: reconnect', { expired: st3.expired, asked: calls.token });
+
+    // Gmail naming a time to wait until: nothing more is asked before it.
+    await storage.setJson('tokens', goodTokens);
+    const until = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    gmail = () => ({ status: 429, body: { error: { code: 429, message: `User-rate limit exceeded.  Retry after ${until}`, errors: [{ reason: 'rateLimitExceeded' }] } } });
+    calls.gmail = 0;
+    let e5 = null;
+    try { await google.threadMessages(settings, 'th2', 'me@example.com'); } catch (e) { e5 = e; }
+    ok(e5 && e5.rateLimited && e5.retryAt === until && calls.gmail === 1, 'told to wait until a time: asked once, and the time is kept', e5 && { retryAt: e5.retryAt, asked: calls.gmail });
+    gmail = () => thread;
+    calls.gmail = 0;
+    let e6 = null;
+    try { await google.threadMessages(settings, 'th2', 'me@example.com'); } catch (e) { e6 = e; }
+    ok(e6 && e6.rateLimited && calls.gmail === 0, 'and until then, Gmail is not asked at all', { asked: calls.gmail });
   } finally {
     global.fetch = realFetch;
     await s.close();

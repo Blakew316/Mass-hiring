@@ -1,6 +1,6 @@
 // The read-only routes besides the state, for a crafted team:
 //   GET  /api/texts/thread       one text conversation, both halves, plus what is still on its way
-//   GET  /api/emails/thread      one email conversation, read live from Gmail (stubbed)
+//   GET  /api/emails/thread      one email conversation, read from Gmail (stubbed) and saved
 //   POST /api/preview            the personalised email, outreach or follow-up
 //   POST /api/texts/preview      the personalised text
 //   GET  /api/texts/relay-token  the Mac's token, in full, only here
@@ -91,15 +91,19 @@ const { guardOutside, stubSenders, as, getState, ago, daysAgo } = require('./ser
     'the conversation is read live from Gmail', e.body.messages);
   ok(calls.length === 1 && calls[0].threadId === 'gthread-j1' && calls[0].myEmail === 'blake@wholesalepayments.com', 'from this person\'s Gmail thread, as the connected account', calls);
   ok(!('messageId' in e.body) || e.body.messageId === undefined, 'the stored message id is not handed out');
+  const again = await me.json('GET', '/api/emails/thread?id=j1');
+  ok(again.body.messages.length === 2 && calls.length === 1 && !again.body.stale, 'opened again, the copy saved from Gmail is shown without reading Gmail again', { asked: calls.length });
+  // From here Gmail is asked outright (fresh=1, as the page asks when the
+  // saved copy is out of date).
   const goneErr = Object.assign(new Error('Requested entity was not found.'), { gone: true });
   google.threadMessages = async () => { throw goneErr; };
-  const eg = await me.json('GET', '/api/emails/thread?id=j1');
+  const eg = await me.json('GET', '/api/emails/thread?id=j1&fresh=1');
   ok(eg.status === 200 && eg.body.messages.length === 0 && eg.body.unavailable === 'That conversation is no longer in Gmail.' && !eg.body.canReply, 'a thread deleted in Gmail says so', eg.body);
   google.threadMessages = async () => { throw Object.assign(new Error('Insufficient Permission'), { scope: true }); };
-  const es = await me.json('GET', '/api/emails/thread?id=j1');
+  const es = await me.json('GET', '/api/emails/thread?id=j1&fresh=1');
   ok(/needs the extra Gmail permission/.test(es.body.unavailable) && es.body.messages.length === 0, 'a missing Gmail permission says how to fix it', es.body.unavailable);
   google.threadMessages = async () => { throw new Error('Gmail is having a moment'); };
-  const eo = await me.json('GET', '/api/emails/thread?id=j1');
+  const eo = await me.json('GET', '/api/emails/thread?id=j1&fresh=1');
   ok(eo.status === 200 && eo.body.unavailable === 'Gmail is having a moment', 'any other Gmail failure is passed on as it was said', eo.body.unavailable);
   // Noor has never been emailed. (Kim was emailed, but with no Gmail thread on
   // record — sent over an App Password, or before the app — and what she is
