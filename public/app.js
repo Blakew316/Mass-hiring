@@ -220,10 +220,10 @@
     signedInHint(Boolean(currentTeam));
     // Nothing kept from one team's list may answer for another's.
     if (changed) { listVersion += 1; stateVersion += 1; }
-    // Nor the copy this device keeps of it: the new team's own is kept in
-    // its place, once its list is here.
+    // Nor the copy this device keeps of it, nor its key: the new team's own
+    // copy is kept in its place under the new team's key.
     if (changed && previous) {
-      try { clearKept(); if (currentTeam && list && list.t === currentTeam.id) noteKept(); } catch { /* not declared yet: nothing kept */ }
+      try { clearKept(true); if (currentTeam) rekeep(currentTeam.id); } catch { /* not declared yet: nothing kept */ }
     }
     if (currentTeam) { try { localStorage.setItem(LAST_TEAM_KEY, currentTeam.id); } catch {} }
     // Anything kept per team has to be re-read when the team changes, or the
@@ -350,7 +350,7 @@
     stateTag = '';
     dropEarly();
     signedInHint(false);
-    clearKept();
+    clearKept(true);
     // The Sales IQ page stops looking, and puts away any sheet it had open:
     // its sheets sit above everything, the sign-in screen included.
     if (window.SalesIQ) window.SalesIQ.deactivate();
@@ -362,12 +362,14 @@
     setTimeout(() => $('#loginPassword').focus(), 50);
   }
 
-  async function enterApp(team) {
+  async function enterApp(team, keepKeyRaw) {
     setTeam(team);
     stateTag = '';
     signedIn = true;
     $('#loginScreen').hidden = true;
+    allowKeeping(keepKeyRaw);
     await refresh();
+    keepIfNeeded();
     start();
     takeUpdate('launch');
   }
@@ -388,7 +390,7 @@
     try {
       const r = await api('/api/login', { method: 'POST', body: { team: pickedTeamId, pin: $('#loginPassword').value } });
       $('#loginPassword').value = '';
-      await enterApp(r.team);
+      await enterApp(r.team, r.keepKey);
     } catch (err) {
       $('#loginError').textContent = err.message;
     } finally {
@@ -426,7 +428,7 @@
       });
       ['#newTeamName', '#newTeamPin', '#newTeamPin2', '#newTeamAdmin'].forEach((sel) => { $(sel).value = ''; });
       await loadTeams().catch(() => {});
-      if (r.signedIn) { await enterApp(r.team); return; }
+      if (r.signedIn) { await enterApp(r.team, r.keepKey); return; }
       pickedTeamId = r.team.id;
       renderTeamPicker();
       $('#newTeamForm').hidden = true;
@@ -666,10 +668,11 @@
     const got = await readState(stateTag, askedTeam);
     // Answered, therefore in touch: a 304 is as current as a 200, it just has
     // nothing new to say.
-    if (got.status === 304) { lastSyncAt = Date.now(); return false; }
+    if (got.status === 304) { lastSyncAt = Date.now(); heardFromServer(got.askedAt); return false; }
     if (got.status === 401) throw authFailed();
     if (got.status !== 200) throw new Error(`Request failed (${got.status})`);
     lastSyncAt = Date.now();
+    heardFromServer(got.askedAt);
     // The tag is remembered only once this version is actually on screen. Saved
     // first, a body cut off in transit or a drawing error left the page asking
     // "anything newer than this?", being told no, and showing the old list —
@@ -968,6 +971,9 @@
     if (!stillKept(copy)) { scheduleVerify(); return; }
     if (!bad.length) { verifyWait = VERIFY_MS; return; }
     for (const at of bad) distrust.add(at);
+    // What is kept of them is as wrong as the copy was: written again once
+    // the sync has put them right.
+    if (keptAs) for (const at of bad) keptAs.groups[Wire.groupOf(at)] = '';
     verifyWait = Math.min(verifyWait * 2, VERIFY_MAX);
     stateTag = '';
     refreshSoon();
@@ -1024,11 +1030,19 @@
   // the page is put away. One record per browser: a head (the list's
   // version, digests and fields, and which write it was), the order, and the
   // groups, always written together in one transaction.
+  //
+  // The order and the groups are encrypted (AES-GCM) with a key the server
+  // hands only to a signed-in session (/api/auth/status, /api/login: lib/
+  // auth.js deviceKey) and that is never kept on the device: signing the
+  // team out everywhere, changing its PIN or deleting it changes the key, so
+  // a copy left on a device nobody opens again can no longer be read. The
+  // list itself is never kept by the browser's own cache (no-store).
   const KEEP_DB = 'wp-kept';
   const KEEP_STORE = 'kept';
   const KEEP_FORMAT = 1;
   const KEPT_HINT = 'wp-kept';       // read by index.html: a copy is kept, so the list is not asked for early
   const KEEP_DELAY = 4000;
+  const KEEP_READ_MS = 4000;
   let keepDbOpen = null;
   let keepEpoch = 0;                 // moves on clearing: a write on its way then is not made
   let keepTimer = 0;
@@ -1037,10 +1051,44 @@
   // what each group was cut from. A write that finds another write's id in
   // the head (this team open in another tab) writes everything.
   let keptAs = null;                 // { wid, t, v, nb, fields, o, groups: [digests of each group] }
+  // Whether this page may keep anything: only once the session is confirmed
+  // (boot, signing in), with a key to lock it with, and never from the
+  // sign-in screen on — a sync answered after a 401 is not kept.
+  let keepAllowed = false;
+  let keepKey = null;                // a promise of the CryptoKey, or null
+  // Set when another tab of this browser cleared what is kept (signed out,
+  // another team): nothing is written here until this page has heard from
+  // the server on a request it made after that (refresh).
+  let keepHeldAt = 0;
   const keptHintOn = () => { try { return localStorage.getItem(KEPT_HINT) === '1'; } catch { return false; } };
   function keptHint(on) {
     try { if (on) localStorage.setItem(KEPT_HINT, '1'); else localStorage.removeItem(KEPT_HINT); } catch { /* no storage */ }
   }
+  function useKeepKey(raw) {
+    keepKey = null;
+    if (typeof raw !== 'string' || !raw || !Wire.canDigest()) return false;
+    try {
+      const bin = atob(raw.replace(/-/g, '+').replace(/_/g, '/'));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      keepKey = crypto.subtle.importKey('raw', bytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']).catch(() => null);
+    } catch { keepKey = null; }
+    return Boolean(keepKey);
+  }
+  // Signed in (boot, a sign-in, a new team made from the sign-in screen):
+  // keeping may start, with the session's key.
+  function allowKeeping(raw) {
+    keepAllowed = useKeepKey(raw);
+  }
+  async function seal(key, text) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    return { iv, data: await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text)) };
+  }
+  async function unseal(key, rec) {
+    if (!rec || !(rec.iv instanceof Uint8Array) || !(rec.data instanceof ArrayBuffer)) throw new Error('not sealed');
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv }, key, rec.data));
+  }
+  const mayKeep = () => keepAllowed && !keepHeldAt && Boolean(keepKey);
   function keepDb() {
     if (!keepDbOpen) {
       keepDbOpen = new Promise((resolve) => {
@@ -1095,15 +1143,20 @@
   async function restoreKept(team) {
     const waiting = keptStored;
     keptStored = null;
-    if (!waiting || !Wire.canDigest()) return false;
+    if (!waiting || !Wire.canDigest() || !mayKeep()) return false;
     const epoch = listEpoch;
-    const kept = await waiting;
+    // A browser whose IndexedDB never answers (it has happened) must not
+    // hold the app up: after a few seconds the list is fetched instead.
+    const kept = await Promise.race([waiting, new Promise((r) => setTimeout(() => r(null), KEEP_READ_MS))]);
     if (!kept) return false;
     let copy;
     try {
       const { head } = kept;
-      if (head.t !== team || head.fmt !== Wire.FORMAT || typeof kept.ids !== 'string' || kept.groups.some((g) => typeof g !== 'string')) throw new Error('not this page\'s');
-      copy = await Wire.fromKept(head, JSON.parse(kept.ids), kept.groups.map((g) => JSON.parse(g)), team);
+      if (head.t !== team || head.fmt !== Wire.FORMAT) throw new Error('not this page\'s');
+      const key = await keepKey;
+      if (!key) return false;
+      const [ids, ...groups] = await Promise.all([kept.ids, ...kept.groups].map((rec) => unseal(key, rec)));
+      copy = await Wire.fromKept(head, JSON.parse(ids), groups.map((g) => JSON.parse(g)), team);
     } catch {
       clearKept();
       return false;
@@ -1124,13 +1177,13 @@
 
   // The copy changed: written once it has been still for a moment.
   function noteKept() {
-    if (!Wire.canDigest() || keepRun) return;
+    if (!Wire.canDigest() || keepRun || !mayKeep()) return;
     clearTimeout(keepTimer);
     keepTimer = setTimeout(() => { keepTimer = 0; writeKept(); }, KEEP_DELAY);
   }
   function writeKept(now = false) {
     const copy = list;
-    if (!copy || copy.dup || !signedIn || copy.t !== teamIdNow() || !Wire.canDigest()) return;
+    if (!copy || copy.dup || !signedIn || copy.t !== teamIdNow() || !Wire.canDigest() || !mayKeep()) return;
     const epoch = keepEpoch;
     const groups = Wire.groupsFor(copy.nb);
     const was = keptAs;
@@ -1148,7 +1201,7 @@
     // the idle check does; put away, everything that is left at once.
     const step = (deadline) => {
       if (keepRun !== run) return;
-      if (epoch !== keepEpoch || !stillKept(copy)) { keepRun = null; if (epoch === keepEpoch && list) noteKept(); return; }
+      if (epoch !== keepEpoch || !stillKept(copy) || !mayKeep()) { keepRun = null; if (epoch === keepEpoch && list) noteKept(); return; }
       if (!members && want.length) members = Wire.keptMembers(copy);
       // At least one group, then as many more as fit in this moment.
       const until = deadline ? performance.now() + Math.min(deadline.timeRemaining(), SLICE_MS) : Infinity;
@@ -1173,16 +1226,26 @@
     if (keepRun) { keepRun.step(null); return; }
     if (keepTimer) { clearTimeout(keepTimer); keepTimer = 0; writeKept(true); }
   }
+  // Still signed in to this team in this browser, as far as any tab of it
+  // knows: another tab signing out or into another team says so at once.
+  const browserSignedInTo = (team) => {
+    try { return localStorage.getItem(SIGNED_IN_KEY) === '1' && lastTeam() === team; } catch { return false; }
+  };
   function commitKept({ copy, groups, texts, ids, whole, was, epoch }) {
-    keepDb().then((db) => {
-      if (!db || epoch !== keepEpoch) return;
+    (async () => {
+      const key = await keepKey;
+      if (!key || epoch !== keepEpoch) return;
+      const sealedIds = ids !== null ? await seal(key, ids) : null;
+      const sealed = await Promise.all([...texts].map(async ([g, text]) => [g, await seal(key, text)]));
+      const db = await keepDb();
+      if (!db || epoch !== keepEpoch || !mayKeep() || !browserSignedInTo(copy.t)) return;
       const wid = Math.random().toString(36).slice(2) + Date.now().toString(36);
       const tx = db.transaction(KEEP_STORE, 'readwrite');
       const st = tx.objectStore(KEEP_STORE);
       const put = () => {
         st.put({ ...Wire.keptHead(copy), keep: KEEP_FORMAT, groups, wid, at: Date.now() }, 'head');
-        if (ids !== null) st.put(ids, 'ids');
-        for (const [g, text] of texts) st.put(text, `g${g}`);
+        if (sealedIds) st.put(sealedIds, 'ids');
+        for (const [g, rec] of sealed) st.put(rec, `g${g}`);
       };
       if (whole) { st.clear(); put(); } else {
         // Only over what this page wrote itself: anything else there (another
@@ -1201,10 +1264,12 @@
         keptHint(true);
       };
       tx.onabort = () => { if (epoch === keepEpoch) keptAs = null; };
-    }).catch(() => { keptAs = null; });
+    })().catch(() => { keptAs = null; });
   }
   // Signed out, another team, or a copy that would not do: nothing is kept.
-  function clearKept() {
+  // `stop`: and nothing more is, until the session is confirmed again.
+  function clearKept(stop = false) {
+    if (stop) { keepAllowed = false; keepKey = null; }
     keepEpoch += 1;
     keptAs = null;
     keptStored = null;
@@ -1213,6 +1278,36 @@
     keepTimer = 0;
     keptHint(false);
     keepDb().then((db) => { if (db) db.transaction(KEEP_STORE, 'readwrite').objectStore(KEEP_STORE).clear(); }).catch(() => {});
+  }
+  // Kept, the copy is the session's and nothing is written after it is
+  // cleared — from another tab too: a sign-out or a move to another team
+  // there removes the hint (or changes the team) here at once.
+  function keepIfNeeded() {
+    if (mayKeep() && list && list.t === teamIdNow() && !keptAs && !keepTimer && !keepRun) noteKept();
+  }
+  window.addEventListener('storage', (e) => {
+    if (e.key !== null && e.key !== KEPT_HINT && e.key !== SIGNED_IN_KEY && e.key !== LAST_TEAM_KEY) return;
+    if (e.key === KEPT_HINT && e.newValue === '1') return;
+    if (e.key === SIGNED_IN_KEY && e.newValue === '1') return;
+    keepEpoch += 1;
+    keptAs = null;
+    keepRun = null;
+    clearTimeout(keepTimer);
+    keepTimer = 0;
+    keepHeldAt = pageClock();
+  });
+  // Moved to another team on this page (its session changed in another
+  // tab): that team's key, and keeping its list, once the server confirms it.
+  async function rekeep(team) {
+    try {
+      const a = await api('/api/auth/status');
+      if (a.authed && a.team && a.team.id === team && teamIdNow() === team && signedIn) { allowKeeping(a.keepKey); keepIfNeeded(); }
+    } catch { /* kept from its next visit instead */ }
+  }
+  // An answer to a request made after another tab cleared what is kept:
+  // this page is still signed in, to the team it says.
+  function heardFromServer(askedAt) {
+    if (keepHeldAt && askedAt > keepHeldAt) { keepHeldAt = 0; keepIfNeeded(); }
   }
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushKept(); });
   window.addEventListener('pagehide', flushKept);
@@ -7453,10 +7548,12 @@
       if (a.required && !a.authed) { renderTeamPicker(); showLogin(); return; }
       setTeam(a.team);
       signedIn = true;
+      allowKeeping(a.keepKey);
       // The copy this device kept, if it is this team's: the first state
       // then brings it up to date with a sync rather than the whole list.
       await restoreKept(a.team.id).catch(() => false);
       await refresh();
+      keepIfNeeded();
       start();
       // A new version that was already waiting when the app opened: now that
       // the app knows nothing is in flight, it moves to it.
