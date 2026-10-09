@@ -73,11 +73,15 @@ app.get('/api/auth/status', asyncRoute(async (req, res) => {
     return res.json({ required: false, setupRequired: true, authed: false, team: null, teams: [] });
   }
   const team = await auth.sessionTeam(req).catch(() => null);
+  // It carries the key to this browser's kept copy of the list: never kept
+  // by the browser's cache.
+  res.set('Cache-Control', 'no-store');
   res.json({
     required: auth.required(),
     setupRequired: false,
     authed: Boolean(team),
     team: teamName(team),
+    keepKey: team ? auth.deviceKey(team) : null,
     teams: await teams.publicList(),
     numericPins: teams.allPinsNumeric(await teams.all()),
   });
@@ -101,7 +105,7 @@ app.post('/api/login', asyncRoute(async (req, res) => {
     if (list.length !== 1) {
       return res.status(403).json({ error: 'Set APP_PASSWORD before signing in — with more than one team and no password there is no way to tell who you are.', setupRequired: true });
     }
-    return res.json({ ok: true, team: teamPublic(list[0]) });
+    return res.json({ ok: true, team: teamPublic(list[0]), keepKey: auth.deviceKey(list[0]) });
   }
   let teamId = String(req.body.team || '').trim();
   // An app shell installed before teams existed posts a bare password and no
@@ -121,7 +125,7 @@ app.post('/api/login', asyncRoute(async (req, res) => {
   }
   await auth.clearLoginFailures(req, teamId);
   auth.setSessionCookie(req, res, team);
-  res.json({ ok: true, team: teamPublic(team) });
+  res.json({ ok: true, team: teamPublic(team), keepKey: auth.deviceKey(team) });
 }));
 
 // Signs this browser out. Other devices on the same team keep working — on a
@@ -175,7 +179,7 @@ app.post('/api/teams/create', asyncRoute(async (req, res) => {
   // Made from the sign-in screen, this is how you get in. Made from Settings
   // while already in a team, it must not tip you out of the one you are using.
   if (!signedInAs) auth.setSessionCookie(req, res, team);
-  res.json({ ok: true, team: teamPublic(team), signedIn: !signedInAs });
+  res.json({ ok: true, team: teamPublic(team), signedIn: !signedInAs, ...(signedInAs ? {} : { keepKey: auth.deviceKey(team) }) });
 }));
 
 app.post('/api/teams/rename', asyncRoute(async (req, res) => {
@@ -613,8 +617,9 @@ function compactList(db, p, sides) {
 // Everything a page needs to know about the list to tell whether its copy is
 // current, and to check it.
 function listHeader(L, withOrder) {
+  const { fields, k } = wireSchema();
   return {
-    fmt: wire.FORMAT, t: tenant.current(), v: L.v, nb: L.rows.nb, n: L.rows.n, o: L.rows.o, rh: L.rh, rn: L.sides.rn,
+    fmt: wire.FORMAT, t: tenant.current(), v: L.v, nb: L.rows.nb, n: L.rows.n, o: L.rows.o, rh: L.rh, rn: L.sides.rn, fk: wire.fieldsKey(fields, k),
     ...(withOrder || L.sides.exotic ? { ro: L.sides.order } : {}),
   };
 }
@@ -683,7 +688,10 @@ app.get('/api/candidates', asyncRoute(async (req, res) => {
   const withOrder = req.query.ro === '1';
   const etag = parted ? partTag(L, part, of, withOrder) : fullListTag(L, withOrder);
   res.set('ETag', etag);
-  res.set('Cache-Control', 'no-cache, private');
+  // Never kept by the browser's own cache: the page keeps its copy itself,
+  // encrypted (public/app.js, "The copy kept on this device"), and a plain
+  // one beside it would outlast the key that locks it.
+  res.set('Cache-Control', 'no-store');
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
   return res.type('application/json').send(parted ? partBody(L, part, of, withOrder) : fullListBody(L, withOrder));
 }));
@@ -744,7 +752,7 @@ function sendSlimState(req, res, db, parts, payload, now, optOut) {
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
   const L = compactList(db, parts, sides);
   const h = listHeader(L, false);
-  const cands = { v: h.v, n: h.n, nb: h.nb, o: h.o, rh: h.rh, rn: h.rn, t: h.t };
+  const cands = { v: h.v, n: h.n, nb: h.nb, o: h.o, rh: h.rh, rn: h.rn, t: h.t, fk: h.fk };
   return res.type('application/json').send(JSON.stringify({ cands, ...rest }));
 }
 

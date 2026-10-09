@@ -220,6 +220,11 @@
     signedInHint(Boolean(currentTeam));
     // Nothing kept from one team's list may answer for another's.
     if (changed) { listVersion += 1; stateVersion += 1; }
+    // Nor the copy this device keeps of it, nor its key: the new team's own
+    // copy is kept in its place under the new team's key.
+    if (changed && previous) {
+      try { clearKept(true); if (currentTeam) rekeep(currentTeam.id); } catch { /* not declared yet: nothing kept */ }
+    }
     if (currentTeam) { try { localStorage.setItem(LAST_TEAM_KEY, currentTeam.id); } catch {} }
     // Anything kept per team has to be re-read when the team changes, or the
     // new team inherits the old one's view of things.
@@ -345,6 +350,7 @@
     stateTag = '';
     dropEarly();
     signedInHint(false);
+    clearKept(true);
     // The Sales IQ page stops looking, and puts away any sheet it had open:
     // its sheets sit above everything, the sign-in screen included.
     if (window.SalesIQ) window.SalesIQ.deactivate();
@@ -356,12 +362,14 @@
     setTimeout(() => $('#loginPassword').focus(), 50);
   }
 
-  async function enterApp(team) {
+  async function enterApp(team, keepKeyRaw) {
     setTeam(team);
     stateTag = '';
     signedIn = true;
     $('#loginScreen').hidden = true;
+    allowKeeping(keepKeyRaw);
     await refresh();
+    keepIfNeeded();
     start();
     takeUpdate('launch');
   }
@@ -382,7 +390,7 @@
     try {
       const r = await api('/api/login', { method: 'POST', body: { team: pickedTeamId, pin: $('#loginPassword').value } });
       $('#loginPassword').value = '';
-      await enterApp(r.team);
+      await enterApp(r.team, r.keepKey);
     } catch (err) {
       $('#loginError').textContent = err.message;
     } finally {
@@ -420,7 +428,7 @@
       });
       ['#newTeamName', '#newTeamPin', '#newTeamPin2', '#newTeamAdmin'].forEach((sel) => { $(sel).value = ''; });
       await loadTeams().catch(() => {});
-      if (r.signedIn) { await enterApp(r.team); return; }
+      if (r.signedIn) { await enterApp(r.team, r.keepKey); return; }
       pickedTeamId = r.team.id;
       renderTeamPicker();
       $('#newTeamForm').hidden = true;
@@ -660,10 +668,11 @@
     const got = await readState(stateTag, askedTeam);
     // Answered, therefore in touch: a 304 is as current as a 200, it just has
     // nothing new to say.
-    if (got.status === 304) { lastSyncAt = Date.now(); return false; }
+    if (got.status === 304) { lastSyncAt = Date.now(); heardFromServer(got.askedAt); return false; }
     if (got.status === 401) throw authFailed();
     if (got.status !== 200) throw new Error(`Request failed (${got.status})`);
     lastSyncAt = Date.now();
+    heardFromServer(got.askedAt);
     // The tag is remembered only once this version is actually on screen. Saved
     // first, a body cut off in transit or a drawing error left the page asking
     // "anything newer than this?", being told no, and showing the old list —
@@ -776,13 +785,15 @@
   // kept; refresh() draws it only under a state of the same team.
   async function bringListUp(cands) {
     const team = cands.t;
-    // Another team's copy is never sent up, patched or drawn from.
-    if (list && list.t !== team) dropList();
+    // Another team's copy is never sent up, patched or drawn from; nor one
+    // whose fields have since been renamed (kept on the device across a
+    // deploy), whose digests would otherwise pass it for current.
+    if (list && (list.t !== team || (cands.fk !== undefined && Wire.fieldsKey(list.f, list.k) !== cands.fk))) dropList();
     const epoch = listEpoch;
     // Signed out while it was on its way: handed back for refresh() to drop,
     // never kept.
     const keep = (copy) => {
-      if (epoch === listEpoch) list = copy;
+      if (epoch === listEpoch) { list = copy; noteKept(); }
       return copy;
     };
     if (list && !distrust.size && !(wantOrder && !list.ro)) {
@@ -962,6 +973,9 @@
     if (!stillKept(copy)) { scheduleVerify(); return; }
     if (!bad.length) { verifyWait = VERIFY_MS; return; }
     for (const at of bad) distrust.add(at);
+    // What is kept of them is as wrong as the copy was: written again once
+    // the sync has put them right.
+    if (keptAs) for (const at of bad) keptAs.groups[Wire.groupOf(at)] = '';
     verifyWait = Math.min(verifyWait * 2, VERIFY_MAX);
     stateTag = '';
     refreshSoon();
@@ -995,6 +1009,367 @@
     for (const [c, m] of overlays) for (const [field, [had, was]] of m) { now.push([c, field, c[field]]); if (had) c[field] = was; else delete c[field]; }
     try { return fn(); } finally { for (const [c, field, v] of now) c[field] = v; }
   }
+
+  // ---------------- The copy kept on this device ----------------
+  // Opening the app again used to fetch the whole list again — megabytes,
+  // seconds on a phone's connection — although nearly all of it was the
+  // same as when the app was last open. The copy is kept in this browser
+  // (IndexedDB) between visits and brought up to date by one sync of what
+  // changed, the way a poll brings it up to date. It is the session's own
+  // team's and only ever used for it: put back only once /api/auth/status
+  // has said this browser is signed in to that very team, and cleared on
+  // signing out, the sign-in screen, any "please sign in", and moving to
+  // another team. Nothing is drawn from it that a sync has not had the
+  // chance to correct: it is put back before the first state, and that
+  // state's sync brings it up to the server's version before anything is
+  // drawn. It is checked like a whole list from the server (Wire.fromKept,
+  // then the idle check against every bucket's digest).
+  //
+  // Kept in groups of buckets (Wire.groupsFor), each written only when its
+  // buckets' digests have moved, a group or a few in each idle moment: a
+  // change to one person rewrites a few hundred people, not the list.
+  // Written a few seconds after the copy changes, and straight away when
+  // the page is put away. One record per browser: a head (the list's
+  // version, digests and fields, and which write it was), the order, and the
+  // groups, always written together in one transaction.
+  //
+  // The order and the groups are encrypted (AES-GCM) with a key the server
+  // hands only to a signed-in session (/api/auth/status, /api/login: lib/
+  // auth.js deviceKey) and that is never kept on the device: signing the
+  // team out everywhere, changing its PIN or deleting it changes the key, so
+  // a copy left on a device nobody opens again can no longer be read. The
+  // list itself is never kept by the browser's own cache (no-store).
+  const KEEP_DB = 'wp-kept';
+  const KEEP_STORE = 'kept';
+  const KEEP_FORMAT = 1;
+  const KEPT_HINT = 'wp-kept';       // read by index.html: a copy is kept, so the list is not asked for early
+  const KEEP_DELAY = 4000;
+  const KEEP_READ_MS = 4000;
+  let keepDbOpen = null;
+  let keepEpoch = 0;                 // moves on clearing: a write on its way then is not made
+  let keepTimer = 0;
+  let keepRun = null;                // the write being made: { copy, step }
+  // What is kept, as this page last wrote or read it: the write's id, and
+  // what each group was cut from. A write that finds another write's id in
+  // the head (this team open in another tab) writes everything.
+  let keptAs = null;                 // { wid, t, v, nb, fields, o, groups: [digests of each group] }
+  // Whether this page may keep anything: only once the session is confirmed
+  // (boot, signing in), with a key to lock it with, and never from the
+  // sign-in screen on — a sync answered after a 401 is not kept.
+  let keepAllowed = false;
+  let keepKey = null;                // a promise of the CryptoKey, or null
+  // Set when another tab of this browser cleared what is kept (signed out,
+  // another team): nothing is written here until this page has heard from
+  // the server on a request it made after that (refresh).
+  let keepHeldAt = 0;
+  const keptHintOn = () => { try { return localStorage.getItem(KEPT_HINT) === '1'; } catch { return false; } };
+  function keptHint(on) {
+    try { if (on) localStorage.setItem(KEPT_HINT, '1'); else localStorage.removeItem(KEPT_HINT); } catch { /* no storage */ }
+  }
+  function useKeepKey(raw) {
+    keepKey = null;
+    if (typeof raw !== 'string' || !raw || !Wire.canDigest()) return false;
+    try {
+      const bin = atob(raw.replace(/-/g, '+').replace(/_/g, '/'));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      keepKey = crypto.subtle.importKey('raw', bytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']).catch(() => null);
+    } catch { keepKey = null; }
+    return Boolean(keepKey);
+  }
+  // Signed in (boot, a sign-in, a new team made from the sign-in screen):
+  // keeping may start, with the session's key.
+  function allowKeeping(raw) {
+    keepAllowed = useKeepKey(raw);
+  }
+  async function seal(key, text) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    return { iv, data: await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text)) };
+  }
+  async function unseal(key, rec) {
+    if (!rec || !(rec.iv instanceof Uint8Array) || !(rec.data instanceof ArrayBuffer)) throw new Error('not sealed');
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv }, key, rec.data));
+  }
+  const mayKeep = () => keepAllowed && !keepHeldAt && Boolean(keepKey);
+  function keepDb() {
+    if (!keepDbOpen) {
+      keepDbOpen = new Promise((resolve) => {
+        try {
+          const rq = indexedDB.open(KEEP_DB, 1);
+          rq.onupgradeneeded = () => { if (!rq.result.objectStoreNames.contains(KEEP_STORE)) rq.result.createObjectStore(KEEP_STORE); };
+          rq.onsuccess = () => {
+            const db = rq.result;
+            db.onversionchange = () => { db.close(); keepDbOpen = null; };
+            resolve(db);
+          };
+          rq.onerror = () => resolve(null);
+          rq.onblocked = () => resolve(null);
+        } catch { resolve(null); }
+      });
+    }
+    return keepDbOpen;
+  }
+  // What was kept, as it was stored, read while the session is still being
+  // asked about: { head, ids, groups, answer } or null. Only read when this
+  // browser says it keeps one. The moment the head is read, the server is
+  // asked what has changed since it (a sync from its digests alone), so the
+  // answer is on its way while the session is confirmed: a copy so far
+  // behind that the server would send the whole list anyway (a busy team's
+  // copy, a day old) is then never opened at all.
+  let keptStored = keptHintOn() ? readKept().then((kept) => {
+    if (kept && kept.head && Wire.canDigest() && kept.head.fmt === Wire.FORMAT && typeof kept.head.d === 'string') {
+      const { v, t, nb, d, o } = kept.head;
+      let signedInHere = false;
+      try { signedInHere = localStorage.getItem(SIGNED_IN_KEY) === '1' && lastTeam() === t; } catch { /* no storage */ }
+      if (signedInHere) kept.answer = fetchJson('/api/candidates/sync?v=2', { method: 'POST', body: { v, t, nb, b: d, o }, ms: SYNC_MS }).catch(() => null);
+    }
+    return kept;
+  }) : null;
+  function readKept() {
+    return keepDb().then((db) => db && new Promise((resolve) => {
+      const tx = db.transaction(KEEP_STORE, 'readonly');
+      const st = tx.objectStore(KEEP_STORE);
+      const out = { head: null, ids: null, groups: [] };
+      const h = st.get('head');
+      h.onsuccess = () => {
+        const head = h.result;
+        if (!head || head.keep !== KEEP_FORMAT || !Number.isInteger(head.groups) || head.groups < 1 || head.groups > 4096) return;
+        out.head = head;
+        const i = st.get('ids');
+        i.onsuccess = () => { out.ids = i.result; };
+        for (let g = 0; g < head.groups; g++) {
+          const r = st.get(`g${g}`);
+          r.onsuccess = () => { out.groups[g] = r.result; };
+        }
+      };
+      tx.oncomplete = () => resolve(out.head ? out : null);
+      tx.onerror = () => resolve(null);
+      tx.onabort = () => resolve(null);
+    })).catch(() => null);
+  }
+  const fieldsSig = (list) => `${list.k}:${list.f.join('\u0000')}`;
+  const keptShape = (list, wid) => ({ wid, t: list.t, v: list.v, nb: list.nb, fields: fieldsSig(list), o: list.o, groups: Array.from({ length: Wire.groupsFor(list.nb) }, (_, g) => Wire.groupDigests(list, g)) });
+  // What a stored head says is kept: what a write here goes on from.
+  const headShape = (head) => ({ wid: head.wid, t: head.t, v: head.v, nb: head.nb, fields: fieldsSig(head), o: head.o, groups: Wire.headGroupDigests(head) });
+  const KEEP_OPEN_BATCH = 32;          // groups opened at a time when it is put back
+
+  // The kept copy as this page's copy, for `team` — the session's, as
+  // /api/auth/status has just said. True when it was put back. Anything
+  // wrong with it (another team's, another format, a check it fails) and it
+  // is cleared, and the list is fetched as it always was.
+  async function restoreKept(team) {
+    const waiting = keptStored;
+    keptStored = null;
+    if (!waiting || !Wire.canDigest() || !mayKeep()) return false;
+    const epoch = listEpoch;
+    // A browser whose IndexedDB never answers (it has happened) must not
+    // hold the app up: after a few seconds the list is fetched instead.
+    const kept = await Promise.race([waiting, new Promise((r) => setTimeout(() => r(null), KEEP_READ_MS))]);
+    if (!kept) return false;
+    const { head } = kept;
+    if (head.t !== team || head.fmt !== Wire.FORMAT || !Array.isArray(head.f)) { clearKept(); return false; }
+    // What the server said of it. Too far behind to patch (the server
+    // would send everything): not opened at all — a short list came whole
+    // in the answer and is used as it is; a long one is fetched in parts.
+    const got = kept.answer ? await kept.answer : null;
+    if (got && got.status === 401) return false;
+    const msg = got && got.status === 200 && got.body && got.body.t === team ? got.body : null;
+    let copy = null;
+    let moved = false;
+    try {
+      if (msg && !msg.same && !msg.ch) {
+        if (msg.whole) return false;
+        copy = await Wire.fromFull(msg, team);
+        moved = true;
+      } else {
+        const key = await keepKey;
+        if (!key) return false;
+        // A group at a time, each opened, read and let go before the next.
+        const build = Wire.keptBuilder(head, JSON.parse(await unseal(key, kept.ids)), team);
+        for (let g = 0; g < kept.groups.length; g += KEEP_OPEN_BATCH) {
+          const texts = await Promise.all(kept.groups.slice(g, g + KEEP_OPEN_BATCH).map((rec) => unseal(key, rec)));
+          texts.forEach((text, j2) => { build.add(g + j2, JSON.parse(text)); kept.groups[g + j2] = null; });
+        }
+        copy = await build.done();
+        // Brought up to date by the answer when it fits; otherwise the first
+        // state's sync does it.
+        if (msg && msg.same && Wire.sameAs(copy, msg)) { copy = Wire.adopt(copy, msg); moved = true; } else if (msg && msg.ch) {
+          try { copy = await Wire.applyDelta(copy, msg); moved = true; } catch { /* synced again below */ }
+        }
+      }
+    } catch {
+      clearKept();
+      return false;
+    }
+    // Signed out, another team, or a list already here while it was read.
+    if (epoch !== listEpoch || list || teamIdNow() !== team) return false;
+    list = copy;
+    distrust.clear();
+    keptAs = headShape(head);
+    if (moved) noteKept();
+    scheduleVerify(true);
+    dropEarlyList();
+    return true;
+  }
+  // What index.html asked for the list is not needed now.
+  function dropEarlyList() {
+    for (let i = 0, e; (e = takeEarly(i ? `list${i}` : 'list')); i++) e.ctl.abort();
+  }
+
+  // The copy changed: written once it has been still for a moment.
+  function noteKept() {
+    if (!Wire.canDigest() || keepRun || !mayKeep()) return;
+    clearTimeout(keepTimer);
+    keepTimer = setTimeout(() => { keepTimer = 0; writeKept(); }, KEEP_DELAY);
+  }
+  function writeKept(now = false) {
+    const copy = list;
+    if (!copy || copy.dup || !signedIn || copy.t !== teamIdNow() || !Wire.canDigest() || !mayKeep()) return;
+    const epoch = keepEpoch;
+    const groups = Wire.groupsFor(copy.nb);
+    const was = keptAs;
+    const whole = !was || was.t !== copy.t || was.nb !== copy.nb || was.fields !== fieldsSig(copy);
+    const want = [];
+    for (let g = 0; g < groups; g++) if (whole || was.groups[g] !== Wire.groupDigests(copy, g)) want.push(g);
+    const withIds = whole || was.o !== copy.o;
+    if (!whole && !want.length && !withIds && was.v === copy.v) return;
+    let members = null;
+    const sealed = new Map();          // group -> promise of its sealed record
+    let ids = null;
+    let at = 0;
+    const key = keepKey;
+    const run = { copy, left: () => want.length - at };
+    keepRun = run;
+    // A group or more in each moment the page has nothing else to do, as
+    // the idle check does — each packed and sealed in its own moment, so no
+    // moment holds more than a few hundred people's worth — then the order.
+    const step = (deadline) => {
+      if (keepRun !== run) return;
+      if (epoch !== keepEpoch || !stillKept(copy) || !mayKeep()) { keepRun = null; if (epoch === keepEpoch && list) noteKept(); return; }
+      if (!members && want.length) members = Wire.keptMembers(copy);
+      // At least one group, then as many more as fit in this moment.
+      const until = deadline ? performance.now() + Math.min(deadline.timeRemaining(), SLICE_MS) : Infinity;
+      const packed = at < want.length;
+      if (packed) {
+        withOverlaysLifted(() => {
+          do {
+            const g = want[at++];
+            const text = JSON.stringify(Wire.keptGroup(copy, members[g]));
+            sealed.set(g, key.then((k) => seal(k, text)).catch(() => null));
+          } while (at < want.length && performance.now() < until);
+        });
+      }
+      if (at < want.length) { idle(step); return; }
+      if (withIds && ids === null) {
+        if (packed && deadline) { idle(step); return; }
+        const text = JSON.stringify(copy.ids);
+        ids = key.then((k) => seal(k, text)).catch(() => null);
+      }
+      keepRun = null;
+      commitKept({ copy: list, groups, sealed, ids, whole, was, epoch });
+    };
+    run.step = step;
+    if (now && want.length <= FLUSH_MAX) step(null); else idle(step);
+  }
+  // Put away (another app, the phone locked): what is waiting is written
+  // now, while the page may still run — if it is small. A large write is
+  // left to finish in the page's idle moments when it is back: done all at
+  // once it would hold a phone for seconds, just as it is put away.
+  const FLUSH_MAX = 8;
+  function flushKept() {
+    if (keepRun) { if (keepRun.left() <= FLUSH_MAX) keepRun.step(null); return; }
+    if (keepTimer) { clearTimeout(keepTimer); keepTimer = 0; writeKept(true); }
+  }
+  // Still signed in to this team in this browser, as far as any tab of it
+  // knows: another tab signing out or into another team says so at once.
+  const browserSignedInTo = (team) => {
+    try { return localStorage.getItem(SIGNED_IN_KEY) === '1' && lastTeam() === team; } catch { return false; }
+  };
+  function commitKept({ copy, groups, sealed, ids, whole, was, epoch }) {
+    (async () => {
+      const sealedIds = ids !== null ? await ids : null;
+      const records = await Promise.all([...sealed].map(async ([g, rec]) => [g, await rec]));
+      if (epoch !== keepEpoch || (ids !== null && !sealedIds) || records.some(([, rec]) => !rec)) return;
+      const db = await keepDb();
+      if (!db || epoch !== keepEpoch || !mayKeep() || !browserSignedInTo(copy.t)) return;
+      const wid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const tx = db.transaction(KEEP_STORE, 'readwrite');
+      const st = tx.objectStore(KEEP_STORE);
+      const put = () => {
+        st.put({ ...Wire.keptHead(copy), keep: KEEP_FORMAT, groups, wid, at: Date.now() }, 'head');
+        if (sealedIds) st.put(sealedIds, 'ids');
+        for (const [g, rec] of records) st.put(rec, `g${g}`);
+      };
+      // What another tab of this team stored since this page last wrote: not
+      // written over piecemeal as if it were this page's, but gone on from —
+      // its head says what each of its groups holds.
+      let rebase = null;
+      if (whole) { st.clear(); put(); } else {
+        const h = st.get('head');
+        h.onsuccess = () => {
+          const head = h.result;
+          if (head && head.wid === was.wid && head.groups === groups) { put(); return; }
+          if (head && head.keep === KEEP_FORMAT && head.fmt === Wire.FORMAT && head.t === copy.t && head.nb === copy.nb && head.groups === groups
+            && Array.isArray(head.f) && typeof head.d === 'string') rebase = headShape(head);
+          tx.abort();
+        };
+      }
+      tx.oncomplete = () => {
+        if (epoch !== keepEpoch) return;
+        keptAs = keptShape(copy, wid);
+        keptHint(true);
+      };
+      tx.onabort = () => {
+        if (epoch !== keepEpoch) return;
+        keptAs = rebase;
+        if (rebase) noteKept();
+      };
+    })().catch(() => { keptAs = null; });
+  }
+  // Signed out, another team, or a copy that would not do: nothing is kept.
+  // `stop`: and nothing more is, until the session is confirmed again.
+  function clearKept(stop = false) {
+    if (stop) { keepAllowed = false; keepKey = null; }
+    keepEpoch += 1;
+    keptAs = null;
+    keptStored = null;
+    keepRun = null;
+    clearTimeout(keepTimer);
+    keepTimer = 0;
+    keptHint(false);
+    keepDb().then((db) => { if (db) db.transaction(KEEP_STORE, 'readwrite').objectStore(KEEP_STORE).clear(); }).catch(() => {});
+  }
+  // Kept, the copy is the session's and nothing is written after it is
+  // cleared — from another tab too: a sign-out or a move to another team
+  // there removes the hint (or changes the team) here at once.
+  function keepIfNeeded() {
+    if (mayKeep() && list && list.t === teamIdNow() && !keptAs && !keepTimer && !keepRun) noteKept();
+  }
+  window.addEventListener('storage', (e) => {
+    if (e.key !== null && e.key !== KEPT_HINT && e.key !== SIGNED_IN_KEY && e.key !== LAST_TEAM_KEY) return;
+    if (e.key === KEPT_HINT && e.newValue === '1') return;
+    if (e.key === SIGNED_IN_KEY && e.newValue === '1') return;
+    keepEpoch += 1;
+    keptAs = null;
+    keepRun = null;
+    clearTimeout(keepTimer);
+    keepTimer = 0;
+    keepHeldAt = pageClock();
+  });
+  // Moved to another team on this page (its session changed in another
+  // tab): that team's key, and keeping its list, once the server confirms it.
+  async function rekeep(team) {
+    try {
+      const a = await api('/api/auth/status');
+      if (a.authed && a.team && a.team.id === team && teamIdNow() === team && signedIn) { allowKeeping(a.keepKey); keepIfNeeded(); }
+    } catch { /* kept from its next visit instead */ }
+  }
+  // An answer to a request made after another tab cleared what is kept:
+  // this page is still signed in, to the team it says.
+  function heardFromServer(askedAt) {
+    if (keepHeldAt && askedAt > keepHeldAt) { keepHeldAt = 0; keepIfNeeded(); }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flushKept(); });
 
   // ---------------- Connection ----------------
   // A failed poll used to fail in complete silence: the numbers on screen
@@ -7232,7 +7607,12 @@
       if (a.required && !a.authed) { renderTeamPicker(); showLogin(); return; }
       setTeam(a.team);
       signedIn = true;
+      allowKeeping(a.keepKey);
+      // The copy this device kept, if it is this team's: the first state
+      // then brings it up to date with a sync rather than the whole list.
+      if (a.team) await restoreKept(a.team.id).catch(() => false);
       await refresh();
+      keepIfNeeded();
       start();
       // A new version that was already waiting when the app opened: now that
       // the app knows nothing is in flight, it moves to it.

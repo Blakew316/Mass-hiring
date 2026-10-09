@@ -457,10 +457,16 @@
     return out;
   }
 
+  // Which fields a list has, in a few letters: the digests are taken over
+  // the values alone, so a copy whose fields have since been renamed (a copy
+  // kept on the device across a deploy) would otherwise pass for current.
+  const fieldsKey = (f, k) => `${k}.${fnv1a(f.join('\u0000')).toString(36)}`;
   // "Nothing has changed since your copy" — the same people, order and
-  // digests, under a newer version.
+  // digests, under a newer version, with the same fields (a server that
+  // does not say which is taken at its word).
   function sameAs(list, info) {
-    return Boolean(list && info && info.t === list.t && info.nb === list.nb && info.n === list.n && info.o === list.o && info.rh === list.rh);
+    return Boolean(list && info && info.t === list.t && info.nb === list.nb && info.n === list.n && info.o === list.o && info.rh === list.rh
+      && (info.fk === undefined || (Array.isArray(list.f) && fieldsKey(list.f, list.k) === info.fk)));
   }
   const adopt = (list, info) => ({ ...list, v: info.v, rn: info.rn, ro: Array.isArray(info.ro) ? info.ro : list.ro });
 
@@ -470,6 +476,89 @@
     let b = '';
     for (let i = 0; i < list.nb; i++) b += distrust && distrust.has(i) ? UNKNOWN : list.d[i];
     return { v: list.v, t: list.t, nb: list.nb, b, o: list.o };
+  }
+
+  // ---------- the copy kept on the device ----------
+  // The page keeps its copy between visits (app.js), so that opening the app
+  // again costs a sync of what changed rather than the whole list. It is
+  // kept in groups of two buckets, each group a message of its own (pack),
+  // with the list's order beside them as its ids: a change to one person is
+  // one bucket, so it rewrites one group of a hundred or two people — small
+  // enough to make in one of the page's idle moments, even on a phone — and
+  // a group whose buckets' digests have not moved is the same as before.
+  const KEEP_BUCKETS = 2;
+  const groupsFor = (nb) => Math.max(1, Math.ceil(nb / KEEP_BUCKETS));
+  const groupOf = (b) => Math.floor(b / KEEP_BUCKETS);
+  // What the groups are cut by, beside them: a group is the same text as
+  // before when these are. From a copy, or from a kept head's digests.
+  const groupDigests = (list, g) => list.d.slice(g * KEEP_BUCKETS, (g + 1) * KEEP_BUCKETS).join('');
+  const headGroupDigests = (head) => Array.from({ length: groupsFor(head.nb) }, (_, g) => String(head.d).slice(g * KEEP_BUCKETS * DIGEST, (g + 1) * KEEP_BUCKETS * DIGEST));
+  function keptHead(list) {
+    return { fmt: FORMAT, t: list.t, v: list.v, nb: list.nb, n: list.n, o: list.o, rh: list.rh, rn: list.rn, ro: list.ro, d: list.d.join(''), f: list.f, k: list.k };
+  }
+  // Who is in each group, by their place in the list.
+  function keptMembers(list) {
+    const out = Array.from({ length: groupsFor(list.nb) }, () => []);
+    for (let i = 0; i < list.n; i++) out[groupOf(list.bk[i])].push(i);
+    return out;
+  }
+  const keptGroup = (list, members) => pack(list.f, list.k, members.map((i) => [list.cands[i], list.sides[i]]));
+  // The copy put back together from what was kept, a group at a time (each
+  // read and let go before the next is opened), checked as a whole list is:
+  // every group once, every person once, in the group their id belongs to,
+  // in the order and with the digests the head says.
+  function keptBuilder(head, ids, team) {
+    baseChecks(head);
+    if (team && head.t !== team) throw refused('it is another team\'s list');
+    if (!Array.isArray(head.f) || !Number.isInteger(head.k)) throw refused('the list came in a form this page cannot read');
+    const d = digestsOf(head.d, head.nb);
+    if (!d) throw refused('its digests do not fit its buckets');
+    if (!Array.isArray(ids) || ids.length !== head.n || ids.some((id) => typeof id !== 'string' && typeof id !== 'number')) throw refused('its order is not a list of ids');
+    const at = new Map();
+    for (let i = 0; i < ids.length; i++) at.set(ids[i], i);
+    if (at.size !== ids.length) throw refused('it has two people under one id');
+    const groups = groupsFor(head.nb);
+    const seen = new Uint8Array(groups);
+    const cands = new Array(head.n);
+    const sides = new Array(head.n);
+    let placed = 0;
+    let added = 0;
+    return {
+      add(g, msg) {
+        if (!Number.isInteger(g) || g < 0 || g >= groups || seen[g]) throw refused('its groups do not fit its buckets');
+        seen[g] = 1;
+        added += 1;
+        if (!msg || !Array.isArray(msg.f) || !sameFields(head, msg)) throw refused('its groups are not of its fields');
+        const got = unpack(msg);
+        for (let j = 0; j < got.cands.length; j++) {
+          const c = got.cands[j];
+          const i = c ? at.get(c.id) : undefined;
+          if (i === undefined || cands[i] !== undefined || groupOf(bucketOf(c.id, head.nb)) !== g) throw refused('a person in it is not where the list has them');
+          cands[i] = c; sides[i] = got.sides[j];
+          placed += 1;
+        }
+      },
+      async done() {
+        if (added !== groups) throw refused('its groups do not fit its buckets');
+        if (placed !== head.n) throw refused('it does not hold as many people as it says');
+        const bk = new Uint16Array(ids.length);
+        for (let i = 0; i < ids.length; i++) bk[i] = bucketOf(ids[i], head.nb);
+        if (canDigest()) {
+          if (await digest(ids.map(String).join('\n'), LONG) !== head.o) throw refused('its order is not the order it says');
+          if (await digest(d.join(''), LONG) !== head.rh) throw refused('its digests are not the ones it says');
+        }
+        return {
+          t: head.t, v: head.v, nb: head.nb, n: head.n, o: head.o, rh: head.rh, rn: head.rn, ro: Array.isArray(head.ro) ? head.ro : null,
+          f: head.f, k: head.k, ids, cands, sides, bk, d, dup: false,
+        };
+      },
+    };
+  }
+  async function fromKept(head, ids, groups, team) {
+    const b = keptBuilder(head, ids, team);
+    if (!Array.isArray(groups) || groups.length !== groupsFor(head.nb)) throw refused('its groups do not fit its buckets');
+    groups.forEach((msg, g) => b.add(g, msg));
+    return b.done();
   }
 
   // ---------- what the page used to be sent beside the list ----------
@@ -514,7 +603,8 @@
     FORMAT, DIGEST, LONG, UNKNOWN, PART_ROWS, partsFor,
     fnv1a, bucketOf, bucketCount,
     candText, sideText, rowText, canDigest, digest,
-    pack, unpack, fromFull, fromParts, applyDelta, bucketTexts, sameAs, adopt, syncBody,
+    pack, unpack, fromFull, fromParts, applyDelta, bucketTexts, sameAs, adopt, syncBody, fieldsKey,
     rankOf, priorityOf, dueIdsOf, rankDigest,
+    groupsFor, groupOf, groupDigests, headGroupDigests, keptHead, keptMembers, keptGroup, keptBuilder, fromKept,
   };
 });

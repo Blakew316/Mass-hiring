@@ -163,6 +163,11 @@ const total = (page) => page.evaluate(() => (document.querySelector('#statTotal'
     ok(await page.evaluate(() => localStorage.getItem('wp-signed-in')) === '1', 'signed in, the page notes it for its next load');
     const asked = [];
     page.on('request', (r) => { const u = new URL(r.url()); if (/^\/(api\/|app\.js$)/.test(u.pathname)) asked.push(`${r.method()} ${u.pathname}${u.search}`); });
+    // Without the copy of the list this device keeps (e-kept.test.js), with
+    // which the list is not asked for at all: once it is kept, the page is
+    // told it is not.
+    await page.waitForFunction(() => localStorage.getItem('wp-kept') === '1', null, { timeout: 30000 });
+    await page.evaluate(() => localStorage.removeItem('wp-kept'));
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.querySelector('.bell') && document.querySelector('#loginScreen').hidden);
     await page.waitForTimeout(500);

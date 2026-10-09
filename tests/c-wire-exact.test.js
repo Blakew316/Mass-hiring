@@ -83,8 +83,9 @@ const { Wire, people, body, legacy, fullCopy, badBuckets, holdClock, midWindow, 
       const got = { ...slim.json }; delete got.cands;
       ok(slim.status === 200 && J(Object.keys(slim.json)) === J(['cands', ...Object.keys(rest)]), `${label}: the slim state has the old keys, the list's place taken by cands`, Object.keys(slim.json || {}));
       ok(J(got) === J(rest), `${label}: and everything else in it is the old state's`);
-      ok(J(Object.keys(slim.json.cands)) === J(['v', 'n', 'nb', 'o', 'rh', 'rn', 't']) && slim.json.cands.v === copy.v && slim.json.cands.t === 'maverick'
+      ok(J(Object.keys(slim.json.cands)) === J(['v', 'n', 'nb', 'o', 'rh', 'rn', 't', 'fk']) && slim.json.cands.v === copy.v && slim.json.cands.t === 'maverick'
         && slim.json.cands.n === copy.n && slim.json.cands.rh === copy.rh && slim.json.cands.o === copy.o, `${label}: cands names the version the whole list is`, slim.json.cands);
+      ok(slim.json.cands.fk === Wire().fieldsKey(copy.f, copy.k), `${label}: and which fields it has`, slim.json.cands.fk);
       ok(slim.text.length < 0.05 * old.text.length || old.candidates.length < 100, `${label}: and is a small part of the old state`, [slim.text.length, old.text.length]);
     }
 
