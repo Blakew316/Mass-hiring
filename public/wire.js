@@ -44,6 +44,11 @@
   // What the page sends for a bucket it no longer trusts: never a digest
   // (a dot is not a base64url letter), so the server always sends it.
   const UNKNOWN = '.'.repeat(DIGEST);
+  // How many people one part of the whole list holds at most. Netlify refuses
+  // a function's answer over 6 MB, and 12,000 people is about a megabyte
+  // compressed: a list of any size travels as a few parts asked for at once.
+  const PART_ROWS = 12000;
+  const partsFor = (n) => Math.max(1, Math.ceil((Number(n) || 0) / PART_ROWS));
 
   // ---------- buckets ----------
   // FNV-1a over the id's UTF-16 code units: cheap, and the same in a browser
@@ -310,10 +315,35 @@
   }
 
   // The whole list, as GET /api/candidates?v=2 sends it.
-  async function fromFull(msg, team) {
-    baseChecks(msg);
-    if (team && msg.t !== team) throw refused('it is another team\'s list');
-    const { cands, sides } = unpack(msg);
+  const fromFull = (msg, team) => fromParts([msg], team);
+
+  // The whole list in parts (GET /api/candidates?v=2&part=i&of=n), put back
+  // together. Every part must be of the same list — team, version, counts,
+  // order, digests and fields — and every part there once, so a write that
+  // lands while they are on their way is refused here, not half-kept.
+  async function fromParts(msgs, team) {
+    if (!Array.isArray(msgs) || !msgs.length) throw refused('it came in no parts');
+    const first = msgs[0];
+    baseChecks(first);
+    if (team && first.t !== team) throw refused('it is another team\'s list');
+    if (!Array.isArray(first.f)) throw refused('the list came in a form this page cannot read');
+    const of = msgs.length;
+    const byPart = new Array(of);
+    for (const m of msgs) {
+      baseChecks(m);
+      const part = of === 1 && m.part === undefined ? 0 : m.part;
+      if (!Number.isInteger(part) || part < 0 || part >= of || byPart[part] || (of > 1 && m.of !== of)) throw refused('its parts do not fit together');
+      for (const key of ['t', 'v', 'nb', 'n', 'o', 'rh', 'rn', 'd']) if (m[key] !== first[key]) throw refused('its parts are of different lists');
+      if (!Array.isArray(m.f) || !sameFields(first, m)) throw refused('its parts are of different lists');
+      byPart[part] = m;
+    }
+    const cands = [];
+    const sides = [];
+    for (const m of byPart) {
+      const got = unpack(m);
+      for (let i = 0; i < got.cands.length; i++) { cands.push(got.cands[i]); sides.push(got.sides[i]); }
+    }
+    const msg = first;
     if (cands.length !== msg.n) throw refused('it does not hold as many people as it says');
     const d = digestsOf(msg.d, msg.nb);
     if (!d) throw refused('its digests do not fit its buckets');
@@ -481,10 +511,10 @@
   const rankDigest = (list, ranked) => digest(ranked.map((i) => String(list.ids[i])).join('\n'), LONG);
 
   return {
-    FORMAT, DIGEST, LONG, UNKNOWN,
+    FORMAT, DIGEST, LONG, UNKNOWN, PART_ROWS, partsFor,
     fnv1a, bucketOf, bucketCount,
     candText, sideText, rowText, canDigest, digest,
-    pack, unpack, fromFull, applyDelta, bucketTexts, sameAs, adopt, syncBody,
+    pack, unpack, fromFull, fromParts, applyDelta, bucketTexts, sameAs, adopt, syncBody,
     rankOf, priorityOf, dueIdsOf, rankDigest,
   };
 });
