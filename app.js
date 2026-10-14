@@ -1424,10 +1424,15 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
   if (!Array.isArray(rows) || !rows.length) throw new Error('Nothing to import.');
   if (rows.length > MAX_IMPORT_ROWS) throw new Error(`Import at most ${MAX_IMPORT_ROWS.toLocaleString()} rows at a time.`);
   const updateExisting = req.body.updateExisting !== false;
+  // "Email these first": everyone in the file not yet emailed goes to the
+  // front of the email line (lib/queue.js enqueue, front).
+  const first = Boolean(req.body.first);
+  let firstIds = [];
   let result = null;
   // Decided against the latest version of the list, retried on a concurrent
   // change, so a send running in the background can never make rows vanish.
-  await store.update((db) => {
+  const saved = await store.update((db) => {
+    firstIds = [];
     const analysis = analyzeImport(db.candidates, rows, mapping, { lines: req.body.lines, headerless: Boolean(req.body.headerless) });
     let added = 0, updated = 0;
     const now = new Date().toISOString();
@@ -1444,8 +1449,10 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
           lastEmailedAt: null,
           bookedAt: null,
         });
+        firstIds.push(db.candidates[db.candidates.length - 1].id);
         added++;
       } else if (a.kind === 'existing') {
+        if (a.existing.status === 'new' && !a.existing.lastEmailedAt) firstIds.push(a.existing.id);
         // A newly learned address of theirs is kept either way: it is what
         // stops the next file adding them a second time.
         const { altEmails, ...details } = a.fill;
@@ -1456,6 +1463,11 @@ app.post('/api/import/commit', asyncRoute(async (req, res) => {
     }
     result = { ok: true, added, updated, ...summarize(analysis) };
   });
+  if (first && firstIds.length) {
+    let put = 0;
+    await queue.updateQ((f) => { put = queue.enqueue(f, saved, firstIds, null, { front: true }); });
+    result.first = put;
+  }
   res.json(result);
 }));
 
