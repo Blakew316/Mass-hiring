@@ -4117,8 +4117,9 @@
     btn.disabled = true;
     btn.textContent = 'Importing…';
     $('#importUpdateExisting').disabled = true;
+    $('#importFirst').disabled = true;
     $$('.map-select').forEach((el) => { el.disabled = true; });
-    const totals = { added: 0, updated: 0, existing: 0, duplicate: 0, invalid: 0 };
+    const totals = { added: 0, updated: 0, existing: 0, duplicate: 0, invalid: 0, first: 0 };
     const { rows, lines, repeats } = splitRepeats(pendingImport.rows, pendingImport.lines, mapping);
     totals.duplicate += repeats;
     let done = 0;
@@ -4131,7 +4132,7 @@
         commitBatch.retried = false;
         const r = await commitBatch({
           rows: rows.slice(i, i + IMPORT_ROW_BATCH), lines: lines.slice(i, i + IMPORT_ROW_BATCH), headerless: pendingImport.headerless,
-          mapping, source: pendingImport.source, updateExisting: $('#importUpdateExisting').checked,
+          mapping, source: pendingImport.source, updateExisting: $('#importUpdateExisting').checked, first: $('#importFirst').checked,
         });
         for (const k of Object.keys(totals)) totals[k] += r[k] || 0;
         if (commitBatch.retried) retried = true;
@@ -4168,6 +4169,7 @@
       delete btn.dataset.busy;
       btn.disabled = !pendingImport;
       $('#importUpdateExisting').disabled = false;
+      $('#importFirst').disabled = false;
       $$('.map-select').forEach((el) => { el.disabled = false; });
     }
   });
@@ -4368,6 +4370,7 @@
     if (t.existing) bits.push(`${t.existing.toLocaleString()} already in your list${t.updated ? ` (${t.updated.toLocaleString()} of them updated with new details)` : ''}`);
     if (t.duplicate) bits.push(`${t.duplicate.toLocaleString()} repeated in the file`);
     if (t.invalid) bits.push(`${t.invalid.toLocaleString()} without a usable email`);
+    if (t.first) bits.push(`<strong>${t.first.toLocaleString()} put at the front of the email line</strong>`);
     if (t.onList != null) bits.push(`your list now has ${t.onList.toLocaleString()} candidates`);
     el.className = `notice ${note ? 'warn' : good ? 'ok' : 'warn'}`;
     el.innerHTML = `<span class="notice-ico">${icon(good && !note ? 'checkcircle' : 'alert', 16)}</span><div>${bits.join(' · ')}` +
