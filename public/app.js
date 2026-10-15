@@ -249,7 +249,20 @@
     renderTeamChip();
   }
 
+  // Pages for one team only (data-team-only: WPI Careers is Team Maverick's
+  // own careers page): shown to that team and nobody else, and a team that
+  // finds itself on one (a link, a team change) is taken to the Dashboard.
+  function teamOnlyPages() {
+    const team = currentTeam ? currentTeam.id : '';
+    $$('[data-team-only]').forEach((b) => {
+      const mine = b.dataset.teamOnly === team;
+      b.hidden = !mine;
+      if (!mine && b.dataset.view === currentView) { try { show('dashboard'); } catch { /* not ready yet */ } }
+    });
+  }
+
   function renderTeamChip() {
+    teamOnlyPages();
     const chip = $('#teamChip');
     if (chip) {
       chip.hidden = !currentTeam;
@@ -1496,6 +1509,10 @@
 
   function show(view, { record = true } = {}) {
     if (!$(`#view-${view}`)) return;
+    // Another team's page is never shown, however it was reached.
+    const only = $(`.nav-item[data-view="${view}"][data-team-only]`);
+    if (only && only.dataset.teamOnly !== (currentTeam ? currentTeam.id : '')) view = 'dashboard';
+    if (view === 'careers') openCareers();
     if (currentView !== view) scrollMemory[currentView] = mainEl ? mainEl.scrollTop : 0;
     currentView = view;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
@@ -1681,10 +1698,26 @@
   $$('#view-template .conv-list, #view-texting .conv-list').forEach((l) => l.addEventListener('scroll', () => {
     l.closest('.view').classList.toggle('list-scrolled', l.scrollTop > 8);
   }, { passive: true }));
+  // ---------------- WPI Careers (Team Maverick) ----------------
+  // The careers site (public/careers/, from the paystructrure repo) on Team
+  // Maverick's own page, framed here: loaded the first time the page is
+  // opened, not with the dashboard. The link copied is the one recruits get.
+  const CAREERS_PAGE = '/careers/?team=maverick';
+  const careersLink = () => `${location.origin}/careers/team/maverick/`;
+  function openCareers() {
+    const frame = $('#careersFrame');
+    if (frame && !frame.getAttribute('src')) frame.setAttribute('src', CAREERS_PAGE);
+  }
+  $('#careersCopy').addEventListener('click', async () => {
+    const link = careersLink();
+    try { await navigator.clipboard.writeText(link); toast('Link copied — your Team Maverick careers page.'); }
+    catch { window.prompt('Copy your careers page link:', link); }
+  });
+
   // More: the pages the phone's tab bar has no room for, as a list. Built
   // from the tab bar itself each time, so the two can never disagree.
   $('#navMore').addEventListener('click', () => {
-    $('#moreSheetButtons').innerHTML = $$('.nav-item[data-overflow]').map((b) => {
+    $('#moreSheetButtons').innerHTML = $$('.nav-item[data-overflow]').filter((b) => !b.hidden).map((b) => {
       const here = b.dataset.view === currentView;
       return `<button type="button" class="sheet-btn more-row${here ? ' is-current' : ''}" data-more="${esc(b.dataset.view)}"${here ? ' aria-current="page"' : ''}>
         <span class="more-ico">${icon(b.querySelector('.nav-ico').dataset.icon, 18)}</span>

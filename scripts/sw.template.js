@@ -113,6 +113,7 @@ self.addEventListener('message', (event) => {
 const LIVE = /^\/(api|auth|webhooks)(\/|$)/;
 const ASSESSMENT = /^\/assessment(\/|$)/;
 const PAPERWORK = /^\/paperwork(\/|$)/;
+const CAREERS = /^\/careers(\/|$)/;
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
@@ -134,6 +135,11 @@ self.addEventListener('fetch', (event) => {
   // (1c) Likewise the new-hire paperwork portal and its documents: a page for
   //      someone signing, always fetched fresh, never the dashboard's shell.
   if (sameOrigin && PAPERWORK.test(url.pathname)) return;
+
+  // (1d) And WPI Careers (public/careers/): a site of its own, framed on its
+  //      page here and opened on its own by recruits — its pages, never the
+  //      dashboard's shell.
+  if (sameOrigin && CAREERS.test(url.pathname)) return;
 
   // (2) A page. Paint the shell straight from the cache — no network wait,
   //     which is what makes a cold launch feel instant — then fall back.
