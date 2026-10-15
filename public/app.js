@@ -1699,15 +1699,19 @@
     l.closest('.view').classList.toggle('list-scrolled', l.scrollTop > 8);
   }, { passive: true }));
   // ---------------- WPI Careers (Team Maverick) ----------------
-  // The careers site (public/careers/, from the paystructrure repo) on Team
+  // The live careers site (wpiagentpay.com, the paystructrure repo) on Team
   // Maverick's own page, framed here: loaded the first time the page is
-  // opened, not with the dashboard. The link copied is the one recruits get.
-  const CAREERS_PAGE = '/careers/?team=maverick';
-  const careersLink = () => `${location.origin}/careers/team/maverick/`;
+  // opened, not with the dashboard. A candidate is only ever sent there —
+  // never to this site — with Blake's phone and email carried in the link
+  // (t: the site's own link format, plain JSON as base64url).
+  const CAREERS_SITE = 'https://wpiagentpay.com';
+  const CAREERS_CONTACT = { contactPhone: '210-480-6345', contactEmail: 'justin.woodruff@wholesalepayments.com' };
+  const careersLink = () => `${CAREERS_SITE}/team/maverick/?t=j${btoa(JSON.stringify(CAREERS_CONTACT)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
   function openCareers() {
     const frame = $('#careersFrame');
-    if (frame && !frame.getAttribute('src')) frame.setAttribute('src', CAREERS_PAGE);
+    if (frame && !frame.getAttribute('src')) frame.setAttribute('src', careersLink());
   }
+  $('#careersOpen').setAttribute('href', careersLink());
   $('#careersCopy').addEventListener('click', async () => {
     const link = careersLink();
     try { await navigator.clipboard.writeText(link); toast('Link copied — your Team Maverick careers page.'); }
