@@ -1705,8 +1705,18 @@
   // never to this site — with Blake's phone and email carried in the link
   // (t: the site's own link format, plain JSON as base64url).
   const CAREERS_SITE = 'https://wpiagentpay.com';
+  const CAREERS_TEAM = 'maverick';
   const CAREERS_CONTACT = { contactPhone: '210-480-6345', contactEmail: 'justin.woodruff@wholesalepayments.com' };
-  const careersLink = () => `${CAREERS_SITE}/team/maverick/?t=j${btoa(JSON.stringify(CAREERS_CONTACT)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  const careersLink = () => `${CAREERS_SITE}/team/${CAREERS_TEAM}/?t=j${btoa(JSON.stringify(CAREERS_CONTACT)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  const careersMine = () => Boolean(currentTeam && currentTeam.id === CAREERS_TEAM);
+  // Sent from a candidate's profile: the send window opens with the letter
+  // written and the link in it, to read over (or change) before it goes.
+  function sendCareers(c) {
+    openCompose([c.id], {
+      subject: 'A career with Wholesale Payments',
+      body: `Hi {{firstName}},\n\nHere's a look at what a career with Wholesale Payments looks like — how the pay works, where it can take you, and the team you'd be joining:\n\n${careersLink()}\n\nHave a look, and reach out with any questions.`,
+    });
+  }
   function openCareers() {
     const frame = $('#careersFrame');
     if (frame && !frame.getAttribute('src')) frame.setAttribute('src', careersLink());
@@ -3239,6 +3249,7 @@
     else if (act === 'act-followup') openCompose([id], null, { followUp: true });
     else if (act === 'act-iq') sendIq(cand);
     else if (act === 'act-onb') sendOnb(cand);
+    else if (act === 'act-careers') sendCareers(cand);
     else if (act === 'act-delete') {
       if (confirm(`Remove ${cand.name || cand.email} from the pipeline?`)) {
         api(`/api/candidates/${id}`, { method: 'DELETE' })
@@ -3285,6 +3296,7 @@
       c.status === 'emailed' ? profTile('act-followup', 'reply', 'Follow up', { title: 'Reply in the same email conversation' }) : '',
       canPipe(c) ? profTile('act-iq', 'clipboard', 'Sales IQ', { title: iqActionLabel(c) }) : '',
       canPipe(c) ? profTile('act-onb', 'signdoc', 'Onboarding', { short: 'Docs', title: onbActionLabel(c) }) : '',
+      canPipe(c) && careersMine() ? profTile('act-careers', 'briefcase', 'Careers', { title: 'Email them your WPI Careers link' }) : '',
     ].join('');
     // And the phone's own apps, on a phone.
     $('#profNative').innerHTML = nativeActs({ phone: c.phone, email: c.email, name }, { size: 40 });
