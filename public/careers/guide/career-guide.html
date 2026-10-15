@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wholesale Payments Career Guide</title>
+<!--
+  Print template for the downloadable career guide.
+  Rendered to assets/career-guide.pdf by scripts/build-guide.js, which fills
+  the {{...}} contact placeholders (HTML-escaped) from a team file.
+  Layout: US Letter pages, light ground, navy type, brand blue/green used only
+  as hairlines, numerals and soft tinted panels.
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --ink: #101a55; --ink-2: #48527a; --muted: #7d859f; --line: #e1e6ef;
+    --tint: #f3f6fb; --blue: #0b8fdf; --green: #10b56d; --green-ink: #0a8a53;
+    --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", Arial, sans-serif; --body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif;
+  }
+  @page { size: letter; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #fff; color: var(--ink); font: 500 10.5pt/1.55 var(--body); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: inherit; text-decoration: none; }
+  .page { width: 8.5in; height: 11in; padding: 0.6in 0.7in 0.55in; position: relative; display: flex; flex-direction: column; page-break-after: always; overflow: hidden; }
+  .page:last-child { page-break-after: auto; }
+
+  .run { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .run img { height: 22px; }
+  .run span, .foot span { font-size: 7.5pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .foot { margin-top: auto; display: flex; justify-content: space-between; align-items: center; padding-top: 12px; border-top: 1px solid var(--line); }
+  .foot b { font-family: var(--display); font-size: 9pt; color: var(--ink-2); }
+
+  .eyebrow { margin-top: 38px; font-size: 8pt; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--blue); }
+  h1, h2 { font-family: var(--display); letter-spacing: -0.025em; margin: 0; font-weight: 700; }
+  h2 { font-size: 30pt; line-height: 1.08; margin-top: 10px; }
+  .lede { margin-top: 14px; font-size: 12pt; color: var(--ink-2); max-width: 5.4in; }
+
+  .list { margin-top: 34px; display: grid; gap: 26px; }
+  .item { display: grid; grid-template-columns: 0.55in 1fr; gap: 6px; }
+  .item .n { font-family: var(--display); font-weight: 600; font-size: 12pt; color: var(--blue); padding-top: 1px; }
+  .item h3 { margin: 0; font-family: var(--display); font-size: 12.5pt; font-weight: 600; }
+  .item p { margin: 4px 0 0; color: var(--ink-2); }
+
+  .callout { margin-top: 34px; padding: 22px 26px; border-radius: 14px; background: var(--tint); border: 1px solid var(--line); }
+  .callout p { margin: 0; font-family: var(--display); font-size: 13pt; font-weight: 500; line-height: 1.45; }
+  .callout .k { font-size: 7.5pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--green-ink); margin-bottom: 8px; font-family: var(--body); }
+  .note { margin-top: 18px; font-size: 8pt; color: var(--muted); line-height: 1.5; }
+
+  /* cover */
+  .cover { padding: 0.75in 0.8in 0.65in; background:
+      radial-gradient(120% 70% at 100% 0%, rgba(11, 143, 223, 0.09), transparent 60%),
+      radial-gradient(90% 60% at 0% 100%, rgba(16, 181, 109, 0.09), transparent 60%), #fff; }
+  .cover .logo { height: 46px; align-self: flex-start; }
+  .cover .eyebrow { margin-top: 1.5in; }
+  .cover h1 { font-size: 52pt; line-height: 1.02; margin-top: 16px; }
+  .cover h1 em { font-style: normal; color: var(--green-ink); }
+  .cover .lede { font-size: 14pt; margin-top: 22px; }
+  .bars { display: flex; gap: 5px; margin-top: 30px; }
+  .bars i { display: block; height: 4px; border-radius: 4px; }
+  .pillars { margin-top: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .pillars div { display: grid; gap: 2px; }
+  .pillars b { font-size: 7.5pt; letter-spacing: 0.16em; text-transform: uppercase; color: var(--green-ink); }
+  .pillars span { font-family: var(--display); font-weight: 600; font-size: 11pt; }
+  .cover-foot { margin-top: 26px; display: flex; justify-content: space-between; align-items: flex-end; font-size: 9.5pt; color: var(--ink-2); }
+  .cover-foot strong { display: block; font-family: var(--display); font-size: 12pt; color: var(--ink); }
+
+  .stat { margin-top: 30px; display: grid; grid-template-columns: auto 1fr; gap: 24px; align-items: center; padding: 22px 26px; border-radius: 14px; background: var(--tint); border: 1px solid var(--line); }
+  .stat .big { font-family: var(--display); font-weight: 700; font-size: 34pt; letter-spacing: -0.03em; line-height: 1; }
+  .stat p { margin: 0; color: var(--ink-2); font-size: 11pt; }
+
+  .grid4 { margin-top: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .tile { padding: 18px 20px; border-radius: 14px; border: 1px solid var(--line); }
+  .tile .k { font-size: 7.5pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--blue); }
+  .tile h3 { margin: 8px 0 0; font-family: var(--display); font-size: 12pt; font-weight: 600; }
+  .tile p { margin: 6px 0 0; color: var(--ink-2); font-size: 9.5pt; }
+
+  .rules { margin-top: 26px; display: grid; gap: 10px; }
+  .rules div { display: grid; grid-template-columns: 14px 1fr; gap: 10px; color: var(--ink-2); }
+  .rules div::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-top: 6px; }
+
+  .tiers { margin-top: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tier { padding: 16px 18px; border-radius: 12px; border: 1px solid var(--line); }
+  .tier b { display: block; font-family: var(--display); font-size: 20pt; letter-spacing: -0.02em; }
+  .tier span { color: var(--muted); font-size: 9pt; font-weight: 600; }
+  .bar { height: 5px; border-radius: 5px; background: var(--tint); margin-top: 12px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--green)); }
+  .label { margin-top: 28px; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+
+  .options { margin-top: 26px; display: grid; gap: 14px; }
+  .option { display: grid; grid-template-columns: 1.9in 1fr; gap: 20px; align-items: center; padding: 22px 26px; border-radius: 14px; border: 1px solid var(--line); }
+  .option.best { background: var(--tint); }
+  .option .k { font-size: 7.5pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--blue); }
+  .option b { display: block; font-family: var(--display); font-size: 28pt; letter-spacing: -0.03em; margin-top: 4px; }
+  .option p { margin: 0; color: var(--ink-2); }
+
+  .traits { margin-top: 28px; display: grid; }
+  .traits div { display: grid; grid-template-columns: 1.7in 1fr; padding: 12px 0; border-top: 1px solid var(--line); }
+  .traits div:last-child { border-bottom: 1px solid var(--line); }
+  .traits b { font-family: var(--display); font-weight: 600; }
+  .traits span { color: var(--ink-2); }
+  .watch { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .watch a { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-radius: 12px; border: 1px solid var(--line); font-weight: 700; font-size: 9.5pt; }
+  .watch a::after { content: "▶"; color: var(--blue); font-size: 8pt; }
+  .cta { margin-top: 22px; padding: 26px 28px; border-radius: 16px; border: 1px solid var(--line);
+    background: radial-gradient(80% 120% at 100% 0%, rgba(11, 143, 223, 0.08), transparent 60%), radial-gradient(70% 120% at 0% 100%, rgba(16, 181, 109, 0.08), transparent 60%), #fff; }
+  .cta .k { font-size: 7.5pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--green-ink); }
+  .cta h3 { margin: 8px 0 12px; font-family: var(--display); font-size: 20pt; letter-spacing: -0.02em; }
+  .cta a { display: block; font-weight: 700; font-size: 11pt; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<!-- 1. Cover -->
+<section class="page cover">
+  <img class="logo" src="logo.png" alt="Wholesale Payments">
+  <p class="eyebrow">Outside B2B sales · Career opportunity</p>
+  <h1>Build something that <em>keeps paying.</em></h1>
+  <p class="lede">Earn for the work you do today. Build residual income for the business you grow.</p>
+  <div class="bars"><i style="width:56px;background:#0b8fdf"></i><i style="width:34px;background:#10b56d"></i><i style="width:18px;background:#4ee07a"></i></div>
+  <div class="pillars">
+    <div><b>Earn</b><span>Upfront commissions</span></div>
+    <div><b>Build</b><span>Lifetime vested residuals</span></div>
+    <div><b>Grow</b><span>Support + opportunity</span></div>
+  </div>
+  <div class="cover-foot">
+    <div>Your next chapter starts with a conversation.{{coverName}}</div>
+    <span>Wholesale Payments</span>
+  </div>
+</section>
+
+<!-- 2. Opportunity -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">01 · The opportunity</p>
+  <h2>Make your effort<br>mean more.</h2>
+  <p class="lede">Help business owners solve practical problems while building a business that rewards consistent production.</p>
+  <div class="list">
+    <div class="item"><span class="n">01</span><div><h3>Create income now.</h3><p>Earn upfront commissions on qualifying sales, with daily pay and production incentives tied to account activation and processing requirements.</p></div></div>
+    <div class="item"><span class="n">02</span><div><h3>Build income over time.</h3><p>Lifetime vested residuals give you a reason to think beyond the next deal. Grow relationships, serve merchants, and build a portfolio.</p></div></div>
+    <div class="item"><span class="n">03</span><div><h3>Give yourself room to grow.</h3><p>Dedicated sales management, an appointment program, and merchant tools support you as you develop your sales skills and production.</p></div></div>
+  </div>
+  <div class="callout"><p>The appeal is simple: your daily effort can create both immediate earnings and lasting value.</p></div>
+  <div class="foot"><span>{{byline}}</span><b>02</b></div>
+</section>
+
+<!-- 3. Company -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">02 · The company</p>
+  <h2>A company with<br>momentum.</h2>
+  <p class="lede">Wholesale Payments combines payment technology, merchant support, and a growth-focused sales opportunity.</p>
+  <div class="stat"><span class="big">2025</span><p>Recognized on the Inc. 5000 list of America's fastest-growing private companies.</p></div>
+  <div class="list">
+    <div class="item"><span class="n">01</span><div><h3>Technology business owners use.</h3><p>From virtual terminals to full point-of-sale systems, reps can connect merchants with solutions suited to how their businesses operate.</p></div></div>
+    <div class="item"><span class="n">02</span><div><h3>Support behind the relationship.</h3><p>Dedicated sales manager support and merchant service resources help you develop accounts and maintain the partnerships you build.</p></div></div>
+  </div>
+  <p class="note">Company recognition is drawn from the 2025 Inc. 5000 handout.</p>
+  <div class="foot"><span>{{byline}}</span><b>03</b></div>
+</section>
+
+<!-- 4. Merchants -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">03 · What you bring to merchants</p>
+  <h2>A better conversation<br>with business owners.</h2>
+  <p class="lede">Start with the owner's priorities: protecting profit, winning repeat business, and finding room to grow.</p>
+  <div class="grid4">
+    <div class="tile"><span class="k">Profit</span><h3>Help owners keep more.</h3><p>Discuss payment technology and eligible pricing options designed to help merchants recover profit from processing.</p></div>
+    <div class="tile"><span class="k">Growth</span><h3>Help customers come back.</h3><p>Customer Connect adds marketing tools for repeat visits, customer reactivation, and online review generation.</p></div>
+    <div class="tile"><span class="k">Capital</span><h3>Help businesses move forward.</h3><p>Business funding options can support growth, including businesses with multiple locations.</p></div>
+    <div class="tile"><span class="k">Rewards</span><h3>Give the partnership more value.</h3><p>Participating merchants earn points on transactions toward available rewards.</p></div>
+  </div>
+  <p class="note">CORE includes payment technology, funding, and rewards. MOMENTUM adds Customer Connect. Product availability, pricing, funding eligibility, and results depend on program terms.</p>
+  <div class="foot"><span>{{byline}}</span><b>04</b></div>
+</section>
+
+<!-- 5. Support -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">04 · Support + expectations</p>
+  <h2>Independent effort.<br>A team behind you.</h2>
+  <p class="lede">You bring the consistency. Wholesale Payments brings coaching, tools, and an appointment program with clear participation standards.</p>
+  <div class="list">
+    <div class="item"><span class="n">01</span><div><h3>Dedicated sales manager</h3><p>Get guidance, apply feedback, and sharpen the way you prospect, present, handle objections, and follow through.</p></div></div>
+    <div class="item"><span class="n">02</span><div><h3>Appointment program</h3><p>Complete the appointment certification in WPI University and you start receiving appointments. No deal is required to unlock them. Expect 2–3 daily opportunities; confirm availability for your market.</p></div></div>
+  </div>
+  <div class="callout">
+    <div class="k">Keep your appointment access active</div>
+    <div class="rules" style="margin-top:4px">
+      <div>Submit daily feedback by 8 PM, including the merchant name and result.</div>
+      <div>Maintain a 20% closing ratio. Deals generated outside appointments also count toward that ratio.</div>
+    </div>
+  </div>
+  <p class="lede" style="font-size:10.5pt;margin-top:24px">Build your own pipeline, too. Consistent outreach and follow-up keep you moving while scheduled appointments add opportunity.</p>
+  <div class="foot"><span>{{byline}}</span><b>05</b></div>
+</section>
+
+<!-- 6. Earnings -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">05 · How earnings work</p>
+  <h2>Earn today.<br>Build for tomorrow.</h2>
+  <p class="lede">The opportunity combines upfront commissions, production incentives, and residual income.</p>
+  <div class="list">
+    <div class="item"><span class="n">01</span><div><h3>Upfront commissions + daily pay</h3><p>Compensation varies by equipment, merchant profile, pricing, and qualification. Discounts or missing fees can reduce payouts. Daily pay: once a merchant crosses the processing threshold, you're paid the next day.</p></div></div>
+    <div class="item"><span class="n">02</span><div><h3>Lifetime vested residuals</h3><p>Build a portfolio of merchant relationships with recurring income potential. Vesting, residual calculations, and ongoing eligibility are governed by your agreement.</p></div></div>
+    <div class="item"><span class="n">03</span><div><h3>Buyout opportunities</h3><p>Company materials advertise buyout opportunities at 45X. Ask {{who}} how the multiple is calculated, what qualifies, and which terms apply.</p></div></div>
+  </div>
+  <p class="note" style="margin-top:auto;margin-bottom:16px">This is a production-based sales opportunity. Earnings are not guaranteed. Confirm the current commission schedule, employment classification, expenses, and agreement terms with {{who}} before joining.</p>
+  <div class="foot" style="margin-top:0"><span>{{byline}}</span><b>06</b></div>
+</section>
+
+<!-- 7. First three months -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">06 · Your first three months</p>
+  <h2>Start strong.<br>Build early momentum.</h2>
+  <p class="lede">The New Hire Compensation Package pays double commission per deal during your first three months.</p>
+  <div class="stat"><span class="big">2×</span><p><b style="color:var(--ink)">Ramp-up commission.</b> The second commission pays once the account processes over $5,000 and reaches 10 transactions.</p></div>
+  <p class="label">Monthly new-rep bonus levels</p>
+  <div class="tiers">
+    <div class="tier"><b>$1,000</b><span>5 deals / month</span><div class="bar"><i style="width:50%"></i></div></div>
+    <div class="tier"><b>$1,500</b><span>8 deals / month</span><div class="bar"><i style="width:80%"></i></div></div>
+    <div class="tier"><b>$2,000</b><span>10 deals / month</span><div class="bar"><i style="width:100%"></i></div></div>
+  </div>
+  <p class="note" style="font-size:9pt;color:var(--ink-2)">Monthly bonuses are doubled up to 10 deals during the first three months; the amounts above are the doubled levels. Half pays when the accounts reach $1,000 and 5 transactions, the other half at $5,000 and 10 transactions.</p>
+  <div class="callout" style="margin-top:22px">
+    <div class="k">$1,000 Fast Start</div>
+    <p>Write 5 deals in your first 30 days. Paid once those deals process over $1,000 and reach 5 transactions.</p>
+  </div>
+  <p class="note">Example: 8 qualifying deals = $750 at the first monthly-bonus milestone + $750 at the second. After the first three months, standard commission and bonus terms apply.</p>
+  <div class="foot"><span>{{byline}}</span><b>07</b></div>
+</section>
+
+<!-- 8. 25-deal milestone -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">07 · The 25-deal milestone</p>
+  <h2>A serious goal.<br>A meaningful reward.</h2>
+  <p class="lede">Complete 25 deals in your first 90 days. You then have an additional 60 days to get all 25 merchants fully processing.</p>
+  <div class="options">
+    <div class="option best"><div><span class="k">Signing bonus</span><b>$15,000</b></div><p>25 processing merchants. Each must process $5,000 within 30 days of the report run.</p></div>
+  </div>
+  <div class="callout" style="background:#fff">
+    <div class="k">One report. Prepare every account.</div>
+    <p style="font-size:11pt;font-family:var(--body);font-weight:500;color:var(--ink-2)">The processing report is pulled one time only, so have all 25 merchants at the $5,000 level when it runs.</p>
+  </div>
+  <p class="note">Confirm report timing and eligibility with {{who}}.</p>
+  <div class="foot"><span>{{byline}}</span><b>08</b></div>
+</section>
+
+<!-- 9. Next chapter -->
+<section class="page">
+  <div class="run"><img src="logo.png" alt=""><span>Career opportunity</span></div>
+  <p class="eyebrow">08 · Your next chapter</p>
+  <h2>Bring the drive.<br>Let's build the rest.</h2>
+  <p class="lede">You don't need to arrive as a finished product. You do need to be willing to learn, work consistently, and follow through.</p>
+  <div class="traits">
+    <div><b>Work ethic</b><span>You put in the activity that creates opportunity.</span></div>
+    <div><b>Coachability</b><span>You accept feedback and apply it in the field.</span></div>
+    <div><b>Communication</b><span>You listen, connect, and learn to close.</span></div>
+    <div><b>Resilience</b><span>You recover from rejection and keep moving.</span></div>
+    <div><b>Discipline</b><span>You show up and do what you said you would do.</span></div>
+  </div>
+  <div class="watch">
+    <a href="https://youtu.be/pKY11l9Yt6g">Watch: Company overview</a>
+    <a href="https://www.youtube.com/watch?v=RhkirvE2Sjg">Watch: Merchant program</a>
+  </div>
+  <div class="cta">
+    <span class="k">Your next step</span>
+    {{cta}}
+  </div>
+  <div class="foot"><span>{{byline}}</span><b>09</b></div>
+</section>
+
+</body>
+</html>

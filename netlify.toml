@@ -56,6 +56,11 @@
 # questionnaire it must never be served stale, and it is nobody's business in
 # a search index: each visit is one person's signed link.
 [[headers]]
+  for = "/careers/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
   for = "/paperwork/*"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"

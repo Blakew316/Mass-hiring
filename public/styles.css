@@ -1632,6 +1632,16 @@ button.tracker-cell:focus-visible { outline: 2px solid var(--blue); outline-offs
 @media not all and (max-width: 800px) { .m-only { display: none !important; } }
 @media (max-width: 800px) { .d-only { display: none !important; } }
 
+/* WPI Careers (Team Maverick): the careers site, in a frame that fills the
+   rest of the page, its own scrolling inside it. */
+.careers-sub { margin: 4px 0 0; font-size: 13px; }
+.careers-frame { height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 480px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #fff; }
+.careers-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+@media (max-width: 800px) {
+  .careers-sub { display: none; }
+  .careers-frame { height: calc(100vh - 210px); height: calc(100dvh - 210px - env(safe-area-inset-bottom)); min-height: 380px; border-radius: 12px; }
+}
+
 /* ---------------- The Phone, Messages and Mail app icons ----------------
    A white glyph (icons.js → appIcon) on a rounded tile in each app's own
    gradient, with the same corner Apple uses (22.37% of the side). The same

@@ -195,6 +195,12 @@
       <button class="nav-item" data-view="settings" data-short="Settings" data-overflow>
         <span class="nav-ico" data-icon="gear" data-size="17"></span> <span class="nav-label">Settings</span>
       </button>
+      <!-- WPI Careers: the careers site (public/careers/, from the
+           paystructrure repo) on Team Maverick's own page. Team Maverick
+           only: app.js shows it for that team and nobody else. -->
+      <button class="nav-item" data-view="careers" data-short="Careers" data-overflow data-team-only="maverick" hidden>
+        <span class="nav-ico" data-icon="briefcase" data-size="17"></span> <span class="nav-label">WPI Careers</span>
+      </button>
       <!-- The phone's More tab: the two pages visited least (marked
            data-overflow), as a list, the way iOS does it once a tab bar runs
            out of room. Never shown in the sidebar. -->
@@ -1025,6 +1031,24 @@
     </section>
 
         </div>
+      </div>
+    </section>
+
+    <!-- ================= WPI Careers (Team Maverick) ================= -->
+    <section class="view" id="view-careers">
+      <header class="page-head">
+        <div>
+          <h1>WPI Careers</h1>
+          <p class="muted careers-sub">Team Maverick's careers page — pay, growth and how to reach you, as recruits see it.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="careersCopy" type="button">Copy link</button>
+          <a class="btn" id="careersOpen" href="/careers/team/maverick/" target="_blank" rel="noopener">Open in new tab</a>
+        </div>
+        <div class="head-chrome"></div>
+      </header>
+      <div class="careers-frame">
+        <iframe id="careersFrame" title="WPI Careers — Team Maverick" loading="lazy" referrerpolicy="same-origin"></iframe>
       </div>
     </section>
 
