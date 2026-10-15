@@ -4,7 +4,7 @@
 // site's Team Maverick page, and the link candidates get is that site, with
 // Blake's details — never the hiring site. Another team never sees the item,
 // and a link to the page takes it to the Dashboard. Nothing is sent.
-const { startApp, launch, ok, done, crash } = require('./helpers');
+const { startApp, launch, R, ok, done, crash } = require('./helpers');
 const { stubEverything, open, waitIn } = require('./views-helpers');
 const { addTeam } = require('./server-read-helpers');
 
@@ -44,6 +44,11 @@ const { addTeam } = require('./server-read-helpers');
     ok(errors.length === 0, 'no page errors', errors);
     await ctx.close();
 
+    // In a letter, the link is a link: the email's HTML makes it clickable.
+    const { renderEmail } = require(R('lib/template.js'));
+    const mail = renderEmail({ subject: 'Hi', body: `Have a look:\n\n${links.copied}\n\nThanks.` }, { firstName: 'Ada' }, {});
+    ok(mail.html.includes(`<a href="${links.copied}"`) && mail.text.includes(links.copied), 'sent in an email, the link is clickable (and whole in the plain-text part)');
+
     // Nothing of the careers site is served here any more.
     const local = await fetch(`${s.base}/careers/team/maverick/`);
     ok(local.status === 404, 'the hiring site serves no careers page of its own (old links are redirected to the live site by netlify.toml)', local.status);
@@ -57,6 +62,16 @@ const { addTeam } = require('./server-read-helpers');
     await other.page.evaluate(() => document.querySelector('#navMore').click());
     const more = await other.page.$$eval('#moreSheetButtons [data-more]', (bs) => bs.map((b) => b.dataset.more));
     ok(!more.includes('careers'), 'nor in the phone\'s More list', more);
+    await other.ctx.close();
+    // Nor a WPI Careers button on a candidate's profile (made-up person).
+    const added = await s.call('POST', '/api/candidates', { firstName: 'Ada', lastName: 'Sample', name: 'Ada Sample', email: 'ada.sample@example.com' }, { cookie: B.cookie });
+    const again = await open(browser, { ...s, cookie: B.cookie }, { at: '/#candidates' });
+    await again.page.waitForSelector('#candidateRows tr.cand-row');
+    await again.page.click('#candidateRows tr.cand-row [data-col="company"]');
+    await again.page.waitForSelector('#profileModal:not([hidden])');
+    const tiles = await again.page.$$eval('#profActs .profile-act', (bs) => bs.map((b) => b.dataset.act));
+    ok(added.status === 200 && tiles.includes('act-iq') && !tiles.includes('act-careers'), 'and no WPI Careers button on their candidates\' profiles', { status: added.status, tiles });
+    other.ctx = again.ctx;
     await other.ctx.close();
   } finally {
     await browser.close();
