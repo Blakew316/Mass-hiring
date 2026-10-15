@@ -136,9 +136,10 @@ self.addEventListener('fetch', (event) => {
   //      someone signing, always fetched fresh, never the dashboard's shell.
   if (sameOrigin && PAPERWORK.test(url.pathname)) return;
 
-  // (1d) And WPI Careers (public/careers/): a site of its own, framed on its
-  //      page here and opened on its own by recruits — its pages, never the
-  //      dashboard's shell.
+  // (1d) And /careers/, which only ever redirects to the live careers site
+  //      (wpiagentpay.com, netlify.toml): never the dashboard's shell, so a
+  //      careers link opened on a device with this app installed still goes
+  //      to the careers site.
   if (sameOrigin && CAREERS.test(url.pathname)) return;
 
   // (2) A page. Paint the shell straight from the cache — no network wait,

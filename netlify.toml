@@ -56,11 +56,6 @@
 # questionnaire it must never be served stale, and it is nobody's business in
 # a search index: each visit is one person's signed link.
 [[headers]]
-  for = "/careers/*"
-  [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
-
-[[headers]]
   for = "/paperwork/*"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
@@ -94,3 +89,30 @@
   for = "/assets/fonts/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# WPI Careers lives on its own site. A careers link that was ever given out
+# on this domain goes straight there — Team Maverick's page with Blake's
+# contact details — and a candidate never lands on the hiring CRM.
+[[redirects]]
+  from = "/careers/team/maverick"
+  to = "https://wpiagentpay.com/team/maverick/?t=jeyJjb250YWN0UGhvbmUiOiIyMTAtNDgwLTYzNDUiLCJjb250YWN0RW1haWwiOiJqdXN0aW4ud29vZHJ1ZmZAd2hvbGVzYWxlcGF5bWVudHMuY29tIn0"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/careers/team/maverick/*"
+  to = "https://wpiagentpay.com/team/maverick/?t=jeyJjb250YWN0UGhvbmUiOiIyMTAtNDgwLTYzNDUiLCJjb250YWN0RW1haWwiOiJqdXN0aW4ud29vZHJ1ZmZAd2hvbGVzYWxlcGF5bWVudHMuY29tIn0"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/careers/*"
+  to = "https://wpiagentpay.com/:splat"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/careers"
+  to = "https://wpiagentpay.com/"
+  status = 301
+  force = true
