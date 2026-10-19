@@ -244,9 +244,16 @@
     else o[key] = v;
   }
 
-  function decoderFor(fields, k, kl, shape, walk) {
-    const key = `${walk ? 'w' : 'c'}${fields.length}:${k}:${fields.join('\u0001')}\u0002${JSON.stringify(kl)}\u0002${shape}`;
-    let d = made.get(key);
+  // `base`: what the key holds besides the shape, made once per message
+  // (a kept copy is hundreds of messages of the same fields, each with its
+  // own few shapes) rather than once per shape.
+  const decoderBase = (fields, k, kl, walk) => `${walk ? 'w' : 'c'}${fields.length}:${k}:${fields.join('\u0001')}\u0002${JSON.stringify(kl)}\u0002`;
+  function decoderFor(fields, k, kl, shape, walk, base = decoderBase(fields, k, kl, walk)) {
+    // Looked up by what is common to the message, then by the short shape:
+    // one long key per message to hash, not one per shape.
+    let byShape = made.get(base);
+    if (!byShape) { byShape = new Map(); made.set(base, byShape); }
+    let d = byShape.get(shape);
     if (d) return d;
     if (typeof shape !== 'string' || shape.length !== fields.length) throw refused('a shape does not fit the message\'s fields');
     const odd = fields.includes('__proto__') || (kl || []).some((keys) => keys && keys.includes('__proto__'));
@@ -263,8 +270,8 @@
       }
     }
     if (!d) d = { cand: walker(fields, 0, k, kl, shape, 1, false), side: walker(fields, k, fields.length, kl, shape, sideFrom, true) };
-    if (made.size > 5000) made.clear();
-    made.set(key, d);
+    if (made.size > 64 || byShape.size > 5000) { made.clear(); byShape = new Map(); made.set(base, byShape); }
+    byShape.set(shape, d);
     return d;
   }
 
@@ -276,7 +283,8 @@
     if (!Array.isArray(f) || !Number.isInteger(k) || k < 0 || k > f.length || !Array.isArray(s) || !Array.isArray(w) || !Array.isArray(r) || !Array.isArray(z)) {
       throw refused('the list came in a form this page cannot read');
     }
-    const decoders = s.map((shape) => decoderFor(f, k, kl || [], shape, walk));
+    const base = decoderBase(f, k, kl || [], walk);
+    const decoders = s.map((shape) => decoderFor(f, k, kl || [], shape, walk, base));
     const cands = new Array(r.length);
     const sides = new Array(r.length);
     for (let i = 0; i < r.length; i++) {

@@ -35,6 +35,9 @@ const { people, baseCopy, serve, WINDOW, RealDate } = require('./c-helpers');
 
   const base = await serve({ root: baseCopy(), port: port(223), data: R('data'), now: B - 1 });
   const mine = await serve({ root: ROOT, port: port(225), data: R('data'), now: B - 1 });
+  // What has changed on purpose since the code this compares against: sends
+  // per minute are capped at 45 (lib/queue.js MAX_PER_MINUTE), not 60.
+  const deliberate = (r) => ({ ...r, text: r.text.replace('"perMinuteMax":60,', '"perMinuteMax":45,') });
   const get = async (srv, url, tag) => {
     const r = await fetch(srv.base + url, { headers: { cookie: srv.cookie, ...(tag ? { 'if-none-match': tag } : {}) } });
     return { status: r.status, tag: r.headers.get('etag'), text: await r.text() };
@@ -43,7 +46,7 @@ const { people, baseCopy, serve, WINDOW, RealDate } = require('./c-helpers');
     const seen = {};
     for (const [label, at] of [['a millisecond before the window', B - 1], ['as the window starts', B], ['a millisecond into it', B + 1], ['at its last millisecond', B + WINDOW - 1]]) {
       await Promise.all([base.clock(at), mine.clock(at)]);
-      const a = await get(base, '/api/state');
+      const a = deliberate(await get(base, '/api/state'));
       const b = await get(mine, '/api/state');
       ok(a.status === 200 && b.status === 200 && a.text.length > 10000, `${label}: both servers answer the old state`, [a.status, b.status, a.text.length]);
       ok(a.text === b.text, `${label}: byte for byte the same`, a.text === b.text ? '' : firstDifference(a.text, b.text));

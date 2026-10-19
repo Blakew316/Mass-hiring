@@ -755,8 +755,10 @@
     // Someone removed on another device cannot stay selected: a selection
     // counts people, and acts on them.
     pruneSelection();
+    if (showingKept) { showingKept = false; shownCopy = null; renderUpdating(); }
     renderAll();
     refreshProfile();
+    if (agreed && copy) keepState(fresh, tag);
     // Back from a sign-in with Sales IQ on screen: it looks again.
     if (currentView === 'salesiq' && window.SalesIQ) window.SalesIQ.activate();
     if (currentView === 'onboarding' && window.Onboarding) window.Onboarding.activate();
@@ -1077,6 +1079,13 @@
   // another team): nothing is written here until this page has heard from
   // the server on a request it made after that (refresh).
   let keepHeldAt = 0;
+  // The last state (everything but the list, which is kept in its groups)
+  // is kept beside the list, sealed the same way: opening the app again then
+  // shows everything as it last was the moment the session is confirmed —
+  // not after the server, which can take seconds just after a change, has
+  // answered — and the answers bring it up to date when they come.
+  let keptStateTag = '';             // the state version last kept
+  let stateRec = null;               // its sealed record (put back when the list is rewritten whole)
   const keptHintOn = () => { try { return localStorage.getItem(KEPT_HINT) === '1'; } catch { return false; } };
   function keptHint(on) {
     try { if (on) localStorage.setItem(KEPT_HINT, '1'); else localStorage.removeItem(KEPT_HINT); } catch { /* no storage */ }
@@ -1144,7 +1153,9 @@
     return keepDb().then((db) => db && new Promise((resolve) => {
       const tx = db.transaction(KEEP_STORE, 'readonly');
       const st = tx.objectStore(KEEP_STORE);
-      const out = { head: null, ids: null, groups: [] };
+      const out = { head: null, ids: null, groups: [], state: null };
+      const sv = st.get('state');
+      sv.onsuccess = () => { out.state = sv.result || null; };
       const h = st.get('head');
       h.onsuccess = () => {
         const head = h.result;
@@ -1183,41 +1194,50 @@
     if (!kept) return false;
     const { head } = kept;
     if (head.t !== team || head.fmt !== Wire.FORMAT || !Array.isArray(head.f)) { clearKept(); return false; }
-    // What the server said of it. Too far behind to patch (the server
-    // would send everything): not opened at all — a short list came whole
-    // in the answer and is used as it is; a long one is fetched in parts.
-    const got = kept.answer ? await kept.answer : null;
-    if (got && got.status === 401) return false;
-    const msg = got && got.status === 200 && got.body && got.body.t === team ? got.body : null;
+    // Opened now, while the server's word on it is on its way: the server
+    // can take seconds just after a change, and nothing it says is needed to
+    // show what this device already holds.
     let copy = null;
     let moved = false;
+    const key = await keepKey;
+    if (!key) return false;
     try {
-      if (msg && !msg.same && !msg.ch) {
-        if (msg.whole) return false;
-        copy = await Wire.fromFull(msg, team);
-        moved = true;
-      } else {
-        const key = await keepKey;
-        if (!key) return false;
-        // A group at a time, each opened, read and let go before the next.
-        const build = Wire.keptBuilder(head, JSON.parse(await unseal(key, kept.ids)), team);
-        for (let g = 0; g < kept.groups.length; g += KEEP_OPEN_BATCH) {
-          const texts = await Promise.all(kept.groups.slice(g, g + KEEP_OPEN_BATCH).map((rec) => unseal(key, rec)));
-          texts.forEach((text, j2) => { build.add(g + j2, JSON.parse(text)); kept.groups[g + j2] = null; });
-        }
-        copy = await build.done();
-        // Brought up to date by the answer when it fits; otherwise the first
-        // state's sync does it.
-        if (msg && msg.same && Wire.sameAs(copy, msg)) { copy = Wire.adopt(copy, msg); moved = true; } else if (msg && msg.ch) {
-          try { copy = await Wire.applyDelta(copy, msg); moved = true; } catch { /* synced again below */ }
-        }
+      // A group at a time, each opened, read and let go before the next.
+      const build = Wire.keptBuilder(head, JSON.parse(await unseal(key, kept.ids)), team);
+      for (let g = 0; g < kept.groups.length; g += KEEP_OPEN_BATCH) {
+        const texts = await Promise.all(kept.groups.slice(g, g + KEEP_OPEN_BATCH).map((rec) => unseal(key, rec)));
+        texts.forEach((text, j2) => { build.add(g + j2, JSON.parse(text)); kept.groups[g + j2] = null; });
       }
+      copy = await build.done();
     } catch {
       clearKept();
       return false;
     }
     // Signed out, another team, or a list already here while it was read.
     if (epoch !== listEpoch || list || teamIdNow() !== team) return false;
+    stateRec = kept.state || null;
+    await showKept(kept.state, copy, key, team);
+    // Then what the server said of it, when it says it: brought up to date
+    // by the answer when it fits; otherwise the first state's sync does it
+    // (one too far behind to patch is fetched whole there).
+    const got = kept.answer ? await kept.answer : null;
+    if (got && got.status === 401) return false;
+    const msg = got && got.status === 200 && got.body && got.body.t === team ? got.body : null;
+    // Too far behind to patch: what is on screen stays until the whole list
+    // is here, and it is fetched straight away (refresh), not asked about again.
+    if (msg && msg.whole) {
+      if (epoch === listEpoch && list === shownCopy) list = null;
+      return false;
+    }
+    try {
+      if (msg && msg.same && Wire.sameAs(copy, msg)) { copy = Wire.adopt(copy, msg); moved = true; } else if (msg && msg.ch) {
+        try { copy = await Wire.applyDelta(copy, msg); moved = true; } catch { /* synced again below */ }
+      } else if (msg && !msg.same && !msg.whole) {
+        copy = await Wire.fromFull(msg, team);
+        moved = true;
+      }
+    } catch { /* synced again below */ }
+    if (epoch !== listEpoch || (list && list !== shownCopy) || teamIdNow() !== team) return false;
     list = copy;
     distrust.clear();
     keptAs = headShape(head);
@@ -1225,6 +1245,85 @@
     scheduleVerify(true);
     dropEarlyList();
     return true;
+  }
+  // The kept state and list on screen at once, as they last were, marked as
+  // being brought up to date. Nothing is sent or changed: the first answers
+  // replace both (refresh), as they would have replaced an empty page.
+  let shownCopy = null;
+  let showingKept = false;
+  async function showKept(rec, copy, key, team) {
+    if (!rec || state) return false;
+    let saved = null;
+    try { saved = JSON.parse(await unseal(key, rec)); } catch { return false; }
+    const fresh = saved && saved.team === team && saved.state && typeof saved.state === 'object' ? saved.state : null;
+    if (!fresh || !fresh.team || fresh.team.id !== team || !fresh.texting || !fresh.followUp || state || teamIdNow() !== team) return false;
+    try {
+      list = copy;
+      shownCopy = copy;
+      fresh.candidates = copy.cands;
+      const side = sideLists(copy);
+      fresh.texting.priority = side.priority;
+      fresh.followUp.dueIds = side.dueIds;
+      state = fresh;
+      listVersion += 1;
+      stateVersion += 1;
+      forgetKept();
+      authRequired = Boolean(state.auth && state.auth.required);
+      setTeam(state.team);
+      applyLocallyRead();
+      applyPendingStatus(0);
+      showingKept = true;
+      renderUpdating();
+      if (location.hash) show(viewInAddressBar(), { record: false });
+      renderAll();
+      return true;
+    } catch {
+      // Kept by a version of the page this one cannot draw: the page waits
+      // for the server as it always did, and the kept state goes.
+      state = null; list = null; shownCopy = null; showingKept = false;
+      listVersion += 1; stateVersion += 1; forgetKept();
+      renderUpdating();
+      stateRec = null;
+      keepDb().then((db) => { if (db) db.transaction(KEEP_STORE, 'readwrite').objectStore(KEEP_STORE).delete('state'); }).catch(() => {});
+      return false;
+    }
+  }
+  // "Updating…" in the header while what is on screen is the kept copy.
+  function renderUpdating() {
+    $$('.head-chrome').forEach((row) => {
+      let el = row.querySelector('.conn-updating');
+      if (!el && showingKept) {
+        el = document.createElement('span');
+        el.className = 'conn-updating';
+        el.setAttribute('role', 'status');
+        el.innerHTML = '<span class="conn-dot"></span><span class="conn-text">Updating…</span>';
+        row.prepend(el);
+      }
+      if (el) el.hidden = !showingKept;
+    });
+  }
+  // The state kept, once it is on screen (refresh): only a version not kept
+  // yet, sealed and written in one of the page's idle moments.
+  function keepState(fresh, tag) {
+    if (!tag || tag === keptStateTag || !fresh || !fresh.team || !mayKeep() || !Wire.canDigest()) return;
+    const team = fresh.team.id;
+    const epoch = keepEpoch;
+    const key = keepKey;
+    let text;
+    try {
+      const { candidates, ...rest } = fresh;
+      text = JSON.stringify({ team, state: { ...rest, texting: { ...rest.texting, priority: null }, followUp: { ...rest.followUp, dueIds: null } } });
+    } catch { return; }
+    keptStateTag = tag;
+    idle(() => {
+      key.then((k) => k && seal(k, text)).then(async (rec) => {
+        if (!rec || epoch !== keepEpoch || !mayKeep()) return;
+        const db = await keepDb();
+        if (!db || epoch !== keepEpoch || !mayKeep() || !browserSignedInTo(team) || teamIdNow() !== team) return;
+        db.transaction(KEEP_STORE, 'readwrite').objectStore(KEEP_STORE).put(rec, 'state');
+        stateRec = rec;
+      }).catch(() => { if (keptStateTag === tag) keptStateTag = ''; });
+    });
   }
   // What index.html asked for the list is not needed now.
   function dropEarlyList() {
@@ -1319,7 +1418,7 @@
       // written over piecemeal as if it were this page's, but gone on from —
       // its head says what each of its groups holds.
       let rebase = null;
-      if (whole) { st.clear(); put(); } else {
+      if (whole) { st.clear(); put(); if (stateRec) st.put(stateRec, 'state'); } else {
         const h = st.get('head');
         h.onsuccess = () => {
           const head = h.result;
@@ -1349,6 +1448,8 @@
     keptAs = null;
     keptStored = null;
     keepRun = null;
+    keptStateTag = '';
+    stateRec = null;
     clearTimeout(keepTimer);
     keepTimer = 0;
     keptHint(false);
@@ -1367,6 +1468,8 @@
     keepEpoch += 1;
     keptAs = null;
     keepRun = null;
+    keptStateTag = '';
+    stateRec = null;
     clearTimeout(keepTimer);
     keepTimer = 0;
     keepHeldAt = pageClock();
@@ -5679,7 +5782,7 @@
 
   // Kept the way the Texting list is (see conversations()).
   const mailboxes = kept(() => [listVersion, state && state.candidates, mailSearch, mailFilter], () => {
-    const all = (state.candidates || []).filter((c) => c.lastEmailedAt || c.emailReplies);
+    const all = ((state && state.candidates) || []).filter((c) => c.lastEmailedAt || c.emailReplies);
     const match = convMatcher(mailSearch);
     const when = (c) => (c.emailLast && c.emailLast.ts) || c.lastReplyAt || c.lastEmailedAt || '';
     return all
@@ -5811,7 +5914,7 @@
   const WARM_AHEAD = 5;
   let warming = false;
   async function warmMail() {
-    if (warming || document.hidden || currentView !== 'template') return;
+    if (warming || document.hidden || currentView !== 'template' || !state || !signedIn) return;
     warming = true;
     try {
       const next = mailboxes().slice(0, WARM_AHEAD).filter((c) => c.gmailThreadId && !mailMemo.has(c.id));
