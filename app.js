@@ -960,6 +960,7 @@ function applySettings(db, body, sender) {
 // back to. Kept for the editors and anything else that knows only one.
 app.post('/api/template', asyncRoute(async (req, res) => {
   const db = await store.update((d) => {
+    presets.rememberPast(d, 'email');
     d.template = {
       ...d.template,   // attachments are managed by their own routes
       subject: String(req.body.subject ?? d.template.subject),
@@ -975,6 +976,7 @@ app.post('/api/template', asyncRoute(async (req, res) => {
 
 app.post('/api/template/reset', asyncRoute(async (_req, res) => {
   const db = await store.update((d) => {
+    presets.rememberPast(d, 'email');
     d.template = { ...structuredClone(store.DEFAULT_TEMPLATE), attachments: d.template.attachments };
     touchDefault(d, 'email');
     presets.normalize(d);   // the named default follows, in this reply too
@@ -1024,6 +1026,7 @@ app.delete('/api/templates/:kind/:id', asyncRoute(async (req, res) => {
 
 app.post('/api/followup', asyncRoute(async (req, res) => {
   const fresh = await store.update((d) => {
+    presets.rememberPast(d, 'followUp');
     d.followUp = {
       subject: String(req.body.subject ?? d.followUp.subject),
       body: String(req.body.body ?? d.followUp.body),
@@ -1032,7 +1035,7 @@ app.post('/api/followup', asyncRoute(async (req, res) => {
   res.json({ ok: true, followUp: fresh.followUp });
 }));
 app.post('/api/followup/reset', asyncRoute(async (_req, res) => {
-  const fresh = await store.update((d) => { d.followUp = structuredClone(store.DEFAULT_FOLLOW_UP); });
+  const fresh = await store.update((d) => { presets.rememberPast(d, 'followUp'); d.followUp = structuredClone(store.DEFAULT_FOLLOW_UP); });
   res.json({ ok: true, followUp: fresh.followUp });
 }));
 
@@ -1683,7 +1686,9 @@ app.post('/api/send', asyncRoute(async (req, res) => {
   const ids = (Array.isArray(req.body.candidateIds) ? req.body.candidateIds : []).slice(0, MAX_PER_REQUEST);
   if (!ids.length) throw new Error('No candidates selected.');
   const followUp = Boolean(req.body.followUp);
-  const template = req.body.template || (followUp ? db.followUp : db.template);
+  // The send window's words — or, when they are the saved template (or a
+  // version of it a page left open still shows), the template as saved now.
+  const template = queue.currentWords(db, req.body.template, followUp);
   const st = await mailer.sendStatus(db.settings);
   if (!st.ready) throw new Error(st.reason || 'Email is not set up.');
   const { dailyLimit, perMinute } = queue.limits(db.settings, st.from);

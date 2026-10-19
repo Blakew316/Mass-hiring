@@ -4750,6 +4750,13 @@
   // them all. One of each kind is the default: what the send window opens
   // with, and what the queue uses when nothing else was chosen.
   const presetShown = { email: '', text: '' };
+  // A save answers with the templates as stored: the page takes them at once,
+  // so the send window opens with what was just saved, not what the last
+  // look at the server said.
+  function takeTemplates(r) {
+    state.templates = r.templates;
+    if (r.template) state.template = r.template;
+  }
   function presetsOf(kind) { return (state && state.templates && state.templates[kind]) || []; }
   function defaultPresetId(kind) { return (state && state.templates && state.templates.defaults && state.templates.defaults[kind]) || ''; }
   function presetById(kind, id) { return presetsOf(kind).find((p) => p.id === id) || null; }
@@ -4864,7 +4871,7 @@
   async function createPreset(kind, name, words) {
     try {
       const r = await api(`/api/templates/${kind}`, { method: 'POST', body: { name, ...words } });
-      state.templates = r.templates;
+      takeTemplates(r);
       toast(`Saved as “${r.preset.name}”. Pick it from the Template list whenever you ${kind === 'email' ? 'email' : 'text'}.`);
       refresh().catch(() => {});
       return r.preset;
@@ -4893,7 +4900,7 @@
     if (!name) { nameMissing(nameField(kind), kind); return; }
     try {
       const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { name, ...editorWords(kind) } });
-      state.templates = r.templates;
+      takeTemplates(r);
       setPresetDirty(kind, false);
       renderPresetBar(kind);
       toast(p.id === defaultPresetId(kind)
@@ -4953,7 +4960,7 @@
       if (presetDirty(kind) && !confirm(`“${p.name}” has unsaved changes. Make the saved version the default anyway?`)) return;
       try {
         const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}/default`, { method: 'POST' });
-        state.templates = r.templates;
+        takeTemplates(r);
         renderPresetBar(kind);
         toast(`“${p.name}” is now the default — the ${kind === 'email' ? 'send window' : 'text composer'} opens with it.`);
         await refresh();
@@ -4964,7 +4971,7 @@
       if (!p || !confirm(`Delete the template “${p.name}”? Messages already queued with it still go out as written.`)) return;
       try {
         const r = await api(`/api/templates/${kind}/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
-        state.templates = r.templates;
+        takeTemplates(r);
         presetShown[kind] = defaultPresetId(kind);
         setPresetDirty(kind, false);
         loadPresetIntoEditor(kind);
@@ -5015,7 +5022,8 @@
   }));
   $('#saveFollowUpBtn').addEventListener('click', async () => {
     try {
-      await api('/api/followup', { method: 'POST', body: { subject: $('#fuSubject').value, body: $('#fuBody').value } });
+      const r = await api('/api/followup', { method: 'POST', body: { subject: $('#fuSubject').value, body: $('#fuBody').value } });
+      if (r.followUp) state.followUp.template = r.followUp;
       setFollowUpDirty(false);
       toast('Follow-up email saved.');
       await refresh();
