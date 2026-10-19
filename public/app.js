@@ -4859,7 +4859,10 @@
   function takeTemplates(r) {
     state.templates = r.templates;
     if (r.template) state.template = r.template;
+    if (r.followUp && state.followUp) state.followUp.template = r.followUp;
   }
+  // The saved email follow-ups go out with ('' when it is written in Settings).
+  const followUpPresetId = () => (state && state.templates && state.templates.defaults && state.templates.defaults.followUp) || '';
   function presetsOf(kind) { return (state && state.templates && state.templates[kind]) || []; }
   function defaultPresetId(kind) { return (state && state.templates && state.templates.defaults && state.templates.defaults[kind]) || ''; }
   function presetById(kind, id) { return presetsOf(kind).find((p) => p.id === id) || null; }
@@ -4902,8 +4905,9 @@
   }
   function presetOptions(kind, selectedId) {
     const def = defaultPresetId(kind);
+    const fu = kind === 'email' ? followUpPresetId() : '';
     return presetsOf(kind).map((p) =>
-      `<option value="${esc(p.id)}"${p.id === selectedId ? ' selected' : ''}>${esc(p.name)}${p.id === def ? ' — default' : ''}</option>`).join('');
+      `<option value="${esc(p.id)}"${p.id === selectedId ? ' selected' : ''}>${esc(p.name)}${p.id === def ? ' — default' : ''}${p.id === fu ? ' — follow-ups' : ''}</option>`).join('');
   }
   function fillPresetSelect(sel, kind, selectedId) {
     const html = presetOptions(kind, selectedId);
@@ -5097,6 +5101,7 @@
   }
   function renderFollowUpEditor() {
     if (!state || !state.followUp) return;
+    renderFollowUpPreset();
     if (!followUpDirty) {
       $('#fuSubject').value = state.followUp.template.subject;
       $('#fuBody').value = state.followUp.template.body;
@@ -5111,6 +5116,38 @@
     $('#fuPvBody').innerHTML = esc(fillClient($('#fuBody').value, cand)).split('\n').join('<br>');
     const fu = state.followUp || { days: 3, max: 2 };
   }
+  // Which email follow-ups go out with: one of the saved emails, or the one
+  // written here. Choosing one puts its words here; editing either changes both.
+  function renderFollowUpPreset() {
+    const sel = $('#fuPreset');
+    if (!sel) return;
+    const id = followUpPresetId();
+    const def = defaultPresetId('email');
+    const html = '<option value="">Written here</option>' + presetsOf('email').filter((p) => p.id !== def || p.id === id)
+      .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+    sel.value = id;
+    const p = id ? presetById('email', id) : null;
+    $('#fuPresetHint').textContent = p
+      ? `Every follow-up goes out as your saved “${p.name}” — and only that. Editing it here or under Email templates changes it.`
+      : 'Or choose one of your saved emails, and every follow-up goes out as that one.';
+  }
+  $('#fuPreset').addEventListener('change', async (e) => {
+    const sel = e.target;
+    const want = sel.value;
+    if (followUpDirty && !confirm('Discard the changes to the follow-up you have not saved?')) { sel.value = followUpPresetId(); return; }
+    sel.disabled = true;
+    try {
+      const r = await api('/api/followup/use', { method: 'POST', body: { id: want } });
+      takeTemplates(r);
+      setFollowUpDirty(false);
+      renderFollowUpEditor();
+      renderPresetBar('email');
+      toast(r.preset ? `Follow-ups now go out as “${r.preset.name}”.` : 'Follow-ups now go out as written here.');
+      await refresh();
+    } catch (err) { sel.value = followUpPresetId(); oops(err); }
+    finally { sel.disabled = false; }
+  });
   const debouncedFollowUpPreview = debounce(renderFollowUpPreview, 200);
   ['#fuSubject', '#fuBody'].forEach((sel) => $(sel).addEventListener('input', () => { setFollowUpDirty(true); debouncedFollowUpPreview(); }));
   $$('.fu-token').forEach((btn) => btn.addEventListener('click', () => {
@@ -5127,6 +5164,7 @@
     try {
       const r = await api('/api/followup', { method: 'POST', body: { subject: $('#fuSubject').value, body: $('#fuBody').value } });
       if (r.followUp) state.followUp.template = r.followUp;
+      if (r.templates) state.templates = r.templates;
       setFollowUpDirty(false);
       toast('Follow-up email saved.');
       await refresh();
@@ -5135,6 +5173,9 @@
   $('#resetFollowUpBtn').addEventListener('click', async () => {
     try {
       const r = await api('/api/followup/reset', { method: 'POST' });
+      state.followUp.template = r.followUp;
+      if (r.templates) state.templates = r.templates;
+      renderFollowUpPreset();
       $('#fuSubject').value = r.followUp.subject;
       $('#fuBody').value = r.followUp.body;
       setFollowUpDirty(false);

@@ -1009,7 +1009,7 @@ const templateKind = (req) => {
   return kind;
 };
 const templatesReply = (db, extra = {}) => ({
-  ok: true, ...extra, templates: presets.publicView(db), template: db.template, textTemplate: db.textTemplate,
+  ok: true, ...extra, templates: presets.publicView(db), template: db.template, textTemplate: db.textTemplate, followUp: db.followUp,
 });
 app.post('/api/templates/:kind', asyncRoute(async (req, res) => {
   const kind = templateKind(req);
@@ -1042,12 +1042,26 @@ app.post('/api/followup', asyncRoute(async (req, res) => {
       subject: String(req.body.subject ?? d.followUp.subject),
       body: String(req.body.body ?? d.followUp.body),
     };
+    // A saved email used for follow-ups takes these words too (and says when).
+    const linked = d.emailTemplates.find((p) => p.id === d.templateDefaults.followUp);
+    if (linked) linked.updatedAt = new Date().toISOString();
+    presets.normalize(d);
   });
-  res.json({ ok: true, followUp: fresh.followUp });
+  res.json({ ok: true, followUp: fresh.followUp, templates: presets.publicView(fresh) });
+}));
+// Which email follow-ups go out with: a saved one (by id), or '' for the one
+// written in Settings.
+app.post('/api/followup/use', asyncRoute(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  let p = null;
+  const db = await store.update((d) => { p = presets.setFollowUp(d, id); presets.normalize(d); });
+  res.json(templatesReply(db, { preset: p }));
 }));
 app.post('/api/followup/reset', asyncRoute(async (_req, res) => {
-  const fresh = await store.update((d) => { presets.rememberPast(d, 'followUp'); d.followUp = structuredClone(store.DEFAULT_FOLLOW_UP); });
-  res.json({ ok: true, followUp: fresh.followUp });
+  // Back to the built-in follow-up: written here again, so a saved email that
+  // was used for follow-ups keeps its own words.
+  const fresh = await store.update((d) => { d.templateDefaults.followUp = ''; presets.rememberPast(d, 'followUp'); d.followUp = structuredClone(store.DEFAULT_FOLLOW_UP); });
+  res.json({ ok: true, followUp: fresh.followUp, templates: presets.publicView(fresh) });
 }));
 
 // ---------- Attachments (sent with every email) ----------
