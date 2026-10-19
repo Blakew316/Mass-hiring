@@ -33,7 +33,7 @@ const H = require('./candidates-helpers');
   await H.focused(page, 'addFirst');
   ok(true, 'with the cursor in the first name');
   ok((await page.$$eval('#addModal input', (is) => is.map((i) => i.value))).every((v) => v === ''), 'every field empty');
-  ok(await H.text(page, '#addPhoneHint') === 'US and Canadian numbers in any format. Leave blank if you only have an email.', 'the number field says what it takes');
+  ok(await H.text(page, '#addPhoneHint') === 'Any format — outside the US and Canada, start with + and the country code. Leave blank if you only have an email.', 'the number field says what it takes');
   await page.fill('#addFirst', 'Quinn');
   await page.fill('#addLast', 'Harlow');
   await page.fill('#addEmail', 'not-an-address');

@@ -52,8 +52,8 @@ const { stubEverything, open, ready, text, texts, waitIn, waitText, settle, same
     // More: the pages with no tab of their own.
     await page.click('#navMore');
     await page.waitForSelector('#moreSheet:not([hidden])');
-    const more = await settle(() => texts(page, '#moreSheetButtons .more-label'), ['Import', 'Settings']);
-    ok(same(more, ['Import', 'Settings']), `${tag}: More lists Import and Settings`, more);
+    const more = await settle(() => texts(page, '#moreSheetButtons .more-label'), ['Import', 'Settings', 'WPI Careers']);
+    ok(same(more, ['Import', 'Settings', 'WPI Careers']), `${tag}: More lists Import, Settings and (Team Maverick) WPI Careers`, more);
     await page.click('#moreSheetButtons [data-more="settings"]');
     ok(await waitIn(page, () => Boolean(document.querySelector('#view-settings.active'))), `${tag}: a page from More opens`);
     ok(await page.isHidden('#moreSheet'), `${tag}: and the sheet goes away`);
@@ -140,7 +140,7 @@ const { stubEverything, open, ready, text, texts, waitIn, waitText, settle, same
   {
     const tag = 'laptop';
     const { ctx, page, errors } = await open(browser, s);
-    const SIDE = ['Dashboard', 'Candidates', 'Import', 'Email', 'Texting', 'Sales IQ', 'Onboarding docs', 'Settings'];
+    const SIDE = ['Dashboard', 'Candidates', 'Import', 'Email', 'Texting', 'Sales IQ', 'Onboarding docs', 'Settings', 'WPI Careers'];
     const side = await settle(() => page.evaluate(() => [...document.querySelectorAll('.nav > .nav-item')].filter((t) => t.getClientRects().length).map((t) => t.querySelector('.nav-label').textContent.trim())), SIDE);
     ok(same(side, SIDE), `${tag}: the sidebar lists every page`, side);
     for (const v of ['candidates', 'import', 'template', 'texting', 'salesiq', 'onboarding', 'settings', 'dashboard']) {

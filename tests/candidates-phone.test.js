@@ -142,7 +142,7 @@ const H = require('./candidates-helpers');
     acts: [...m.querySelectorAll('#profActs .profile-act')].map((b) => b.innerText.trim()),
     native: [...m.querySelectorAll('#profNative .native-act')].filter((a) => a.checkVisibility()).map((a) => a.innerText.trim()),
   }));
-  ok(prof.name === B.n01.name && JSON.stringify(prof.acts) === JSON.stringify(['Email', 'Add #', 'Sales IQ', 'Docs']), 'tapping a card opens their profile, with short labels', prof);
+  ok(prof.name === B.n01.name && JSON.stringify(prof.acts) === JSON.stringify(['Email', 'Add #', 'Sales IQ', 'Docs', 'Careers']), 'tapping a card opens their profile, with short labels', prof);
   ok(JSON.stringify(prof.native) === JSON.stringify(['Call', 'Message', 'Mail']), 'and the phone\'s own Call, Message and Mail', prof.native);
   await page.tap('#profileModal .profile-close');
   ok(await page.$eval('#profileModal', (el) => el.hidden), 'the × closes it');

@@ -177,7 +177,7 @@ const H = require('./candidates-helpers');
   await H.until(page, async () => (await toastTexts()).includes('Saved. (617) 555-2999 is ready to text.'));
   ok((await toastTexts()).includes('Saved. (617) 555-2999 is ready to text.'), 'saved, and ready to text', await toastTexts());
   const saved = (await s.store.load()).candidates.find((c) => c.id === 'n01');
-  ok(saved.phone === '617 555 2999' && saved.email === n01.email && saved.name === n01.name && saved.status === 'new', 'the server stores the number; nothing else about them changed', saved);
+  ok(saved.phone === '+16175552999' && saved.email === n01.email && saved.name === n01.name && saved.status === 'new', 'the server stores the number (kept one way, E.164); nothing else about them changed', saved);
   await H.until(page, async () => ((await H.pills(page)).find((x) => x.label === 'Needs a number') || {}).n === '53');
   ok(((await H.pills(page)).find((x) => x.label === 'Needs a number') || {}).n === '53', '"Needs a number" goes down by one');
   const pip = await page.$eval('#candidateRows tr[data-id="n01"] [data-col="text"]', (td) => td.innerText.trim());
