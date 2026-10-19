@@ -102,7 +102,7 @@ const H = require('./candidates-helpers');
   await page.fill('#addPhone', '617-555-2999');
   await page.click('#addSaveBtn');
   await H.until(page, async () => (await toastTexts()).includes('Saved. (617) 555-2999 is ready to text.'));
-  ok((await stored('n01')).phone === '617-555-2999', 'the server stores the number as typed');
+  ok((await stored('n01')).phone === '+16175552999', 'the server stores the number, kept one way (E.164)');
   ok(await H.settle(page, () => pillN('Needs a number'), '53') === '53', '"Needs a number" says 53');
   ok(await H.settle(page, () => page.$eval('#candidateRows tr[data-id="n01"] [data-col="text"]', (td) => td.innerText.trim()), '(617) 555-2999') === '(617) 555-2999', 'the Text column shows it, written properly');
   for (const q of ['(617) 555-2999', '6175552999', '+1 617 555 2999']) {

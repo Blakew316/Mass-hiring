@@ -63,12 +63,12 @@ const W = require('./server-write-helpers');
   c = await W.storedCandidate(s, 'p1');
   ok(r.status === 200, 'the full edit form is accepted', r);
   ok(c.lastName === 'Quinn-Hale' && c.name === 'Avery Quinn-Hale' && c.role === 'Senior Account Executive'
-    && c.company === 'Example Merchant Services' && c.location === 'New York, NY' && c.phone === '(212) 555-2301',
-  'every editable field is stored as typed', c);
+    && c.company === 'Example Merchant Services' && c.location === 'New York, NY' && c.phone === '+12125552301',
+  'every editable field is stored as typed (the number kept one way, E.164)', c);
   ok(c.email === 'avery.qh@example.com', 'an address typed with a display name is stored as the bare address', c.email);
   st = await W.state(s);
   const shown = W.pick(st.candidates, 'p1');
-  ok(shown.email === 'avery.qh@example.com' && shown.name === 'Avery Quinn-Hale' && shown.phone === '(212) 555-2301', 'the page reads the edited fields', shown);
+  ok(shown.email === 'avery.qh@example.com' && shown.name === 'Avery Quinn-Hale' && shown.phone === '+12125552301', 'the page reads the edited fields', shown);
 
   // Fields that are not the user's to type are never taken from the body.
   const guarded = await W.storedCandidate(s, 'p3');
