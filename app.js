@@ -515,6 +515,17 @@ function wireSchema() {
 }
 const cut = (text, len) => sha1(text).slice(0, len);
 
+// A person's row as text. A person from a shared read-only copy is frozen,
+// and carried over unchanged from version to version (store.read()), so
+// their row is worked out once, not again with every change to anybody.
+const rowTexts = new WeakMap();
+function rowText(c, fields, k) {
+  if (!Object.isFrozen(c)) return wire.candText(fields, k, publicCandidate(c), true);
+  let t = rowTexts.get(c);
+  if (t === undefined) { t = wire.candText(fields, k, publicCandidate(c), true); rowTexts.set(c, t); }
+  return t;
+}
+
 // The rows, once per stored version: each person as the text their bucket's
 // digest is taken over, their bucket, and the list's order.
 function listRows(db, p) {
@@ -531,7 +542,7 @@ function listRows(db, p) {
   for (let i = 0; i < n; i++) {
     const c = cs[i];
     ids[i] = c.id;
-    texts[i] = wire.candText(fields, k, publicCandidate(c), true);
+    texts[i] = rowText(c, fields, k);
     all.update(texts[i]);
     bk[i] = wire.bucketOf(c.id, nb);
     byBucket[bk[i]].push(i);
