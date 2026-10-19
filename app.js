@@ -1331,7 +1331,7 @@ function analyzeImport(candidates, rows, mapping, { lines = null, headerless = f
     const fields = {
       name: name || [firstName, lastName].filter(Boolean).join(' '),
       firstName, lastName,
-      role: col(row, 'role'), company: col(row, 'company'), phone: col(row, 'phone'),
+      role: col(row, 'role'), company: col(row, 'company'), phone: phone.tidy(col(row, 'phone')),
       location: col(row, 'location'), notes: col(row, 'notes'), pastRoles: col(row, 'pastRoles'),
     };
     const rowNo = rowNumber(idx);
@@ -1378,6 +1378,11 @@ function analyzeImport(candidates, rows, mapping, { lines = null, headerless = f
         if (matchedBy !== 'email' && NAME_FIELDS.has(k)) continue;
         if (fields[k] && !String(existing[k] || '').trim()) fill[k] = fields[k];
       }
+      // A number on file that cannot be texted (a typo, a spreadsheet's
+      // "6.17555E+09") is replaced by a good one from the file. A good number
+      // on file is never swapped for another: it may be the one their texts
+      // are going to, and a file's copy may be older than it.
+      if (tel && !fill.phone && !phone.normalize(existing.phone)) fill.phone = tel;
       entry = { idx, row: rowNo, kind: 'existing', email, fields, existing, fill, shifted, matchedBy };
       byExisting.set(existing, entry);
     } else {
@@ -1551,7 +1556,7 @@ app.post('/api/candidates', asyncRoute(async (req, res) => {
     email,
     role: String(b.role || '').trim(),
     company: String(b.company || '').trim(),
-    phone: String(b.phone || '').trim(),
+    phone: phone.tidy(b.phone),
     location: String(b.location || '').trim(),
     notes: String(b.notes || '').trim(),
     status: 'new',
@@ -1585,7 +1590,7 @@ app.patch('/api/candidates/:id', asyncRoute(async (req, res) => {
     let changed = false;
     const set = (f, v) => { if (c[f] !== v) { c[f] = v; changed = true; } };
     const fields = ['name', 'firstName', 'lastName', 'role', 'company', 'phone', 'location', 'notes', 'status'];
-    for (const f of fields) if (f in req.body) set(f, String(req.body[f] ?? '').trim());
+    for (const f of fields) if (f in req.body) set(f, f === 'phone' ? phone.tidy(req.body[f]) : String(req.body[f] ?? '').trim());
     if (email) set('email', email);
     if (!changed) return false;
   });

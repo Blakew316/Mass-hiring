@@ -3581,7 +3581,7 @@
     $('#addFirst').value = first;
     $('#addLast').value = last;
     $('#addEmail').value = c ? (c.email || '') : '';
-    $('#addPhone').value = c ? (c.phone || '') : '';
+    $('#addPhone').value = c ? (prettyPhone(textPhoneOf(c)) || c.phone || '') : '';
     $('#addRole').value = c ? (c.role || '') : '';
     $('#addCompany').value = c ? (c.company || '') : '';
     $('#addLocation').value = c ? (c.location || '') : '';
@@ -3602,7 +3602,7 @@
     const input = $('#addPhone');
     input.classList.remove('bad', 'good');
     if (!raw) {
-      hint.textContent = 'US and Canadian numbers in any format. Leave blank if you only have an email.';
+      hint.textContent = 'Any format — outside the US and Canada, start with + and the country code. Leave blank if you only have an email.';
       hint.className = 'hint';
       return;
     }
@@ -5206,15 +5206,24 @@
   let textTemplateDirty = false;
   let relayTokenRevealed = '';
 
+  // Toll-free and premium lines are switchboards, never someone's mobile (as
+  // lib/phone.js validNanp).
+  const TOLL_FREE = new Set(['800', '833', '844', '855', '866', '877', '888', '822', '880', '881', '882', '889']);
+  // As the server shows them (lib/phone.js display): "(555) 123-4567" in
+  // North America, elsewhere "+234 810 986 7552".
+  const SHORT_CODES = new Set(['1', '7', '20', '27', '30', '31', '32', '33', '34', '36', '39', '40', '41', '43', '44', '45', '46', '47', '48', '49',
+    '51', '52', '53', '54', '55', '56', '57', '58', '60', '61', '62', '63', '64', '65', '66', '81', '82', '84', '86', '90', '91', '92', '93', '94', '95', '98']);
   // The same rule the server applies in lib/phone.js, so the count on the
   // button is the number that will actually be queued — a "Text 40 people"
   // that turns into 31 is exactly the kind of thing that stops being trusted.
   function textPhoneOf(c) {
     let raw = String((c && c.phone) || '').trim();
     if (!raw) return '';
+    // The same rules as the server's (lib/phone.js normalize), line for line.
+    raw = raw.replace(/^(\+?\d+)\.0+$/, '$1');
     raw = raw.replace(/\b(?:ext|x|extension)\.?\s*\d+\s*$/i, '');
-    const plus = raw.trimStart().startsWith('+');
-    const digits = raw.replace(/\D/g, '');
+    let plus = raw.trimStart().startsWith('+');
+    let digits = raw.replace(/\D/g, '');
     if (!digits) return '';
     const nanp = (ten) => {
       if (!/^\d{10}$/.test(ten)) return false;
@@ -5225,15 +5234,30 @@
       if (exch[1] === '1' && exch[2] === '1') return false;
       if (area === '555') return false;
       if (exch === '555' && /^01\d\d$/.test(ten.slice(6))) return false;
+      if (TOLL_FREE.has(area) || area === '900' || area === '976') return false;
       return true;
     };
-    if (digits.length === 11 && digits[0] === '1') return nanp(digits.slice(1)) ? `+${digits}` : '';
-    if (!plus) return digits.length === 10 && nanp(digits) ? `+1${digits}` : '';
-    return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : '';
+    if (!plus) {
+      const intl = /^011/.test(digits) ? digits.slice(3) : /^00/.test(digits) ? digits.slice(2) : '';
+      if (intl) { plus = true; digits = intl; } else if (/^[2-9]\d{11,14}$/.test(raw)) plus = true;
+    }
+    if (!plus) {
+      if (digits.length === 10) return nanp(digits) ? `+1${digits}` : '';
+      return digits.length === 11 && digits[0] === '1' && nanp(digits.slice(1)) ? `+${digits}` : '';
+    }
+    if (digits[0] === '1') return digits.length === 11 && nanp(digits.slice(1)) ? `+${digits}` : '';
+    return digits[0] !== '0' && digits.length >= 8 && digits.length <= 15 ? `+${digits}` : '';
   }
-  const prettyPhone = (e164) => (/^\+1\d{10}$/.test(e164)
-    ? `(${e164.slice(2, 5)}) ${e164.slice(5, 8)}-${e164.slice(8)}`
-    : e164);
+  function prettyPhone(e164) {
+    const v = String(e164 || '');
+    if (/^\+1\d{10}$/.test(v)) return `(${v.slice(2, 5)}) ${v.slice(5, 8)}-${v.slice(8)}`;
+    if (!/^\+[2-9]\d{7,14}$/.test(v)) return v;
+    const d = v.slice(1);
+    const cc = SHORT_CODES.has(d[0]) ? d[0] : SHORT_CODES.has(d.slice(0, 2)) ? d.slice(0, 2) : d.slice(0, 3);
+    const rest = d.slice(cc.length);
+    const head = rest.slice(0, -4).replace(/\B(?=(\d{3})+$)/g, ' ');
+    return `+${cc} ${head ? `${head} ` : ''}${rest.slice(-4)}`;
+  }
 
   // ---------------- Call, Message and Mail, through the phone's own apps ----------------
   // For the moment the candidate is five minutes late for the interview: one

@@ -62,8 +62,8 @@ const W = require('./server-write-helpers');
   ok(db.candidates.length === 6, 'the list grows by three', db.candidates.length);
   const avery = byEmail('avery.quinn@example.com')[0];
   ok(avery && avery.status === 'new' && avery.source === 'csv' && avery.firstName === 'Avery' && avery.lastName === 'Quinn' && avery.name === 'Avery Quinn'
-    && avery.phone === '(617) 555-2201' && avery.role === 'Account Executive' && avery.company === 'Example Payments' && avery.location === 'Boston, MA' && avery.addedAt,
-  'a new person is added as new, with every column', avery);
+    && avery.phone === '+16175552201' && avery.role === 'Account Executive' && avery.company === 'Example Payments' && avery.location === 'Boston, MA' && avery.addedAt,
+  'a new person is added as new, with every column (the number kept one way, E.164)', avery);
   ok(byEmail('casey.morgan@example.com').length === 1, 'the same address twice in one file is one person');
   ok(!db.candidates.some((c) => /riley/i.test(c.name || '')), 'a row without an address is not added');
   const jordan = W.pick(db.candidates, 'p2');
@@ -74,7 +74,7 @@ const W = require('./server-write-helpers');
   const morgan = W.pick(db.candidates, 'p6');
   ok(morgan.email === 'morgan.ellis@example.com' && morgan.name === 'Morgan Ellis' && !byEmail('morgan.e@example.org').length, 'the same name on the same number is the same person, under their own address', morgan);
   const taylor = byEmail('taylor.ellis@example.org')[0];
-  ok(taylor && taylor.status === 'new' && taylor.phone === '(617) 555-2209', 'a different person on a shared number is added as someone new', taylor);
+  ok(taylor && taylor.status === 'new' && taylor.phone === '+16175552209', 'a different person on a shared number is added as someone new', taylor);
   r = await s.json('POST', '/api/candidates', { firstName: 'Morgan', lastName: 'Ellis', email: 'morgan.e@example.org' });
   ok(r.status === 400, 'the address the file brought for someone already on the list is now known as theirs', r);
   const st = await W.state(s);
