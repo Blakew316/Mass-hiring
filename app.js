@@ -2119,6 +2119,7 @@ app.post('/api/relay/events', asyncRoute(async (req, res) => {
 // The default text, like /api/template for email.
 app.post('/api/texts/template', asyncRoute(async (req, res) => {
   const db = await store.update((d) => {
+    presets.rememberPast(d, 'text');
     d.textTemplate = { body: String((req.body && req.body.body) || '').slice(0, 2000) };
     touchDefault(d, 'text');
     presets.normalize(d);   // the named default follows, in this reply too
@@ -2130,6 +2131,7 @@ app.post('/api/texts/template/reset', asyncRoute(async (_req, res) => {
   const db = await store.update((d) => {
     // Only Team Maverick's starter text introduces Blake; any other team gets
     // the one that claims to be nobody.
+    presets.rememberPast(d, 'text');
     d.textTemplate = structuredClone(tenant.isLegacy() ? store.DEFAULT_TEXT_TEMPLATE : store.NEW_TEAM_TEXT_TEMPLATE);
     touchDefault(d, 'text');
     presets.normalize(d);   // the named default follows, in this reply too

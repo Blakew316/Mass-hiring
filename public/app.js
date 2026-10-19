@@ -4860,6 +4860,7 @@
     state.templates = r.templates;
     if (r.template) state.template = r.template;
     if (r.followUp && state.followUp) state.followUp.template = r.followUp;
+    if (r.textTemplate && state.texting) state.texting.template = r.textTemplate;
   }
   // The saved email follow-ups go out with ('' when it is written in Settings).
   const followUpPresetId = () => (state && state.templates && state.templates.defaults && state.templates.defaults.followUp) || '';
