@@ -113,9 +113,22 @@ const { open } = require('./views-helpers');
     const { ctx, page, errors } = await open(browser, s);
     await page.evaluate(() => document.querySelector('#addCandidateBtn').click());
     await page.waitForSelector('#addModal:not([hidden])');
+    // The form puts the cursor in First name a moment after it opens; typing
+    // in that moment lands in First name instead (nobody types that fast), so
+    // each number is typed again until it is in the phone box.
+    const typePhone = async (raw) => {
+      for (let i = 0; i < 4; i++) {
+        await page.fill('#addPhone', raw);
+        if (await page.inputValue('#addPhone') === raw) return;
+        await page.waitForTimeout(60);
+      }
+    };
     const seen = [];
     for (const [raw, e164, shown] of CASES) {
-      await page.fill('#addPhone', raw);
+      await typePhone(raw);
+      // The form may still be settling from opening: wait for the hint to
+      // answer this number (every case here is one or the other).
+      await page.waitForFunction(() => /^(Textable|Not a number)/.test(document.querySelector('#addPhoneHint').textContent), null, { timeout: 5000 }).catch(() => {});
       const hint = await page.$eval('#addPhoneHint', (el) => el.textContent);
       const want = e164 ? `Textable — will be saved as ${shown}.` : 'Not a number we can text.';
       if (!hint.startsWith(want)) seen.push({ raw, hint, want });

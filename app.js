@@ -1141,12 +1141,15 @@ function toPreview(allRows, { noHeader = false, lines: givenLines = null } = {})
   if (!rows.length) throw new Error('No rows found in that file — it appears to be empty.');
   if (rows.length > MAX_IMPORT_ROWS + 1) throw new Error(`That is more than ${MAX_IMPORT_ROWS.toLocaleString()} rows — split the file and import it in parts.`);
   const found = noHeader ? { index: -1, headerless: true } : csv.findHeader(rows);
-  const headerRow = found.index >= 0 ? rows[found.index] : null;
+  // A header split over two rows is one header; a stray value in it (a
+  // phone number typed above an empty column) names no column.
+  const merged = found.index >= 0 ? csv.headerContinuation(rows[found.index], rows[found.index + 1]) : null;
+  const headerRow = found.index >= 0 ? (merged || rows[found.index]).map((h) => (csv.dataLooking(h) ? '' : h)) : null;
   const width = headerRow ? Math.max(headerRow.length, 1) : rows.reduce((w, r) => Math.max(w, r.length), 0);
   const headers = headerRow
     ? headerRow.map((h, i) => h || `Column ${i + 1}`)
     : Array.from({ length: width }, (_, i) => `Column ${i + 1}`);
-  const dataStart = found.index >= 0 ? found.index + 1 : 0;
+  const dataStart = found.index >= 0 ? found.index + (merged ? 2 : 1) : 0;
   const data = rows.slice(dataStart).map((r) => { while (r.length < width) r.push(''); return r; });
   const dataLines = lines.slice(dataStart);
   const { mapping, confidence } = csv.guessMapping(headerRow ? headerRow : headers.map(() => ''), data);
@@ -1265,7 +1268,30 @@ function namesAgree(a, b) {
 // Nothing in the names says these are two different people.
 const noNameConflict = (a, b) => surnamesAgree(a, b) !== false && givenAgree(a, b) !== false;
 // "a@x.com; b@y.com" in an Other Emails column.
-const listEmails = (v) => String(v || '').split(/[;,\s]+/).map((e) => address.normalize(e)).filter(Boolean);
+const listEmails = (v) => String(v || '').split(/[;,\s]+/).map(emailOf).filter(Boolean);
+// An address as a file gives it. Gmail ignores dots, so "jane.@gmail.com"
+// (a typo no other provider would forgive) is jane@gmail.com's inbox.
+function emailOf(v) {
+  const a = address.normalize(v);
+  if (a) return a;
+  const g = /^([^@\s]+)@(gmail|googlemail)\.com$/i.exec(String(v || '').replace(/^mailto:/i, '').trim());
+  return g && /\./.test(g[1]) ? address.normalize(`${g[1].replace(/\./g, '')}@${g[2]}.com`) : '';
+}
+// A person's name as a file gives it, tidied: digits glued on by whatever
+// collected it ("Krystal9436"), a stray comma at either end, and a name all
+// in capitals or all in lower case put the way it is written.
+function nameOf(v) {
+  let t = String(v || '').replace(/\s+/g, ' ').trim();
+  if (/\d/.test(t) && /\p{L}/u.test(t.replace(/\d+/g, ''))) t = t.replace(/\d+/g, '').replace(/\s+/g, ' ').trim();
+  t = t.replace(/^[\s,;:/\\|.]+|[\s,;:/\\|]+$/g, '').trim();
+  const letters = t.replace(/[^\p{L}]/gu, '');
+  if (letters.length > 1 && (letters === letters.toUpperCase() || letters === letters.toLowerCase())) {
+    t = t.toLowerCase().split(' ').map((w) => (csv.NAME_SUFFIX.test(w) && /^(ii|iii|iv|v)\.?$/.test(w)
+      ? w.toUpperCase()
+      : w.replace(/(^|[-'’])(\p{L})/gu, (m, sep, ch) => sep + ch.toUpperCase()))).join(' ');
+  }
+  return t;
+}
 // A shared inbox says nothing about who a row is: info@acme.com is everyone at Acme.
 const ROLE_MAILBOX = /^(info|contact|sales|support|admin|hello|mail|office|team|hr|billing|service|jobs?|careers|inquiries|bizdev|marketing|help|accounts|noreply|no-reply|merchants)$/;
 const isRoleMailbox = (e) => ROLE_MAILBOX.test(emailKey(e).split('@')[0]);
@@ -1275,7 +1301,13 @@ const NAME_FIELDS = new Set(['name', 'firstName', 'lastName']);
 
 function analyzeImport(candidates, rows, mapping, { lines = null, headerless = false } = {}) {
   const m = mapping || {};
-  const col = (row, key) => (m[key] != null && m[key] >= 0 ? csv.cleanCell(row[m[key]]) : '');
+  // A cell that only says nothing is known ("?", "N/A") is an empty one.
+  const col = (row, key) => {
+    const v = m[key] != null && m[key] >= 0 ? csv.cleanCell(row[m[key]]) : '';
+    return csv.isPlaceholder(v) ? '' : v;
+  };
+  // A phone number in a place's column is not a place.
+  const placeOf = (v) => (v && phone.normalize(v) && !/\p{L}{3}/u.test(v) ? '' : v);
   const keysOf = (e) => [emailKey(e), mailboxKey(e)];
   // Every address a person is known by (the one on file plus any they booked
   // with), by mailbox, so a Gmail address spelled with or without its dots is
@@ -1300,10 +1332,17 @@ function analyzeImport(candidates, rows, mapping, { lines = null, headerless = f
   };
   // An "other" address two rows of this file both give is nobody's in
   // particular, so it identifies neither of them.
+  // The same for the second address in an email cell ("a@x.com; b@y.com"),
+  // and never one that is another row's own address: that is somebody else,
+  // listed beside them.
   const otherCount = new Map();
+  const ownInFile = new Set();
   for (const row of rows) {
     if (!Array.isArray(row)) continue;
-    for (const k of new Set(listEmails(col(row, 'altEmails')).map(mailboxKey))) otherCount.set(k, (otherCount.get(k) || 0) + 1);
+    const cell = col(row, 'email');
+    const listed = emailOf(cell) ? [emailOf(cell)] : listEmails(cell);
+    if (listed.length) ownInFile.add(mailboxKey(listed[0]));
+    for (const k of new Set([...listEmails(col(row, 'altEmails')), ...listed.slice(1)].map(mailboxKey))) otherCount.set(k, (otherCount.get(k) || 0) + 1);
   }
   // A shifted row may carry its address in another column — but only when the
   // file has just one column of addresses, so a "Referred by" column can never
@@ -1341,34 +1380,53 @@ function analyzeImport(candidates, rows, mapping, { lines = null, headerless = f
   const out = [];
   rows.forEach((row, idx) => {
     if (!Array.isArray(row)) return;
-    let email = address.normalize(col(row, 'email'));
+    const emailCell = col(row, 'email');
+    let email = emailOf(emailCell);
     let shifted = false;
     const others = listEmails(col(row, 'altEmails'));
+    // Several addresses in the one cell ("a@x.com; b@y.com"): the first is
+    // the one to write to, the rest are theirs too.
+    if (!email) {
+      const listed = listEmails(emailCell);
+      if (listed.length) { email = listed.shift(); others.unshift(...listed); }
+    }
     if (!email && allowShift) {
       const found = row.map((v) => address.normalize(v)).filter(Boolean);
       if (found.length === 1) { email = found[0]; shifted = true; }
     }
     // Only other addresses: the first is the one to write to.
     if (!email && others.length) email = others.shift();
-    let firstName = col(row, 'firstName');
-    let lastName = col(row, 'lastName');
-    let name = col(row, 'name');
+    let firstName = nameOf(col(row, 'firstName'));
+    let lastName = nameOf(col(row, 'lastName'));
+    let name = nameOf(col(row, 'name'));
     // "Doe, Jane" in a name column: keep the person, not the comma.
     const lf = name && !firstName && !lastName ? csv.splitLastFirst(name) : null;
     if (lf) { firstName = lf.firstName; lastName = lf.lastName; name = `${lf.firstName} ${lf.lastName}`; }
+    // The place: one column ("Austin, TX"), or put together from City,
+    // State and ZIP columns ("Fort Worth, TX 76107").
+    const placeCell = placeOf(col(row, 'location'));
+    const city = placeOf(col(row, 'city'));
+    const region = placeOf(col(row, 'state'));
+    const zip = col(row, 'zip');
+    const location = placeCell || [city, [region, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    // A number where the place should be, with none where it belongs.
+    const phoneCell = col(row, 'phone') || [col(row, 'location'), col(row, 'city'), col(row, 'state')].find((v) => v && phone.normalize(v) && !/\p{L}{3}/u.test(v)) || '';
     const fields = {
       name: name || [firstName, lastName].filter(Boolean).join(' '),
       firstName, lastName,
-      role: col(row, 'role'), company: col(row, 'company'), phone: phone.tidy(col(row, 'phone')),
-      location: col(row, 'location'), notes: col(row, 'notes'), pastRoles: col(row, 'pastRoles'),
+      role: col(row, 'role'), company: col(row, 'company'), phone: phone.tidy(phone.first(phoneCell) || phoneCell),
+      location, notes: [col(row, 'notes'), col(row, 'notes2')].filter(Boolean).join(' · '), pastRoles: col(row, 'pastRoles'),
     };
     const rowNo = rowNumber(idx);
     if (!email) { out.push({ idx, row: rowNo, kind: 'invalid', cell: col(row, 'email') || row.find((v) => String(v || '').includes('@')) || '', fields }); return; }
+    // Nobody at Wholesale Payments is a candidate, whatever a file says.
+    if (salesiq.isOwnCompanyEmail(email)) { out.push({ idx, row: rowNo, kind: 'own', email, fields }); return; }
+    for (let i = others.length - 1; i >= 0; i--) if (salesiq.isOwnCompanyEmail(others[i])) others.splice(i, 1);
     // The row's other addresses, one per mailbox. Those that can say who the
     // row is: not a shared inbox, and not given by another row of this file too.
     const boxes = new Set([mailboxKey(email)]);
     const extra = others.filter((e) => { const k = mailboxKey(e); if (boxes.has(k)) return false; boxes.add(k); return true; });
-    const telling = extra.filter((e) => !isRoleMailbox(e) && otherCount.get(mailboxKey(e)) === 1);
+    const telling = extra.filter((e) => !isRoleMailbox(e) && otherCount.get(mailboxKey(e)) === 1 && !ownInFile.has(mailboxKey(e)));
     const mainKeys = keysOf(email);
     const tellingKeys = telling.flatMap(keysOf);
     const tel = phone.normalize(fields.phone);
@@ -1438,6 +1496,8 @@ function summarize(analysis) {
     newAddresses: analysis.filter((a) => a.kind === 'existing' && a.fill.altEmails).length,
     duplicate: count('duplicate'),
     invalid: count('invalid'),
+    // Wholesale Payments addresses: the team, never candidates.
+    own: count('own'),
     shifted: analysis.filter((a) => a.shifted).length,
     invalidSamples: analysis.filter((a) => a.kind === 'invalid').slice(0, 10).map((a) => ({ row: a.row, cell: String(a.cell || '').slice(0, 80), name: a.fields.name })),
     existingSamples: analysis.filter((a) => a.kind === 'existing').slice(0, 5).map((a) => ({ email: a.email, name: a.existing.name || a.fields.name })),

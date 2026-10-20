@@ -3957,7 +3957,10 @@
   // ---------------- Import ----------------
   const MAP_FIELDS = [
     ['email', 'Email *'], ['name', 'Full name'], ['firstName', 'First name'], ['lastName', 'Last name'],
-    ['role', 'Role / title'], ['company', 'Company'], ['phone', 'Phone'], ['location', 'Location'], ['notes', 'Notes'],
+    ['role', 'Role / title'], ['company', 'Company'], ['phone', 'Phone'], ['location', 'Location'],
+    // A place in parts, put together as "Fort Worth, TX 76107".
+    ['city', 'City'], ['state', 'State'], ['zip', 'ZIP'],
+    ['notes', 'Notes'], ['notes2', 'More notes'],
     ['altEmails', 'Other emails'],
   ];
   const IMPORT_TEXT_CHUNK = 3 * 1024 * 1024;   // characters of file text per request (the server accepts 6 MB)
@@ -4182,12 +4185,12 @@
     return { rows: keep, lines: keepLines, repeats };
   }
   async function dryRunBatches(allRows, mapping) {
-    const totals = { total: 0, newCount: 0, existing: 0, existingByPhone: 0, updatable: 0, duplicate: 0, invalid: 0, shifted: 0, invalidSamples: [], existingSamples: [] };
+    const totals = { total: 0, newCount: 0, existing: 0, existingByPhone: 0, updatable: 0, duplicate: 0, invalid: 0, own: 0, shifted: 0, invalidSamples: [], existingSamples: [] };
     const { rows, lines, repeats } = splitRepeats(allRows, pendingImport.lines, mapping);
     totals.total += repeats; totals.duplicate += repeats;
     for (let i = 0; i < rows.length; i += IMPORT_ROW_BATCH) {
       const r = await api('/api/import/preview', { method: 'POST', body: { rows: rows.slice(i, i + IMPORT_ROW_BATCH), lines: lines.slice(i, i + IMPORT_ROW_BATCH), headerless: pendingImport.headerless, mapping } });
-      for (const k of ['total', 'newCount', 'existing', 'existingByPhone', 'updatable', 'duplicate', 'invalid', 'shifted']) totals[k] += r[k] || 0;
+      for (const k of ['total', 'newCount', 'existing', 'existingByPhone', 'updatable', 'duplicate', 'invalid', 'own', 'shifted']) totals[k] += r[k] || 0;
       if (totals.invalidSamples.length < 10) totals.invalidSamples.push(...(r.invalidSamples || []));
       if (totals.existingSamples.length < 5) totals.existingSamples.push(...(r.existingSamples || []));
     }
@@ -4201,6 +4204,7 @@
     if (t.existing) parts.push(`${t.existing.toLocaleString()} already in your list${why.length ? ` (${why.join('; ')})` : ''}`);
     if (t.duplicate) parts.push(`${t.duplicate.toLocaleString()} repeated in the file`);
     if (t.invalid) parts.push(`<span class="bad-text">${t.invalid.toLocaleString()} without a usable email</span>`);
+    if (t.own) parts.push(`${t.own.toLocaleString()} Wholesale Payments address${t.own === 1 ? '' : 'es'} (the team, never added)`);
     let html = `<div class="summary-line">${t.total.toLocaleString()} row${t.total === 1 ? '' : 's'}: ${parts.join(' · ')}</div>`;
     if (t.shifted) html += `<div class="muted small">${t.shifted.toLocaleString()} row${t.shifted === 1 ? '' : 's'} had the email in a different column than the rest — worth a glance in the preview.</div>`;
     if (pendingImport && pendingImport.skipped) html += `<div class="muted small">${pendingImport.skipped} line${pendingImport.skipped === 1 ? '' : 's'} above the header row (a title or notes) ${pendingImport.skipped === 1 ? 'was' : 'were'} ignored.</div>`;
